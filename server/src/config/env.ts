@@ -36,6 +36,8 @@ export const env = {
   HOST: process.env.HOST ?? '0.0.0.0',
   PORT: intEnv('PORT', 3000),
   LOG_LEVEL: process.env.LOG_LEVEL ?? 'info',
+  // JWT：登录态签名密钥（必填；生产必须替换为强随机值，严禁硬编码）
+  JWT_SECRET: requireEnv('JWT_SECRET'),
 
   // PostgreSQL（Drizzle ORM）
   DATABASE_URL: requireEnv('DATABASE_URL'),

@@ -18,9 +18,11 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@fastify/jwt": "^9.1.0",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.36.0",
     "fastify": "^5.0.0",
+    "fastify-plugin": "^6.0.0",
     "pg": "^8.13.1"
   },
   "devDependencies": {
@@ -32,6 +34,7 @@
     "globals": "^15.9.0",
     "tsx": "^4.19.1",
     "typescript": "^5.6.3",
-    "typescript-eslint": "^8.8.1"
+    "typescript-eslint": "^8.8.1",
+    "vitest": "^5.0.0"
   }
 }
