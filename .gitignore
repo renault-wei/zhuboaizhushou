@@ -1,0 +1,32 @@
+# 通用忽略
+node_modules/
+dist/
+build/
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
+
+# Flutter / Dart
+app/.dart_tool/
+app/.flutter-plugins*
+app/.idea/
+app/ios/Pods/
+app/ios/.symlinks/
+app/android/.gradle/
+app/android/local.properties
+app/*.iml
+app/.pub-cache/
+app/.metadata
+
+# 上传素材（用户录音/实景视频不入库，走对象存储）
+uploads/
+*.wav
+*.mp4
+!docs/samples/*.mp4
+
+# 密钥
+*.pem
+*.p8
+serviceAccount*.json
