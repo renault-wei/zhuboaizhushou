@@ -73,14 +73,14 @@ server/
     ├── config/env.ts     # 环境变量读取与校验
     ├── db/
     │   ├── client.ts     # pg 连接池 + Drizzle client
-    │   └── schema.ts     # 9 张核心表 schema（S0 定稿）
+    │   └── schema.ts     # 核心表 schema（S0 定稿 9 张 + voice_agreements）
     └── routes/
         └── health.ts     # GET /health 健康检查
 ```
 
 ## 数据表
 
-见 `src/db/schema.ts`，与 docs/DEV-SPRINTS.md 附录一致，共 9 张：users、voices、scripts、lives、orders、quotas、usage_logs、admin_users、audit_logs。
+见 `src/db/schema.ts`，S0 定稿 9 张核心表（users、voices、scripts、lives、orders、quotas、usage_logs、admin_users、audit_logs），T3 新增 voice_agreements（声音授权协议签署存档）。
 
 ## 工程约定
 

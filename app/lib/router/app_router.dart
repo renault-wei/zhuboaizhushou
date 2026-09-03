@@ -2,6 +2,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:starvoice_app/features/auth/application/auth_controller.dart';
 import 'package:starvoice_app/features/auth/presentation/login_page.dart';
+import 'package:starvoice_app/features/agreement/presentation/voice_agreement_page.dart';
 import 'package:starvoice_app/features/douyin/presentation/douyin_bind_page.dart';
 import 'package:starvoice_app/features/home/presentation/home_page.dart';
 import 'package:starvoice_app/features/splash/presentation/splash_page.dart';
@@ -30,6 +31,7 @@ GoRouter createAppRouter(AuthController authController) {
       GoRoute(path: '/login', builder: (context, state) => const LoginPage()),
       GoRoute(path: '/home', builder: (context, state) => const HomePage()),
       GoRoute(path: '/douyin-bind', builder: (context, state) => const DouyinBindPage()),
+      GoRoute(path: '/voice-agreement', builder: (context, state) => const VoiceAgreementPage()),
     ],
   );
 }

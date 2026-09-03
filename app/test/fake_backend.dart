@@ -3,7 +3,30 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 
-/// 内存版假后端：覆盖登录相关三个接口与抖音绑定三个接口，
+/// 假后端下发的《声音授权协议》正文（简化版，覆盖关键条款便于 UI 断言）。
+const String fakeVoiceAgreementContent = '''
+《声音授权协议》（版本 1.0）
+
+一、授权范围
+您授权平台将您提交的录音样本用于声音克隆、试听与合成，并仅用于本平台内的声音克隆与直播带货用途。
+
+二、知情同意
+您确认录音样本确由本人录制或拥有合法权利，已知悉声音克隆原理与效果并自愿同意本协议。
+
+三、音色删除
+您可随时申请删除本人音色及相关数据，平台核实后将在合理期限内删除。
+
+四、转授权限制
+未经您书面同意，平台不得将您的录音样本、克隆音色转授权或提供给第三方。
+
+五、未成年人保护
+未满十八周岁的未成年人禁止提交本人声音。
+
+六、数据保存与销毁
+平台仅在必要期限内保存相关数据，申请删除或服务终止后依法销毁。
+''';
+
+/// 内存版假后端：覆盖登录、抖音绑定与声音授权协议相关接口，
 /// 测试全程不发起真实网络请求，响应形状与服务端保持一致。
 class FakeBackend implements HttpClientAdapter {
   FakeBackend({
@@ -12,6 +35,8 @@ class FakeBackend implements HttpClientAdapter {
     this.douyinBound = false,
     this.douyinNickname = '抖音小店测试号',
     this.avatarUrl = '',
+    this.agreementSigned = false,
+    this.agreementSignedAt = '2026-09-04T02:00:00.000Z',
   });
 
   final String userId;
@@ -21,6 +46,10 @@ class FakeBackend implements HttpClientAdapter {
   bool douyinBound;
   final String douyinNickname;
   final String avatarUrl;
+
+  /// 是否已签署《声音授权协议》：GET status 返回当前值，签署接口会改写
+  bool agreementSigned;
+  final String agreementSignedAt;
 
   @override
   Future<ResponseBody> fetch(
@@ -67,6 +96,33 @@ class FakeBackend implements HttpClientAdapter {
       douyinBound = false;
       return _jsonResponse({'bound': false});
     }
+    if (options.method == 'GET' && path.endsWith('/api/agreements/voice')) {
+      return _jsonResponse({
+        'version': '1.0',
+        'title': '声音授权协议',
+        'content': fakeVoiceAgreementContent,
+      });
+    }
+    if (options.method == 'GET' && path.endsWith('/api/agreements/voice/status')) {
+      return _jsonResponse(_voiceAgreementStatus());
+    }
+    if (options.method == 'POST' && path.endsWith('/api/agreements/voice/sign')) {
+      final body = _readBody(options);
+      if (body['version'] != '1.0') {
+        return _jsonResponse(
+          {'error': 'VERSION_MISMATCH', 'message': '协议版本不匹配，请阅读最新协议后重新签署'},
+          400,
+        );
+      }
+      if (body['agreed'] != true) {
+        return _jsonResponse(
+          {'error': 'NOT_AGREED', 'message': '请先阅读并勾选同意《声音授权协议》后再签署'},
+          400,
+        );
+      }
+      agreementSigned = true;
+      return _jsonResponse(_voiceAgreementStatus());
+    }
     return _jsonResponse({'error': 'NOT_FOUND', 'message': '接口不存在'}, 404);
   }
 
@@ -80,6 +136,17 @@ class FakeBackend implements HttpClientAdapter {
       'nickname': douyinNickname,
       'avatarUrl': avatarUrl,
       'boundAt': '2026-09-04T10:00:00.000Z',
+    };
+  }
+
+  Map<String, dynamic> _voiceAgreementStatus() {
+    if (!agreementSigned) {
+      return {'signed': false};
+    }
+    return {
+      'signed': true,
+      'signedAt': agreementSignedAt,
+      'version': '1.0',
     };
   }
 

@@ -8,6 +8,7 @@
 ```mermaid
 erDiagram
     users ||--o{ voices : "拥有"
+    users ||--o{ voice_agreements : "签署"
     users ||--o{ scripts : "创作"
     users ||--o{ lives : "开播"
     users ||--o{ orders : "下单"
@@ -32,6 +33,15 @@ erDiagram
         enum status
         text agreement_pdf_path "合规:授权协议存档"
         text sample_fingerprint
+    }
+    voice_agreements {
+        uuid id PK
+        uuid user_id FK "同用户同版本唯一"
+        varchar agreement_version "如 1.0"
+        text content_snapshot "签署时协议全文快照"
+        timestamp signed_at
+        varchar signed_ip "兼容 IPv6 最长 45"
+        text user_agent
     }
     scripts {
         uuid id PK
@@ -104,6 +114,7 @@ erDiagram
 |---|---|---|
 | users | 手机号/抖音OAuth/订阅状态 | phone 唯一、douyin_open_id 唯一 |
 | voices | 音色与授权存档 | provider_voice_id 唯一；授权协议路径+签署时间+样本指纹（合规） |
+| voice_agreements | 《声音授权协议》签署存档 | (user_id, agreement_version) 唯一；幂等签署（合规） |
 | scripts | 话术与敏感词扫描 | product_snapshot 固化商品信息；blocked 状态阻断开播（合规） |
 | lives | 直播记录 | ai_badge_shown 默认 true 不可关闭（合规）；关联音色+话术+券 |
 | orders | 订单 | 金额单位分；order_no 与 wx_transaction_id 唯一 |
@@ -131,3 +142,6 @@ erDiagram
 2. `scripts.sensitive_check_status = blocked`：开播前置校验必查此字段
 3. `lives.ai_badge_shown`：恒为 true，任何代码路径不得置 false
 4. `audit_logs`：后台对商家的一切处置（封禁/退款/放行）必须落此表
+5. `voice_agreements`：录音/克隆前必须签署并存档（谁、何时、哪一版协议、IP、User-Agent、全文快照）。
+   MVP 存档口径 = 数据库记录（版本号 + 全文快照 + 时间 + IP + UA），**不生成 PDF**；
+   PDF 渲染导出推迟到 T19 后台存档列表；`voices.agreement_pdf_path` 仍是克隆时回填的字段。

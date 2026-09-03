@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import 'package:starvoice_app/core/models/douyin_bind_status.dart';
 import 'package:starvoice_app/core/models/user_profile.dart';
+import 'package:starvoice_app/core/models/voice_agreement.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 
 /// 发送验证码的结果。dev 模式下服务端会额外返回明文 [code] 便于联调。
@@ -127,6 +128,39 @@ class ApiClient {
         data: <String, dynamic>{},
       );
       return DouyinBindStatus.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 获取最新版《声音授权协议》正文。
+  Future<VoiceAgreement> fetchVoiceAgreement() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/api/agreements/voice');
+      return VoiceAgreement.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 查询当前用户的《声音授权协议》签署状态。
+  Future<AgreementStatus> fetchVoiceAgreementStatus() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/api/agreements/voice/status');
+      return AgreementStatus.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 签署《声音授权协议》；服务端对同版本重复签署幂等返回 200（不重复插入）。
+  Future<AgreementStatus> signVoiceAgreement({required String version}) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/agreements/voice/sign',
+        data: <String, dynamic>{'version': version, 'agreed': true},
+      );
+      return AgreementStatus.fromJson(response.data ?? <String, dynamic>{});
     } on DioException catch (error) {
       throw _toApiException(error);
     }

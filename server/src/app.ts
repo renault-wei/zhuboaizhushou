@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import { env } from './config/env';
 import { authPlugin } from './plugins/auth';
+import { agreementsRoutes } from './routes/agreements';
 import { authRoutes } from './routes/auth';
 import { douyinRoutes } from './routes/douyin';
 import { healthRoutes } from './routes/health';
@@ -15,6 +16,7 @@ export function buildApp() {
   app.register(authPlugin);
   app.register(authRoutes);
   app.register(douyinRoutes);
+  app.register(agreementsRoutes);
   app.register(healthRoutes);
 
   return app;

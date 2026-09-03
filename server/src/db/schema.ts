@@ -108,6 +108,32 @@ export const voices = pgTable(
   ],
 );
 
+// ---------- voice_agreements：《声音授权协议》签署存档（合规红线：克隆前必须先签署并存档）----------
+// MVP 存档口径：签署记录只落数据库（协议版本号 + 协议全文快照 + 签署时间 + IP + User-Agent），
+// 供克隆/直播前校验与审计追溯；PDF 渲染导出推迟到 T19 后台存档列表，不在此阶段生成。
+export const voiceAgreements = pgTable(
+  'voice_agreements',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // 签署时展示并同意的协议版本，如 1.0
+    agreementVersion: varchar('agreement_version', { length: 20 }).notNull(),
+    // 签署时的协议全文快照，防止版本改版后产生争议
+    contentSnapshot: text('content_snapshot').notNull(),
+    signedAt: timestamp('signed_at', { withTimezone: true }).notNull(),
+    // 来源 IP（兼容 IPv6 最长 45 字符）
+    signedIp: varchar('signed_ip', { length: 45 }).notNull(),
+    userAgent: text('user_agent').notNull(),
+  },
+  (table) => [
+    // 同一用户同一版本仅保留一条记录，配合服务端先查后插实现重复签署幂等
+    uniqueIndex('voice_agreements_user_version_unique').on(table.userId, table.agreementVersion),
+    index('voice_agreements_user_id_idx').on(table.userId),
+  ],
+);
+
 // ---------- scripts：话术（行业 / 商品快照 / 内容 / 敏感词扫描结果）----------
 export const scripts = pgTable(
   'scripts',

@@ -3,8 +3,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:starvoice_app/core/models/douyin_bind_status.dart';
+import 'package:starvoice_app/core/models/voice_agreement.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/providers.dart';
+
+String _twoDigits(int value) => value.toString().padLeft(2, '0');
+
+String _formatDateTime(DateTime time) {
+  return '${time.year}-${_twoDigits(time.month)}-${_twoDigits(time.day)} '
+      '${_twoDigits(time.hour)}:${_twoDigits(time.minute)}:${_twoDigits(time.second)}';
+}
 
 /// 登录后首页：展示脱敏手机号、用户 ID、登录时间与抖音账号绑定卡片。
 class HomePage extends ConsumerWidget {
@@ -16,13 +24,6 @@ class HomePage extends ConsumerWidget {
       return phone;
     }
     return '${phone.substring(0, 3)}****${phone.substring(7)}';
-  }
-
-  String _twoDigits(int value) => value.toString().padLeft(2, '0');
-
-  String _formatDateTime(DateTime time) {
-    return '${time.year}-${_twoDigits(time.month)}-${_twoDigits(time.day)} '
-        '${_twoDigits(time.hour)}:${_twoDigits(time.minute)}:${_twoDigits(time.second)}';
   }
 
   @override
@@ -62,6 +63,8 @@ class HomePage extends ConsumerWidget {
               Text('登录时间：$loginTimeText', style: const TextStyle(fontSize: 16)),
               const SizedBox(height: 32),
               const _DouyinAccountCard(),
+              const SizedBox(height: 16),
+              const _VoiceAgreementCard(),
               const SizedBox(height: 24),
               OutlinedButton(
                 key: const Key('logoutButton'),
@@ -321,6 +324,189 @@ class _AvatarFallback extends StatelessWidget {
       color: Colors.grey.shade300,
       alignment: Alignment.center,
       child: const Icon(Icons.person, color: Colors.black45),
+    );
+  }
+}
+
+/// 声音授权卡片：负责拉取签署状态；
+/// 未签署显示「去签署」警示样式，已签署展示版本与签署时间。
+class _VoiceAgreementCard extends ConsumerStatefulWidget {
+  const _VoiceAgreementCard();
+
+  @override
+  ConsumerState<_VoiceAgreementCard> createState() => _VoiceAgreementCardState();
+}
+
+class _VoiceAgreementCardState extends ConsumerState<_VoiceAgreementCard> {
+  bool _loading = true;
+  String? _error;
+  AgreementStatus? _status;
+
+  @override
+  void initState() {
+    super.initState();
+    // 首帧后再拉取，避免 build 阶段发起网络请求
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
+  }
+
+  Future<void> _refresh() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    try {
+      final status = await ref.read(apiClientProvider).fetchVoiceAgreementStatus();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = status;
+        _loading = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = error.message;
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _goSign() async {
+    // 协议页签署成功后 pop，回到首页刷新签署状态
+    await context.push('/voice-agreement');
+    await _refresh();
+  }
+
+  Widget _buildContent() {
+    if (_loading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: Text('正在同步协议签署状态…'),
+      );
+    }
+    if (_error != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '声音授权状态获取失败：$_error',
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: _refresh,
+            child: const Text('重试'),
+          ),
+        ],
+      );
+    }
+
+    final status = _status;
+    if (status == null || !status.signed) {
+      // 未签署：警示样式，突出「克隆声音前必须完成」的合规提示
+      final scheme = Theme.of(context).colorScheme;
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: scheme.errorContainer,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.warning_amber_rounded, size: 20, color: scheme.onErrorContainer),
+                const SizedBox(width: 8),
+                Text(
+                  '尚未签署声音授权协议',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: scheme.onErrorContainer,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '克隆声音前必须完成《声音授权协议》签署，否则无法使用声音克隆与 AI 直播。',
+              key: const Key('voiceAgreementWarningHint'),
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.5,
+                color: scheme.onErrorContainer,
+              ),
+            ),
+            const SizedBox(height: 12),
+            FilledButton(
+              key: const Key('goVoiceAgreementButton'),
+              onPressed: _goSign,
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(40)),
+              child: const Text('去签署'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final version = status.version ?? '';
+    final signedAt = status.signedAt;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          version.isNotEmpty ? '已签署 v$version' : '已签署',
+          key: const Key('voiceAgreementSignedText'),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          signedAt != null
+              ? '签署时间：${_formatDateTime(DateTime.parse(signedAt).toLocal())}'
+              : '已签署当前版本协议',
+          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      key: const Key('voiceAgreementCard'),
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.record_voice_over, size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  '声音授权',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                Text(
+                  _status?.signed == true ? '已签署' : '未签署',
+                  key: const Key('voiceAgreementStatusLabel'),
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _buildContent(),
+          ],
+        ),
+      ),
     );
   }
 }
