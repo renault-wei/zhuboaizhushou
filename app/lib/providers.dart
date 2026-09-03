@@ -1,0 +1,89 @@
+import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import 'package:starvoice_app/core/config/api_config.dart';
+import 'package:starvoice_app/core/network/api_client.dart';
+import 'package:starvoice_app/core/network/auth_interceptor.dart';
+import 'package:starvoice_app/core/storage/session_storage.dart';
+import 'package:starvoice_app/features/auth/application/auth_controller.dart';
+import 'package:starvoice_app/router/app_router.dart';
+
+/// 本地会话存储
+final sessionStorageProvider = Provider<SessionStorage>((ref) {
+  return SessionStorage();
+});
+
+/// 401 事件总线：dio 拦截器与认证控制器解耦，避免 provider 之间的初始化环。
+class UnauthorizedBus {
+  Future<void> Function()? _listener;
+
+  void setListener(Future<void> Function() listener) {
+    _listener = listener;
+  }
+
+  void clearListener() {
+    _listener = null;
+  }
+
+  Future<void> notify() async {
+    final listener = _listener;
+    if (listener != null) {
+      await listener();
+    }
+  }
+}
+
+/// 401 事件总线实例：由 dio 触发、认证控制器订阅。
+final unauthorizedBusProvider = Provider<UnauthorizedBus>((ref) {
+  return UnauthorizedBus();
+});
+
+/// dio 实例：baseUrl 来自 API_BASE_URL define 或平台默认值，挂载鉴权拦截器
+final dioProvider = Provider<Dio>((ref) {
+  final storage = ref.watch(sessionStorageProvider);
+  final unauthorizedBus = ref.watch(unauthorizedBusProvider);
+  final dio = Dio(
+    BaseOptions(
+      baseUrl: ApiConfig.baseUrl,
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 15),
+    ),
+  );
+  dio.interceptors.add(
+    AuthInterceptor(
+      storage: storage,
+      // 401：触发事件总线，由认证控制器清理会话并回登录页
+      onUnauthorized: unauthorizedBus.notify,
+    ),
+  );
+  return dio;
+});
+
+/// 统一 API 客户端
+final apiClientProvider = Provider<ApiClient>((ref) {
+  return ApiClient(ref.watch(dioProvider));
+});
+
+/// 认证控制器：登录态、会话恢复、登录/登出动作
+final authControllerProvider =
+    StateNotifierProvider<AuthController, AuthState>((ref) {
+  final controller = AuthController(
+    ref.watch(sessionStorageProvider),
+    ref.watch(apiClientProvider),
+  );
+  // 订阅 401 事件：token 失效时清理本地会话并回到登录页
+  final unauthorizedBus = ref.watch(unauthorizedBusProvider);
+  unauthorizedBus.setListener(controller.handleUnauthorized);
+  ref.onDispose(() {
+    unauthorizedBus.clearListener();
+  });
+  return controller;
+});
+
+/// 全局路由
+final routerProvider = Provider<GoRouter>((ref) {
+  final router = createAppRouter(ref.read(authControllerProvider.notifier));
+  ref.onDispose(router.dispose);
+  return router;
+});

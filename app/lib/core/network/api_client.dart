@@ -1,0 +1,133 @@
+import 'package:dio/dio.dart';
+
+import 'package:starvoice_app/core/models/user_profile.dart';
+import 'package:starvoice_app/core/network/api_exception.dart';
+
+/// 发送验证码的结果。dev 模式下服务端会额外返回明文 [code] 便于联调。
+class SendCodeResult {
+  const SendCodeResult({
+    required this.requestId,
+    required this.resendAfterSeconds,
+    required this.expiresInSeconds,
+    this.code,
+  });
+
+  factory SendCodeResult.fromJson(Map<String, dynamic> json) {
+    return SendCodeResult(
+      requestId: json['requestId']?.toString() ?? '',
+      resendAfterSeconds: (json['resendAfterSeconds'] as num?)?.toInt() ?? 60,
+      expiresInSeconds: (json['expiresInSeconds'] as num?)?.toInt() ?? 300,
+      code: json['code']?.toString(),
+    );
+  }
+
+  final String requestId;
+  final int resendAfterSeconds;
+  final int expiresInSeconds;
+
+  /// 仅开发/测试环境返回，生产环境为空
+  final String? code;
+}
+
+/// 校验验证码并登录的结果。
+class VerifyCodeResult {
+  const VerifyCodeResult({required this.token, required this.user});
+
+  factory VerifyCodeResult.fromJson(Map<String, dynamic> json) {
+    final userJson = json['user'];
+    return VerifyCodeResult(
+      token: json['token']?.toString() ?? '',
+      user: UserProfile.fromJson(
+        userJson is Map ? Map<String, dynamic>.from(userJson) : <String, dynamic>{},
+      ),
+    );
+  }
+
+  final String token;
+  final UserProfile user;
+}
+
+/// 统一的 API 客户端，封装手机号验证码登录相关的三个接口。
+class ApiClient {
+  ApiClient(this._dio);
+
+  final Dio _dio;
+
+  /// 发送验证码；60 秒内重复发送会命中 SEND_TOO_FREQUENT（429）。
+  Future<SendCodeResult> sendCode(String phone) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/auth/send-code',
+        data: {'phone': phone},
+      );
+      return SendCodeResult.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 校验验证码并登录，成功后返回 JWT 与用户信息。
+  Future<VerifyCodeResult> verifyCode(String phone, String code) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/auth/verify-code',
+        data: {'phone': phone, 'code': code},
+      );
+      return VerifyCodeResult.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 获取当前登录用户；token 失效时服务端返回 401。
+  Future<UserProfile> fetchCurrentUser() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/api/auth/me');
+      final data = response.data ?? <String, dynamic>{};
+      final userJson = data['user'];
+      return UserProfile.fromJson(
+        userJson is Map ? Map<String, dynamic>.from(userJson) : data,
+      );
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 把 dio 异常统一转换为携带后端中文 message 的 [ApiException]。
+  ApiException _toApiException(DioException error) {
+    final response = error.response;
+    if (response == null) {
+      return const ApiException(
+        code: 'NETWORK_ERROR',
+        message: '网络连接失败，请检查网络后重试',
+      );
+    }
+
+    Map<String, dynamic> body = const <String, dynamic>{};
+    if (response.data is Map) {
+      body = Map<String, dynamic>.from(response.data as Map);
+    }
+    final retryAfterSeconds = body['retryAfterSeconds'];
+    return ApiException(
+      code: body['error']?.toString() ?? 'HTTP_${response.statusCode}',
+      message: body['message']?.toString() ?? _defaultMessage(response.statusCode),
+      statusCode: response.statusCode,
+      retryAfterSeconds: retryAfterSeconds is num ? retryAfterSeconds.toInt() : null,
+    );
+  }
+
+  String _defaultMessage(int? statusCode) {
+    switch (statusCode) {
+      case 400:
+        return '请求参数不正确';
+      case 401:
+        return '未登录或登录已过期';
+      case 404:
+        return '请求的资源不存在';
+      case 429:
+        return '操作过于频繁，请稍后重试';
+      default:
+        return '服务异常，请稍后重试';
+    }
+  }
+}

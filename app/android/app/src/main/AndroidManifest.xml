@@ -1,8 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 联调后端需要网络访问：debug 清单已带权限，release 包也需要 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- MVP 联调使用 http://10.0.2.2:3000，需允许明文流量；上线切 https 后可移除 -->
     <application
         android:label="starvoice_app"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
