@@ -60,6 +60,8 @@ export const env = {
     clientKey: optionalEnv('DOUYIN_CLIENT_KEY'),
     clientSecret: optionalEnv('DOUYIN_CLIENT_SECRET'),
     redirectUri: optionalEnv('DOUYIN_REDIRECT_URI'),
+    // MOCK_DOUYIN=true：即使配置了真实 client key 也强制走 mock（真实 key 下联调用）
+    forceMock: optionalEnv('MOCK_DOUYIN') === 'true',
   },
 
   // 微信支付：订阅支付

@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import 'package:starvoice_app/core/models/douyin_bind_status.dart';
 import 'package:starvoice_app/core/models/user_profile.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 
@@ -88,6 +89,44 @@ class ApiClient {
       return UserProfile.fromJson(
         userJson is Map ? Map<String, dynamic>.from(userJson) : data,
       );
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 查询当前用户的抖音绑定状态。
+  Future<DouyinBindStatus> fetchDouyinBindStatus() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/api/douyin/bind-status');
+      return DouyinBindStatus.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 用抖音授权 code 绑定抖音号；错误（如已被绑定/冲突）透传服务端中文 message。
+  Future<DouyinBindStatus> bindDouyin(String code) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/douyin/bind',
+        data: {'code': code},
+      );
+      return DouyinBindStatus.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 解绑抖音号，返回未绑定状态。
+  /// 注意：显式发送空 JSON 对象 `{}`，避免携带 Content-Type 但空 body
+  /// 触发 Fastify 的 FST_ERR_CTP_EMPTY_JSON_BODY（400）。
+  Future<DouyinBindStatus> unbindDouyin() async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/douyin/unbind',
+        data: <String, dynamic>{},
+      );
+      return DouyinBindStatus.fromJson(response.data ?? <String, dynamic>{});
     } on DioException catch (error) {
       throw _toApiException(error);
     }

@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import 'package:starvoice_app/core/models/douyin_bind_status.dart';
+import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/providers.dart';
 
-/// 登录后首页：展示脱敏手机号、用户 ID 与登录时间，支持退出登录。
+/// 登录后首页：展示脱敏手机号、用户 ID、登录时间与抖音账号绑定卡片。
 class HomePage extends ConsumerWidget {
   const HomePage({super.key});
 
@@ -33,8 +36,8 @@ class HomePage extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('首页')),
       body: Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -56,9 +59,10 @@ class HomePage extends ConsumerWidget {
               const SizedBox(height: 12),
               Text('用户ID：$userId', style: const TextStyle(fontSize: 16)),
               const SizedBox(height: 12),
-              Text('登录时间：$loginTimeText',
-                  style: const TextStyle(fontSize: 16)),
-              const SizedBox(height: 48),
+              Text('登录时间：$loginTimeText', style: const TextStyle(fontSize: 16)),
+              const SizedBox(height: 32),
+              const _DouyinAccountCard(),
+              const SizedBox(height: 24),
               OutlinedButton(
                 key: const Key('logoutButton'),
                 onPressed: () {
@@ -73,6 +77,250 @@ class HomePage extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 抖音账号卡片：负责拉取绑定状态，支持去绑定 / 解绑后刷新。
+class _DouyinAccountCard extends ConsumerStatefulWidget {
+  const _DouyinAccountCard();
+
+  @override
+  ConsumerState<_DouyinAccountCard> createState() => _DouyinAccountCardState();
+}
+
+class _DouyinAccountCardState extends ConsumerState<_DouyinAccountCard> {
+  bool _loading = true;
+  bool _unbinding = false;
+  String? _error;
+  DouyinBindStatus? _status;
+
+  @override
+  void initState() {
+    super.initState();
+    // 首帧后再拉取，避免 build 阶段发起网络请求
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
+  }
+
+  Future<void> _refresh() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    try {
+      final status = await ref.read(apiClientProvider).fetchDouyinBindStatus();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = status;
+        _loading = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = error.message;
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _goBind() async {
+    // 绑定页成功后 pop，回到首页刷新卡片状态
+    await context.push('/douyin-bind');
+    await _refresh();
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _confirmUnbind() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('解绑抖音号'),
+        content: const Text('解绑后如需直播拉券需重新授权绑定，确定解绑吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            key: const Key('douyinUnbindConfirmButton'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('确定解绑'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _unbinding = true;
+    });
+    try {
+      await ref.read(apiClientProvider).unbindDouyin();
+      _showSnack('已解绑抖音号');
+      await _refresh();
+    } on ApiException catch (error) {
+      _showSnack(error.message);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _unbinding = false;
+        });
+      }
+    }
+  }
+
+  Widget _buildContent() {
+    if (_loading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: Text('正在同步抖音绑定状态…'),
+      );
+    }
+    if (_error != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '抖音账号状态获取失败：$_error',
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: _refresh,
+            child: const Text('重试'),
+          ),
+        ],
+      );
+    }
+
+    final status = _status;
+    if (status == null || !status.bound) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('绑定抖音号后可拉取团购券，为实景直播挂载商品。'),
+          const SizedBox(height: 12),
+          FilledButton.tonal(
+            key: const Key('douyinBindButton'),
+            onPressed: _goBind,
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+            child: const Text('去绑定'),
+          ),
+        ],
+      );
+    }
+
+    final avatarUrl = status.avatarUrl;
+    return Row(
+      children: [
+        ClipOval(
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: avatarUrl != null && avatarUrl.isNotEmpty
+                ? Image.network(
+                    avatarUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) =>
+                        const _AvatarFallback(),
+                  )
+                : const _AvatarFallback(),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                status.nickname ?? '已绑定抖音号',
+                key: const Key('douyinNickname'),
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                '抖音账号已绑定',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+              ),
+            ],
+          ),
+        ),
+        OutlinedButton(
+          key: const Key('douyinUnbindButton'),
+          onPressed: _unbinding ? null : _confirmUnbind,
+          child: _unbinding
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('解绑'),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      key: const Key('douyinCard'),
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.smart_display, size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  '抖音账号',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                Text(
+                  _status?.bound == true ? '已绑定' : '未绑定',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _buildContent(),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 头像加载失败 / 无头像时的兜底图标。
+class _AvatarFallback extends StatelessWidget {
+  const _AvatarFallback();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.grey.shade300,
+      alignment: Alignment.center,
+      child: const Icon(Icons.person, color: Colors.black45),
     );
   }
 }
