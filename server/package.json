@@ -1,0 +1,37 @@
+{
+  "name": "starvoice-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "星辰语音 App 后端服务（Fastify + Drizzle ORM + PostgreSQL）",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.36.0",
+    "fastify": "^5.0.0",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.12.0",
+    "@types/node": "^22.7.5",
+    "@types/pg": "^8.11.10",
+    "drizzle-kit": "^0.28.0",
+    "eslint": "^9.12.0",
+    "globals": "^15.9.0",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.8.1"
+  }
+}

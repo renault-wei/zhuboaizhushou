@@ -1,0 +1,74 @@
+import 'dotenv/config';
+
+// 环境变量集中读取与校验：所有密钥一律来自 .env / 环境变量，禁止硬编码
+
+/** 读取必填环境变量，缺失直接抛错，避免服务带错配置启动 */
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (value === undefined || value === '') {
+    throw new Error(`缺少必需环境变量 ${name}，请复制 .env.example 为 .env 后填写`);
+  }
+  return value;
+}
+
+/** 读取可选环境变量，为空返回 undefined */
+function optionalEnv(name: string): string | undefined {
+  const value = process.env[name];
+  return value !== undefined && value !== '' ? value : undefined;
+}
+
+/** 读取整数型环境变量（端口等） */
+function intEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') {
+    return fallback;
+  }
+  const num = Number(raw);
+  if (!Number.isInteger(num)) {
+    throw new Error(`环境变量 ${name} 必须是整数，当前值：${raw}`);
+  }
+  return num;
+}
+
+export const env = {
+  // 服务基础
+  NODE_ENV: process.env.NODE_ENV ?? 'development',
+  HOST: process.env.HOST ?? '0.0.0.0',
+  PORT: intEnv('PORT', 3000),
+  LOG_LEVEL: process.env.LOG_LEVEL ?? 'info',
+
+  // PostgreSQL（Drizzle ORM）
+  DATABASE_URL: requireEnv('DATABASE_URL'),
+
+  // DeepSeek：话术生成
+  deepseek: {
+    apiKey: optionalEnv('DEEPSEEK_API_KEY'),
+    baseUrl: optionalEnv('DEEPSEEK_BASE_URL') ?? 'https://api.deepseek.com',
+  },
+
+  // 阿里云 CosyVoice：声音克隆 + TTS
+  cosyvoice: {
+    apiKey: optionalEnv('COSYVOICE_API_KEY'),
+    baseUrl: optionalEnv('COSYVOICE_BASE_URL'),
+    model: optionalEnv('COSYVOICE_MODEL') ?? 'cosyvoice-v2',
+  },
+
+  // 抖音开放平台：OAuth + 团购券 + 推流
+  douyin: {
+    clientKey: optionalEnv('DOUYIN_CLIENT_KEY'),
+    clientSecret: optionalEnv('DOUYIN_CLIENT_SECRET'),
+    redirectUri: optionalEnv('DOUYIN_REDIRECT_URI'),
+  },
+
+  // 微信支付：订阅支付
+  wxpay: {
+    appId: optionalEnv('WXPAY_APPID'),
+    mchId: optionalEnv('WXPAY_MCH_ID'),
+    apiV3Key: optionalEnv('WXPAY_API_V3_KEY'),
+    privateKeyPath: optionalEnv('WXPAY_PRIVATE_KEY_PATH'),
+    certSerialNo: optionalEnv('WXPAY_CERT_SERIAL_NO'),
+    notifyUrl: optionalEnv('WXPAY_NOTIFY_URL'),
+  },
+} as const;
+
+export type Env = typeof env;
