@@ -6,6 +6,8 @@ import 'package:starvoice_app/features/agreement/presentation/voice_agreement_pa
 import 'package:starvoice_app/features/coupons/presentation/coupon_list_page.dart';
 import 'package:starvoice_app/features/douyin/presentation/douyin_bind_page.dart';
 import 'package:starvoice_app/features/home/presentation/home_page.dart';
+import 'package:starvoice_app/features/lives/presentation/live_form_page.dart';
+import 'package:starvoice_app/features/lives/presentation/live_list_page.dart';
 import 'package:starvoice_app/features/recording/presentation/recording_page.dart';
 import 'package:starvoice_app/features/scripts/presentation/script_edit_page.dart';
 import 'package:starvoice_app/features/scripts/presentation/script_generate_page.dart';
@@ -41,7 +43,10 @@ GoRouter createAppRouter(AuthController authController) {
       ),
       GoRoute(
         path: '/coupons',
-        builder: (context, state) => const CouponListPage(),
+        // select=1：作为开播配置表单的「选券」入口，点选即 pop 返回券 id
+        builder: (context, state) => CouponListPage(
+          selectable: state.uri.queryParameters['select'] == '1',
+        ),
       ),
       GoRoute(
         path: '/voice-agreement',
@@ -63,6 +68,20 @@ GoRouter createAppRouter(AuthController authController) {
         path: '/scripts/:id/edit',
         builder: (context, state) => ScriptEditPage(
           scriptId: state.pathParameters['id'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: '/lives',
+        builder: (context, state) => const LiveListPage(),
+      ),
+      GoRoute(
+        path: '/lives/new',
+        builder: (context, state) => const LiveFormPage(),
+      ),
+      GoRoute(
+        path: '/lives/:id',
+        builder: (context, state) => LiveFormPage(
+          liveId: state.pathParameters['id'] ?? '',
         ),
       ),
     ],

@@ -27,7 +27,10 @@ Color _placeholderColor(String couponId) {
 /// 团购券列表页（路由 /coupons）：拉取当前抖音账号下的团购券，
 /// 供后续开播配置页选择「直播挂载商品」。未绑定抖音号时引导去绑定。
 class CouponListPage extends ConsumerStatefulWidget {
-  const CouponListPage({super.key});
+  const CouponListPage({super.key, this.selectable = false});
+
+  /// 选择模式：作为开播配置表单「选券」入口，点选卡片即 pop 返回券 id。
+  final bool selectable;
 
   @override
   ConsumerState<CouponListPage> createState() => _CouponListPageState();
@@ -99,7 +102,13 @@ class _CouponListPageState extends ConsumerState<CouponListPage> {
         itemCount: state.coupons.length,
         separatorBuilder: (context, index) => const SizedBox(height: 12),
         itemBuilder: (context, index) {
-          return _CouponCard(coupon: state.coupons[index]);
+          return _CouponCard(
+            coupon: state.coupons[index],
+            onTap: widget.selectable
+                ? () =>
+                    Navigator.of(context).pop(state.coupons[index].couponId)
+                : null,
+          );
         },
       ),
     );
@@ -198,17 +207,21 @@ class _CouponListPageState extends ConsumerState<CouponListPage> {
 
 /// 单张团购券卡片：色块占位图、券名、套餐内容、售价/原价/折扣、已售数量。
 class _CouponCard extends StatelessWidget {
-  const _CouponCard({required this.coupon});
+  const _CouponCard({required this.coupon, this.onTap});
 
   final Coupon coupon;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Card(
-      key: Key('couponCard_${coupon.couponId}'),
-      margin: EdgeInsets.zero,
-      clipBehavior: Clip.antiAlias,
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Card(
+        key: Key('couponCard_${coupon.couponId}'),
+        margin: EdgeInsets.zero,
+        clipBehavior: Clip.antiAlias,
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Row(
@@ -314,6 +327,7 @@ class _CouponCard extends StatelessWidget {
           ],
         ),
       ),
-    );
+    ),
+  );
   }
 }

@@ -8,6 +8,8 @@ import 'package:starvoice_app/core/network/auth_interceptor.dart';
 import 'package:starvoice_app/core/storage/session_storage.dart';
 import 'package:starvoice_app/features/auth/application/auth_controller.dart';
 import 'package:starvoice_app/features/coupons/application/coupon_controller.dart';
+import 'package:starvoice_app/features/lives/application/live_form_controller.dart';
+import 'package:starvoice_app/features/lives/application/live_list_controller.dart';
 import 'package:starvoice_app/features/recording/application/recorder_controller.dart';
 import 'package:starvoice_app/features/scripts/application/script_controller.dart';
 import 'package:starvoice_app/features/voices/application/voice_library_controller.dart';
@@ -122,3 +124,19 @@ final couponControllerProvider = StateNotifierProvider.autoDispose<
     CouponController, CouponState>((ref) {
   return CouponController(ref.watch(apiClientProvider));
 });
+
+/// 开播配置列表控制器：开播配置列表页使用（列表 + 引用资源名映射 + 删除）。
+/// autoDispose：离开开播配置页即销毁，避免页面级状态长期驻留。
+final liveListControllerProvider = StateNotifierProvider.autoDispose<
+    LiveListController, LiveListState>((ref) {
+  return LiveListController(ref.watch(apiClientProvider));
+});
+
+/// 开播配置表单控制器：按 liveId 维度隔离（空串 = 新建，非空 = 编辑）。
+/// autoDispose：离开表单页即销毁；编辑页预填依赖 family 参数读取 /api/lives/:id。
+final liveFormControllerProvider =
+    StateNotifierProvider.autoDispose.family<LiveFormController, LiveFormState, String>(
+  (ref, liveId) {
+    return LiveFormController(ref.watch(apiClientProvider), liveId);
+  },
+);

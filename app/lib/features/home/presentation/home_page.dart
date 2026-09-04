@@ -71,6 +71,8 @@ class HomePage extends ConsumerWidget {
               const _ScriptLibraryCard(),
               const SizedBox(height: 16),
               const _CouponEntryCard(),
+              const SizedBox(height: 16),
+              const _LiveEntryCard(),
               const SizedBox(height: 24),
               OutlinedButton(
                 key: const Key('logoutButton'),
@@ -81,6 +83,54 @@ class HomePage extends ConsumerWidget {
                   minimumSize: const Size.fromHeight(48),
                 ),
                 child: const Text('退出登录'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 「开播配置」入口卡片：位于「团购券」卡片下方。
+/// 点击进入开播配置列表页 /lives，把音色 / 话术 / 团购券组合成开播草稿。
+class _LiveEntryCard extends StatelessWidget {
+  const _LiveEntryCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      key: const Key('liveEntryCard'),
+      margin: EdgeInsets.zero,
+      child: InkWell(
+        key: const Key('liveEntryOpenButton'),
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => context.push('/lives'),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  const Icon(Icons.live_tv, size: 20),
+                  const SizedBox(width: 8),
+                  const Text(
+                    '开播配置',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const Spacer(),
+                  Icon(
+                    Icons.chevron_right,
+                    size: 20,
+                    color: Colors.grey.shade500,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '绑定音色 / 话术 / 团购券，生成开播配置草稿（T11 接入视频源）',
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
               ),
             ],
           ),

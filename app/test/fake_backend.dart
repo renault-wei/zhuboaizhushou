@@ -44,9 +44,11 @@ class FakeBackend implements HttpClientAdapter {
     List<Map<String, dynamic>>? voices,
     List<Map<String, dynamic>>? scripts,
     List<Map<String, dynamic>>? coupons,
+    List<Map<String, dynamic>>? lives,
   })  : voices = voices ?? <Map<String, dynamic>>[],
         scripts = scripts ?? <Map<String, dynamic>>[],
-        coupons = coupons ?? _defaultCoupons();
+        coupons = coupons ?? _defaultCoupons(),
+        lives = lives ?? <Map<String, dynamic>>[];
 
   final String userId;
   final String phone;
@@ -71,6 +73,9 @@ class FakeBackend implements HttpClientAdapter {
 
   /// 我的团购券（内存）：结构与服务端 /api/douyin/coupons 返回保持一致。
   final List<Map<String, dynamic>> coupons;
+  /// 我的开播配置（内存）：结构与服务端 /api/lives 返回保持一致。
+  final List<Map<String, dynamic>> lives;
+  int _liveSeq = 0;
 
   /// 模拟 DeepSeek 返回的话术全文：生成接口使用，测试可自行配置。
   final String generatedScriptContent;
@@ -197,10 +202,196 @@ class FakeBackend implements HttpClientAdapter {
     if (voiceItem != null && options.method == 'DELETE') {
       return _deleteVoice(voiceItem.group(1)!);
     }
+    final liveItem = RegExp(r'^/api/lives/([^/]+)$').firstMatch(path);
+    if (liveItem != null && options.method == 'GET') {
+      return _getLive(liveItem.group(1)!);
+    }
+    if (liveItem != null && options.method == 'PATCH') {
+      return _updateLive(options, liveItem.group(1)!);
+    }
+    if (liveItem != null && options.method == 'DELETE') {
+      return _deleteLive(liveItem.group(1)!);
+    }
+    if (options.method == 'GET' && path.endsWith('/api/lives')) {
+      return _listLives(options);
+    }
+    if (options.method == 'POST' && path.endsWith('/api/lives')) {
+      return _createLive(options);
+    }
     return _jsonResponse({'error': 'NOT_FOUND', 'message': '接口不存在'}, 404);
   }
 
   /// 创建克隆任务：镜像服务端校验（先协议后时长与名称），成功落 pending。
+  /// 我的开播配置列表：模拟服务端按 updatedAt desc、最多 50 条，支持 ?status= 过滤。
+  ResponseBody _listLives(RequestOptions options) {
+    final status = options.queryParameters['status']?.toString();
+    final result = <Map<String, dynamic>>[
+      for (final live in lives)
+        if (status == null || live['status'] == status) live,
+    ];
+    result.sort((a, b) {
+      final aAt = DateTime.tryParse(a['updatedAt']?.toString() ?? '');
+      final bAt = DateTime.tryParse(b['updatedAt']?.toString() ?? '');
+      return (bAt ?? DateTime.fromMillisecondsSinceEpoch(0))
+          .compareTo(aAt ?? DateTime.fromMillisecondsSinceEpoch(0));
+    });
+    return _jsonResponse(result);
+  }
+
+  /// 单查开播配置：不存在统一返回 404（FakeBackend 仅模拟单一用户，等同归属隔离）。
+  ResponseBody _getLive(String id) {
+    final live = _findLive(id);
+    if (live == null) {
+      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+    }
+    return _jsonResponse(live);
+  }
+
+  /// 创建开播配置草稿：status=idle、aiBadgeShown=true 由服务端写死，
+  /// 请求体即使传 status / aiBadgeShown=false 也忽略，防止篡改合规角标。
+  ResponseBody _createLive(RequestOptions options) {
+    final body = _readBody(options);
+    final title = body['title']?.toString().trim() ?? '';
+    if (title.isEmpty || title.length > 100) {
+      return _jsonResponse(
+        {'error': 'LIVE_TITLE_INVALID', 'message': '直播标题不能为空且不超过 100 字'},
+        400,
+      );
+    }
+    final voiceId = _liveNullable(body['voiceId']);
+    final scriptId = _liveNullable(body['scriptId']);
+    if (voiceId != null && voices.indexWhere((voice) => voice['id'] == voiceId) < 0) {
+      return _jsonResponse(
+        {'error': 'VOICE_NOT_OWNED', 'message': '音色不存在或不属于当前用户'},
+        400,
+      );
+    }
+    if (scriptId != null && scripts.indexWhere((script) => script['id'] == scriptId) < 0) {
+      return _jsonResponse(
+        {'error': 'SCRIPT_NOT_OWNED', 'message': '话术不存在或不属于当前用户'},
+        400,
+      );
+    }
+    final id = _nextLiveId();
+    final now = DateTime.now().toUtc();
+    final live = <String, dynamic>{
+      'id': id,
+      'title': title,
+      'videoSourceUrl': body['videoSourceUrl']?.toString().trim() ?? '',
+      'couponId': _liveNullable(body['couponId']),
+      'rtmpUrl': null,
+      'voiceId': voiceId,
+      'scriptId': scriptId,
+      'status': 'idle',
+      'aiBadgeShown': true,
+      'startedAt': null,
+      'endedAt': null,
+      'createdAt': now.toIso8601String(),
+      'updatedAt': now.toIso8601String(),
+    };
+    lives.insert(0, live);
+    return _jsonResponse({'live': live}, 201);
+  }
+
+  /// 编辑开播配置：缺省字段保留原值；status / aiBadgeShown 无更新入口，角标恒为 true。
+  ResponseBody _updateLive(RequestOptions options, String id) {
+    final index = lives.indexWhere((live) => live['id'] == id);
+    if (index < 0) {
+      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+    }
+    final body = _readBody(options);
+    final updated = <String, dynamic>{...lives[index]};
+    if (body.containsKey('title')) {
+      final title = body['title']?.toString().trim() ?? '';
+      if (title.isEmpty || title.length > 100) {
+        return _jsonResponse(
+          {'error': 'LIVE_TITLE_INVALID', 'message': '直播标题不能为空且不超过 100 字'},
+          400,
+        );
+      }
+      updated['title'] = title;
+    }
+    if (body.containsKey('voiceId')) {
+      final voiceId = _liveNullable(body['voiceId']);
+      if (voiceId != null && voices.indexWhere((voice) => voice['id'] == voiceId) < 0) {
+        return _jsonResponse(
+          {'error': 'VOICE_NOT_OWNED', 'message': '音色不存在或不属于当前用户'},
+          400,
+        );
+      }
+      updated['voiceId'] = voiceId;
+    }
+    if (body.containsKey('scriptId')) {
+      final scriptId = _liveNullable(body['scriptId']);
+      if (scriptId != null && scripts.indexWhere((script) => script['id'] == scriptId) < 0) {
+        return _jsonResponse(
+          {'error': 'SCRIPT_NOT_OWNED', 'message': '话术不存在或不属于当前用户'},
+          400,
+        );
+      }
+      updated['scriptId'] = scriptId;
+    }
+    if (body.containsKey('couponId')) {
+      updated['couponId'] = _liveNullable(body['couponId']);
+    }
+    if (body.containsKey('videoSourceUrl')) {
+      updated['videoSourceUrl'] = body['videoSourceUrl']?.toString().trim() ?? '';
+    }
+    updated['updatedAt'] = DateTime.now().toUtc().toIso8601String();
+    lives[index] = updated;
+    return _jsonResponse({'live': updated});
+  }
+
+  /// 删除开播配置：仅 idle / ended / failed 可删；live / ready 返回 409（删除保护）。
+  ResponseBody _deleteLive(String id) {
+    final index = lives.indexWhere((live) => live['id'] == id);
+    if (index < 0) {
+      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+    }
+    final status = lives[index]['status'];
+    if (status == 'live' || status == 'ready') {
+      return _jsonResponse(
+        {'error': 'LIVE_IN_PROGRESS', 'message': '直播进行中或已就绪，不可删除'},
+        409,
+      );
+    }
+    lives.removeAt(index);
+    return _jsonResponse({'ok': true});
+  }
+
+  Map<String, dynamic>? _findLive(String id) {
+    for (final live in lives) {
+      if (live['id'] == id) {
+        return live;
+      }
+    }
+    return null;
+  }
+
+  /// 生成不与预置用例冲突的 live id：预置为 live-001 时自动顺延，避免覆盖。
+  String _nextLiveId() {
+    var maxSeq = 0;
+    for (final live in lives) {
+      final match = RegExp(r'^live-(\d+)$').firstMatch(live['id']?.toString() ?? '');
+      final seq = int.tryParse(match?.group(1) ?? '') ?? 0;
+      if (seq > maxSeq) {
+        maxSeq = seq;
+      }
+    }
+    if (_liveSeq <= maxSeq) {
+      _liveSeq = maxSeq + 1;
+    }
+    final id = 'live-${_liveSeq.toString().padLeft(3, '0')}';
+    _liveSeq += 1;
+    return id;
+  }
+
+  /// 可空字段归一化：null / 空串统一转 null，与服务端语义保持一致。
+  String? _liveNullable(Object? raw) {
+    final value = raw?.toString().trim() ?? '';
+    return value.isEmpty ? null : value;
+  }
+
   ResponseBody _createVoice(RequestOptions options) {
     if (!agreementSigned) {
       return _jsonResponse(

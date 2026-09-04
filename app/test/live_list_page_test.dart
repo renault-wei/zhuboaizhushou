@@ -1,0 +1,232 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+
+import 'package:starvoice_app/features/lives/presentation/live_form_page.dart';
+import 'package:starvoice_app/features/lives/presentation/live_list_page.dart';
+import 'package:starvoice_app/providers.dart';
+
+import 'fake_backend.dart';
+
+Map<String, dynamic> _liveJson({
+  required String id,
+  required String title,
+  required String status,
+  String? voiceId,
+  String? scriptId,
+  String? couponId,
+}) {
+  final now = DateTime.now().toUtc();
+  return <String, dynamic>{
+    'id': id,
+    'title': title,
+    'videoSourceUrl': '',
+    'couponId': couponId,
+    'rtmpUrl': null,
+    'voiceId': voiceId,
+    'scriptId': scriptId,
+    'status': status,
+    'aiBadgeShown': true,
+    'startedAt': null,
+    'endedAt': null,
+    'createdAt': now.toIso8601String(),
+    'updatedAt': now.toIso8601String(),
+  };
+}
+
+/// 直接在 MaterialApp 内渲染列表页（不涉及路由跳转的用例使用）。
+Future<void> _pumpListPage(WidgetTester tester, FakeBackend backend) async {
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [dioProvider.overrideWithValue(buildMockDio(backend))],
+      child: const MaterialApp(home: LiveListPage()),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
+/// 走真实路由表渲染列表页：覆盖「+ → /lives/new」跳转与表单联动。
+Future<void> _pumpListRouter(WidgetTester tester, FakeBackend backend) async {
+  final router = GoRouter(
+    initialLocation: '/lives',
+    routes: <RouteBase>[
+      GoRoute(path: '/lives', builder: (context, state) => const LiveListPage()),
+      GoRoute(path: '/lives/new', builder: (context, state) => const LiveFormPage()),
+      GoRoute(
+        path: '/lives/:id',
+        builder: (context, state) => LiveFormPage(
+          liveId: state.pathParameters['id'] ?? '',
+        ),
+      ),
+    ],
+  );
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [dioProvider.overrideWithValue(buildMockDio(backend))],
+      child: MaterialApp.router(routerConfig: router),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
+void main() {
+  testWidgets('空态：无开播配置时展示引导文案与「去创建」按钮', (WidgetTester tester) async {
+    final backend = FakeBackend();
+    await _pumpListPage(tester, backend);
+
+    expect(find.byKey(const Key('liveListPage')), findsOneWidget);
+    expect(find.text('开播配置'), findsOneWidget);
+    expect(find.byKey(const Key('liveListEmptyText')), findsOneWidget);
+    expect(find.text('还没有开播配置，点击 + 创建第一个草稿'), findsOneWidget);
+    expect(find.byKey(const Key('liveListCreateButton')), findsOneWidget);
+    expect(find.byKey(const Key('liveAddButton')), findsOneWidget);
+    expect(find.byKey(const Key('liveRefreshButton')), findsOneWidget);
+  });
+
+  testWidgets('列表分段：草稿 / 就绪进行中 / 已结束分组展示，摘要含绑定资源名', (WidgetTester tester) async {
+    final backend = FakeBackend(
+      douyinBound: true,
+      voices: <Map<String, dynamic>>[
+        <String, dynamic>{
+          'id': 'v-ready',
+          'name': '主播小美',
+          'status': 'ready',
+          'providerVoiceId': 'cosy-mock-v-ready',
+          'sampleDurationSeconds': 200,
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+        },
+      ],
+      scripts: <Map<String, dynamic>>[
+        <String, dynamic>{
+          'id': 'script-001',
+          'industry': 'restaurant',
+          'title': '火锅套餐话术',
+          'productSnapshot': <String, dynamic>{'name': '双人火锅套餐'},
+          'content': '双人火锅套餐，锅底现炒，欢迎到店品尝。',
+          'status': 'ready',
+          'sensitiveCheckStatus': 'pass',
+          'sensitiveMatchedWords': <String>[],
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+        },
+      ],
+      lives: <Map<String, dynamic>>[
+        _liveJson(
+          id: 'live-001',
+          title: '午市循环草稿',
+          status: 'idle',
+          voiceId: 'v-ready',
+          scriptId: 'script-001',
+          couponId: 'c-001-mock',
+        ),
+        _liveJson(id: 'live-002', title: '晚市就绪直播', status: 'ready'),
+        _liveJson(id: 'live-003', title: '昨日已结束', status: 'ended'),
+      ],
+    );
+    await _pumpListPage(tester, backend);
+
+    // 三分段标题
+    expect(find.text('草稿（1）'), findsOneWidget);
+    expect(find.text('就绪 / 进行中（1）'), findsOneWidget);
+    expect(find.text('已结束（1）'), findsOneWidget);
+
+    // 三张卡片与状态徽章
+    expect(find.byKey(const Key('liveCard_live-001')), findsOneWidget);
+    expect(find.byKey(const Key('liveCard_live-002')), findsOneWidget);
+    expect(find.byKey(const Key('liveCard_live-003')), findsOneWidget);
+    expect(find.byKey(const Key('liveStatus_live-001')), findsOneWidget);
+    expect(find.text('草稿'), findsOneWidget);
+    expect(find.text('就绪'), findsOneWidget);
+    expect(find.text('已结束'), findsOneWidget);
+
+    // 草稿可编辑（编辑按钮），非 idle 走「查看」占位
+    expect(find.byKey(const Key('liveEdit_live-001')), findsOneWidget);
+    expect(find.byKey(const Key('liveView_live-002')), findsOneWidget);
+    expect(find.byKey(const Key('liveView_live-003')), findsOneWidget);
+    expect(find.byKey(const Key('liveEdit_live-002')), findsNothing);
+
+    // 摘要展示音色 / 话术 / 团购券名称
+    expect(
+      find.text('音色：主播小美 · 话术：火锅套餐话术 · 券：双人火锅套餐'),
+      findsOneWidget,
+    );
+
+    // 删除保护：idle 可删，ready 的删除按钮禁用
+    final idleDelete = tester.widget<IconButton>(
+      find.byKey(const Key('liveDelete_live-001')),
+    );
+    expect(idleDelete.onPressed, isNotNull);
+    final readyDelete = tester.widget<IconButton>(
+      find.byKey(const Key('liveDelete_live-002')),
+    );
+    expect(readyDelete.onPressed, isNull);
+  });
+
+  testWidgets('删除保护：就绪配置点查看展示占位提示，禁用删除不弹确认框', (WidgetTester tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-002', title: '晚市就绪直播', status: 'ready'),
+      ],
+    );
+    await _pumpListPage(tester, backend);
+
+    // 查看占位（T10 无推流能力）
+    await tester.tap(find.byKey(const Key('liveView_live-002')));
+    await tester.pump();
+    expect(find.text('查看详情与开播 / 停止将在 T11/T12 推流能力接入后开放'), findsOneWidget);
+
+    // 禁用删除：点击不弹确认框
+    await tester.tap(find.byKey(const Key('liveDelete_live-002')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('liveDeleteDialog')), findsNothing);
+
+    // 等待 SnackBar 自动消失，避免遗留计时器
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('删除草稿：取消不删，确认后移除并回到空态', (WidgetTester tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市循环草稿', status: 'idle'),
+      ],
+    );
+    await _pumpListPage(tester, backend);
+    expect(find.byKey(const Key('liveCard_live-001')), findsOneWidget);
+
+    // 取消：草稿仍在
+    await tester.tap(find.byKey(const Key('liveDelete_live-001')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('liveDeleteDialog')), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('liveCard_live-001')), findsOneWidget);
+
+    // 确认：删除后列表为空
+    await tester.tap(find.byKey(const Key('liveDelete_live-001')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('liveDeleteConfirmButton')));
+    await tester.pumpAndSettle();
+
+    expect(backend.lives, isEmpty);
+    expect(find.byKey(const Key('liveCard_live-001')), findsNothing);
+    expect(find.text('还没有开播配置，点击 + 创建第一个草稿'), findsOneWidget);
+    expect(find.text('已删除开播配置'), findsOneWidget);
+
+    // 等待 SnackBar 自动消失，避免遗留计时器
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('AppBar 右上角 +：跳转到 /lives/new 新建页', (WidgetTester tester) async {
+    final backend = FakeBackend();
+    await _pumpListRouter(tester, backend);
+
+    expect(find.byKey(const Key('liveListPage')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('liveAddButton')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('liveFormPage')), findsOneWidget);
+    expect(find.text('新建开播配置'), findsOneWidget);
+  });
+}

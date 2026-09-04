@@ -5,6 +5,7 @@ import { agreementsRoutes } from './routes/agreements';
 import { authRoutes } from './routes/auth';
 import { douyinRoutes } from './routes/douyin';
 import { healthRoutes } from './routes/health';
+import { livesRoutes } from './routes/lives';
 import { scriptsRoutes } from './routes/scripts';
 import { voicesRoutes } from './routes/voices';
 
@@ -38,6 +39,7 @@ export function buildApp() {
  app.register(healthRoutes);
   app.register(scriptsRoutes);
  app.register(voicesRoutes);
+  app.register(livesRoutes);
 
   return app;
 }

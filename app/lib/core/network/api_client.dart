@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import 'package:starvoice_app/core/models/coupon.dart';
 import 'package:starvoice_app/core/models/douyin_bind_status.dart';
+import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/models/user_profile.dart';
 import 'package:starvoice_app/core/models/voice.dart';
 import 'package:starvoice_app/core/models/voice_agreement.dart';
@@ -310,6 +311,114 @@ class ApiClient {
       throw _toApiException(error);
     }
   }
+
+  /// 我的开播配置列表：服务端按 updatedAt desc 返回、最多 50 条，支持 ?status= 过滤。
+  Future<List<Live>> listLives({String? status}) async {
+    try {
+      final response = await _dio.get<List<dynamic>>(
+        '/api/lives',
+        queryParameters: <String, dynamic>{'status': ?status},
+      );
+      final data = response.data;
+      if (data is List) {
+        return data
+            .whereType<Map>()
+            .map((item) => Live.fromJson(Map<String, dynamic>.from(item)))
+            .toList();
+      }
+      return <Live>[];
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 查询单个开播配置（含归属校验，非本人或不存在返回 404）。
+  Future<Live> getLive(String id) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/api/lives/$id');
+      return _parseLive(response.data);
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 创建开播配置草稿：服务端默认 status=idle、aiBadgeShown=true（合规写死，
+  /// 请求体即使传 status / aiBadgeShown=false 也一律忽略，防止篡改合规角标）。
+  Future<Live> createLive({
+    required String title,
+    String? voiceId,
+    String? scriptId,
+    String? couponId,
+    String? videoSourceUrl,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/lives',
+        data: <String, dynamic>{
+          'title': title,
+          'voiceId': voiceId,
+          'scriptId': scriptId,
+          'couponId': couponId,
+          'videoSourceUrl': ?videoSourceUrl,
+        },
+      );
+      return _parseLive(response.data);
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 编辑开播配置：整体提交标题/音色/话术/团购券（null 表示清空绑定）；
+  /// status / aiBadgeShown 无更新入口，角标恒为 true 不可篡改。
+  Future<Live> updateLive({
+    required String id,
+    String? title,
+    String? voiceId,
+    String? scriptId,
+    String? couponId,
+    String? videoSourceUrl,
+  }) async {
+    try {
+      final response = await _dio.patch<Map<String, dynamic>>(
+        '/api/lives/$id',
+        data: <String, dynamic>{
+          'title': title,
+          // 显式带 null：编辑页整体提交当前绑定，null 表示未绑定（服务端置空该列）
+          'voiceId': voiceId,
+          'scriptId': scriptId,
+          'couponId': couponId,
+          'videoSourceUrl': ?videoSourceUrl,
+        },
+      );
+      return _parseLive(response.data);
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 删除开播配置：仅 idle / ended / failed 可删；ready / live 会被服务端 409 拦截。
+  /// 注意：显式发送空 JSON 对象 `{}`，避免携带 Content-Type 但空 body
+  /// 触发 Fastify 的 FST_ERR_CTP_EMPTY_JSON_BODY（400）。
+  Future<void> deleteLive(String id) async {
+    try {
+      await _dio.delete<Map<String, dynamic>>(
+        '/api/lives/$id',
+        data: <String, dynamic>{},
+      );
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 从响应体解析 Live：POST/PATCH 形如 { live: {...} }，GET :id 直接返回对象本身。
+  Live _parseLive(Map<String, dynamic>? data) {
+    final raw = data?['live'];
+    if (raw is Map) {
+      return Live.fromJson(Map<String, dynamic>.from(raw));
+    }
+    return Live.fromJson(data ?? <String, dynamic>{});
+  }
+
   /// 把 dio 异常统一转换为携带后端中文 message 的 [ApiException]。
   ApiException _toApiException(DioException error) {
     final response = error.response;
