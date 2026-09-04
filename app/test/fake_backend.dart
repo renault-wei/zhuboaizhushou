@@ -37,7 +37,8 @@ class FakeBackend implements HttpClientAdapter {
     this.avatarUrl = '',
     this.agreementSigned = false,
     this.agreementSignedAt = '2026-09-04T02:00:00.000Z',
-  });
+    List<Map<String, dynamic>>? voices,
+  }) : voices = voices ?? <Map<String, dynamic>>[];
 
   final String userId;
   final String phone;
@@ -50,6 +51,11 @@ class FakeBackend implements HttpClientAdapter {
   /// 是否已签署《声音授权协议》：GET status 返回当前值，签署接口会改写
   bool agreementSigned;
   final String agreementSignedAt;
+
+  /// 我的音色（内存）：结构与服务端 /api/voices 返回保持一致；
+  /// GET :id 会像服务端一样按创建时间惰性推进克隆状态。
+  final List<Map<String, dynamic>> voices;
+  int _voiceSeq = 0;
 
   @override
   Future<ResponseBody> fetch(
@@ -123,7 +129,108 @@ class FakeBackend implements HttpClientAdapter {
       agreementSigned = true;
       return _jsonResponse(_voiceAgreementStatus());
     }
+    if (options.method == 'GET' && path.endsWith('/api/voices')) {
+      return _jsonResponse(List<Map<String, dynamic>>.from(voices));
+    }
+    if (options.method == 'POST' && path.endsWith('/api/voices')) {
+      return _createVoice(options);
+    }
+    final voiceItem = RegExp(r'^/api/voices/([^/]+)$').firstMatch(path);
+    if (voiceItem != null && options.method == 'GET') {
+      return _getVoice(voiceItem.group(1)!);
+    }
+    if (voiceItem != null && options.method == 'DELETE') {
+      return _deleteVoice(voiceItem.group(1)!);
+    }
     return _jsonResponse({'error': 'NOT_FOUND', 'message': '接口不存在'}, 404);
+  }
+
+  /// 创建克隆任务：镜像服务端校验（先协议后时长与名称），成功落 pending。
+  ResponseBody _createVoice(RequestOptions options) {
+    if (!agreementSigned) {
+      return _jsonResponse(
+        {
+          'error': 'AGREEMENT_REQUIRED',
+          'message': '克隆声音前需先签署《声音授权协议》',
+        },
+        403,
+      );
+    }
+    final body = _readBody(options);
+    final rawName = body['name'];
+    final name = rawName is String ? rawName.trim() : '';
+    final rawDuration = body['sampleDurationSeconds'];
+    final duration = rawDuration is num ? rawDuration.toInt() : 0;
+    if (duration < 180) {
+      return _jsonResponse(
+        {'error': 'DURATION_TOO_SHORT', 'message': '录音时长不足 3 分钟'},
+        400,
+      );
+    }
+    if (name.isEmpty || name.length > 50) {
+      return _jsonResponse(
+        {'error': 'NAME_INVALID', 'message': '音色名称不能为空且不超过 50 字'},
+        400,
+      );
+    }
+    _voiceSeq += 1;
+    final id = 'voice-${_voiceSeq.toString().padLeft(3, '0')}';
+    final voice = <String, dynamic>{
+      'id': id,
+      'name': name,
+      'status': 'pending',
+      'providerVoiceId': 'cosyvoice-mock-$id',
+      'sampleDurationSeconds': duration,
+      'sampleFingerprint': body['sampleFingerprint'],
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+    };
+    voices.insert(0, voice);
+    return _jsonResponse(voice, 201);
+  }
+
+  /// 单查音色：镜像服务端 mock 节奏，按创建时间把 pending/processing 推进到终态。
+  ResponseBody _getVoice(String id) {
+    final index = voices.indexWhere((voice) => voice['id'] == id);
+    if (index < 0) {
+      return _jsonResponse(
+        {'error': 'VOICE_NOT_FOUND', 'message': '音色不存在'},
+        404,
+      );
+    }
+    final voice = voices[index];
+    final status = voice['status'];
+    if (status == 'pending' || status == 'processing') {
+      final createdAt =
+          DateTime.tryParse(voice['createdAt']?.toString() ?? '') ??
+          DateTime.now().toUtc();
+      final elapsedMs =
+          DateTime.now().toUtc().difference(createdAt).inMilliseconds;
+      String? nextStatus;
+      if (elapsedMs >= 8000) {
+        nextStatus = 'ready';
+      } else if (elapsedMs >= 3000) {
+        nextStatus = 'processing';
+      }
+      if (nextStatus != null && nextStatus != status) {
+        final updated = <String, dynamic>{...voice, 'status': nextStatus};
+        voices[index] = updated;
+        return _jsonResponse(updated);
+      }
+    }
+    return _jsonResponse(voice);
+  }
+
+  /// 删除音色：找不到返回 404，成功返回 { ok: true }。
+  ResponseBody _deleteVoice(String id) {
+    final before = voices.length;
+    voices.removeWhere((voice) => voice['id'] == id);
+    if (voices.length == before) {
+      return _jsonResponse(
+        {'error': 'VOICE_NOT_FOUND', 'message': '音色不存在'},
+        404,
+      );
+    }
+    return _jsonResponse({'ok': true});
   }
 
   Map<String, dynamic> _douyinBindStatus() {
@@ -173,7 +280,7 @@ Map<String, dynamic> _readBody(RequestOptions options) {
   return <String, dynamic>{};
 }
 
-ResponseBody _jsonResponse(Map<String, dynamic> body, [int statusCode = 200]) {
+ResponseBody _jsonResponse(Object body, [int statusCode = 200]) {
   return ResponseBody.fromString(
     jsonEncode(body),
     statusCode,

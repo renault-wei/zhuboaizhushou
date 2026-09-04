@@ -65,6 +65,8 @@ class HomePage extends ConsumerWidget {
               const _VoiceAgreementCard(),
               const SizedBox(height: 16),
               const _CloneVoiceCard(),
+              const SizedBox(height: 16),
+              const _VoiceLibraryCard(),
               const SizedBox(height: 24),
               OutlinedButton(
                 key: const Key('logoutButton'),
@@ -668,6 +670,128 @@ class _CloneVoiceCardState extends ConsumerState<_CloneVoiceCard> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : Text(_signed ? '开始录音' : '去完成声音授权'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 「我的音色」入口卡片：位于「克隆我的声音」卡片下方。
+/// 展示音色数量（拉取列表长度），点击进入音色库页 /voices。
+class _VoiceLibraryCard extends ConsumerStatefulWidget {
+  const _VoiceLibraryCard();
+
+  @override
+  ConsumerState<_VoiceLibraryCard> createState() => _VoiceLibraryCardState();
+}
+
+class _VoiceLibraryCardState extends ConsumerState<_VoiceLibraryCard> {
+  bool _loading = true;
+  bool _busy = false;
+  String? _error;
+  int _count = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // 首帧后再拉取音色数量，避免在 build 阶段发起网络请求
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
+  }
+
+  Future<void> _refresh() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    try {
+      final voices = await ref.read(apiClientProvider).listVoices();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _count = voices.length;
+        _loading = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = error.message;
+        _loading = false;
+      });
+    }
+  }
+
+  /// 点击入口：进入音色库页，返回后刷新数量（可能已新增/删除音色）。
+  Future<void> _handleTap() async {
+    if (_loading || _busy) {
+      return;
+    }
+    setState(() {
+      _busy = true;
+    });
+    await context.push('/voices');
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _busy = false;
+    });
+    await _refresh();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hint = _error ??
+        (_loading ? '正在同步音色…' : '已有 $_count 个音色，可查看克隆进度或删除');
+    return Card(
+      key: const Key('voiceLibraryCard'),
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.record_voice_over_outlined, size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  '我的音色',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                Text(
+                  _loading && _error == null ? '同步中' : '$_count 个',
+                  key: const Key('voiceLibraryCountLabel'),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _error != null
+                        ? Theme.of(context).colorScheme.error
+                        : Colors.grey.shade600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              hint,
+              key: const Key('voiceLibraryHint'),
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonal(
+              key: const Key('voiceLibraryOpenButton'),
+              onPressed: _loading || _busy ? null : _handleTap,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(44),
+              ),
+              child: const Text('进入音色库'),
             ),
           ],
         ),

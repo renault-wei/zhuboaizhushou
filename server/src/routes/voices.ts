@@ -191,4 +191,17 @@ export const voicesRoutes: FastifyPluginAsync = async (app) => {
     }
     return voice;
   });
+
+  // 删除音色：按「归属 + 存在性」合并删除条件，非本人或不存在统一返回 404
+  app.delete('/api/voices/:id', { preHandler: app.authenticate }, async (request, reply) => {
+    const { id } = request.params as VoiceIdParams;
+    const deleted = await db
+      .delete(voices)
+      .where(and(eq(voices.id, id), eq(voices.userId, request.user.userId)))
+      .returning({ id: voices.id });
+    if (deleted.length === 0) {
+      return reply.code(404).send({ error: 'VOICE_NOT_FOUND', message: '音色不存在' });
+    }
+    return reply.code(200).send({ ok: true });
+  });
 };

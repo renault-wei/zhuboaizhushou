@@ -7,6 +7,7 @@ import 'package:starvoice_app/features/douyin/presentation/douyin_bind_page.dart
 import 'package:starvoice_app/features/home/presentation/home_page.dart';
 import 'package:starvoice_app/features/recording/presentation/recording_page.dart';
 import 'package:starvoice_app/features/splash/presentation/splash_page.dart';
+import 'package:starvoice_app/features/voices/presentation/voice_library_page.dart';
 
 /// 构建全局路由：根据认证状态在 启动页 / 登录页 / 首页 之间做守卫跳转。
 GoRouter createAppRouter(AuthController authController) {
@@ -42,6 +43,10 @@ GoRouter createAppRouter(AuthController authController) {
       GoRoute(
         path: '/recording',
         builder: (context, state) => const RecordingPage(),
+      ),
+      GoRoute(
+        path: '/voices',
+        builder: (context, state) => const VoiceLibraryPage(),
       ),
     ],
   );

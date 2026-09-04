@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import 'package:starvoice_app/core/models/douyin_bind_status.dart';
 import 'package:starvoice_app/core/models/user_profile.dart';
+import 'package:starvoice_app/core/models/voice.dart';
 import 'package:starvoice_app/core/models/voice_agreement.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 
@@ -161,6 +162,68 @@ class ApiClient {
         data: <String, dynamic>{'version': version, 'agreed': true},
       );
       return AgreementStatus.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 我的音色列表（服务端按创建时间倒序返回）。
+  Future<List<Voice>> listVoices() async {
+    try {
+      final response = await _dio.get<List<dynamic>>('/api/voices');
+      final data = response.data;
+      if (data is List) {
+        return data
+            .whereType<Map>()
+            .map((item) => Voice.fromJson(Map<String, dynamic>.from(item)))
+            .toList();
+      }
+      return <Voice>[];
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 创建声音克隆任务（提交录音样本），成功返回 201 + pending 音色。
+  Future<Voice> createVoice({
+    required String name,
+    required int sampleDurationSeconds,
+    String? sampleFingerprint,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/voices',
+        data: <String, dynamic>{
+          'name': name,
+          'sampleDurationSeconds': sampleDurationSeconds,
+          'sampleFingerprint': ?sampleFingerprint,
+        },
+      );
+      return Voice.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 查询单个音色状态（克隆进度轮询）。
+  Future<Voice> getVoice(String id) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/api/voices/$id');
+      return Voice.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 删除音色。
+  /// 注意：显式发送空 JSON 对象 `{}`，避免携带 Content-Type 但空 body
+  /// 触发 Fastify 的 FST_ERR_CTP_EMPTY_JSON_BODY（400）。
+  Future<void> deleteVoice(String id) async {
+    try {
+      await _dio.delete<Map<String, dynamic>>(
+        '/api/voices/$id',
+        data: <String, dynamic>{},
+      );
     } on DioException catch (error) {
       throw _toApiException(error);
     }

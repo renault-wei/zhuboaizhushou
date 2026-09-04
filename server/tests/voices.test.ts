@@ -32,6 +32,8 @@ const PHONE_LIST_B = '13900000005';
 const PHONE_OTHER = '13900000006';
 const PHONE_FLOW = '13900000007';
 const PHONE_READY = '13900000008';
+const PHONE_DELETE_OWNER = '13900000009';
+const PHONE_DELETE_OTHER = '13900000010';
 
 const LATEST_VERSION = getLatestVoiceAgreement().version;
 
@@ -94,7 +96,7 @@ async function backdateVoice(voiceId: string, secondsAgo: number): Promise<void>
 // ---------- 未登录 401 ----------
 
 describe('声音克隆接口鉴权', () => {
-  it('未带 token 访问三个接口均返回 401', async () => {
+  it('未带 token 访问四个接口均返回 401', async () => {
     const create = await app.inject({
       method: 'POST',
       url: '/api/voices',
@@ -108,6 +110,13 @@ describe('声音克隆接口鉴权', () => {
 
     const single = await app.inject({ method: 'GET', url: `/api/voices/${randomUUID()}` });
     expect(single.statusCode).toBe(401);
+
+    const remove = await app.inject({
+      method: 'DELETE',
+      url: `/api/voices/${randomUUID()}`,
+      payload: {},
+    });
+    expect(remove.statusCode).toBe(401);
   });
 
   it('非法 token 访问返回 401', async () => {
@@ -283,6 +292,92 @@ dbIt('查询不存在的音色或属于其他用户的音色返回 404 VOICE_NOT
   });
   expect(others.statusCode).toBe(404);
   expect(others.json()).toMatchObject({ error: 'VOICE_NOT_FOUND' });
+});
+
+// ---------- 删除音色 ----------
+
+dbIt('删除自己的音色成功：返回 ok:true 且音色从库中消失', async () => {
+  const token = await registerAndGetToken(PHONE_DELETE_OWNER);
+  await resetUserData(PHONE_DELETE_OWNER);
+  await signAgreement(token);
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/voices',
+    headers: bearer(token),
+    payload: { name: '待删除音色', sampleDurationSeconds: 180 },
+  });
+  expect(created.statusCode).toBe(201);
+  const voiceId = created.json().id as string;
+
+  const removed = await app.inject({
+    method: 'DELETE',
+    url: `/api/voices/${voiceId}`,
+    headers: bearer(token),
+  });
+  expect(removed.statusCode).toBe(200);
+  expect(removed.json()).toEqual({ ok: true });
+
+  // 删除后：单查 404，列表不再包含该音色
+  const single = await app.inject({
+    method: 'GET',
+    url: `/api/voices/${voiceId}`,
+    headers: bearer(token),
+  });
+  expect(single.statusCode).toBe(404);
+  const list = await app.inject({ method: 'GET', url: '/api/voices', headers: bearer(token) });
+  expect(list.statusCode).toBe(200);
+  const voices = list.json() as Array<Record<string, unknown>>;
+  expect(voices.map((voice) => voice.id)).not.toContain(voiceId);
+});
+
+dbIt('删除其他用户的音色返回 404 VOICE_NOT_FOUND', async () => {
+  const tokenOwner = await registerAndGetToken(PHONE_DELETE_OWNER);
+  await resetUserData(PHONE_DELETE_OWNER);
+  await signAgreement(tokenOwner);
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/voices',
+    headers: bearer(tokenOwner),
+    payload: { name: '他人不可删音色', sampleDurationSeconds: 180 },
+  });
+  expect(created.statusCode).toBe(201);
+  const voiceId = created.json().id as string;
+
+  const tokenOther = await registerAndGetToken(PHONE_DELETE_OTHER);
+  await resetUserData(PHONE_DELETE_OTHER);
+  await signAgreement(tokenOther);
+
+  const removed = await app.inject({
+    method: 'DELETE',
+    url: `/api/voices/${voiceId}`,
+    headers: bearer(tokenOther),
+  });
+  expect(removed.statusCode).toBe(404);
+  expect(removed.json()).toMatchObject({ error: 'VOICE_NOT_FOUND' });
+
+  // 他人删除失败不影响本人音色
+  const single = await app.inject({
+    method: 'GET',
+    url: `/api/voices/${voiceId}`,
+    headers: bearer(tokenOwner),
+  });
+  expect(single.statusCode).toBe(200);
+});
+
+dbIt('删除不存在的音色返回 404 VOICE_NOT_FOUND', async () => {
+  const token = await registerAndGetToken(PHONE_DELETE_OTHER);
+  await resetUserData(PHONE_DELETE_OTHER);
+  await signAgreement(token);
+
+  const removed = await app.inject({
+    method: 'DELETE',
+    url: `/api/voices/${randomUUID()}`,
+    headers: bearer(token),
+  });
+  expect(removed.statusCode).toBe(404);
+  expect(removed.json()).toMatchObject({ error: 'VOICE_NOT_FOUND' });
 });
 
 // ---------- 克隆进度状态流转 ----------

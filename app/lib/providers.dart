@@ -8,6 +8,7 @@ import 'package:starvoice_app/core/network/auth_interceptor.dart';
 import 'package:starvoice_app/core/storage/session_storage.dart';
 import 'package:starvoice_app/features/auth/application/auth_controller.dart';
 import 'package:starvoice_app/features/recording/application/recorder_controller.dart';
+import 'package:starvoice_app/features/voices/application/voice_library_controller.dart';
 import 'package:starvoice_app/router/app_router.dart';
 
 /// 本地会话存储
@@ -98,3 +99,10 @@ final recorderControllerProvider =
         defaultRecordingsDirectory,
       );
     });
+
+/// 音色库控制器：音色列表 / 克隆状态轮询 / 删除。
+/// autoDispose：离开音色库页即销毁并停止轮询定时器，避免无谓请求。
+final voiceLibraryControllerProvider = StateNotifierProvider.autoDispose<
+    VoiceLibraryController, VoiceLibraryState>((ref) {
+  return VoiceLibraryController(ref.watch(apiClientProvider));
+});

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/features/recording/application/recorder_controller.dart';
 import 'package:starvoice_app/features/recording/data/reading_passages.dart';
 import 'package:starvoice_app/providers.dart';
@@ -15,6 +17,9 @@ class RecordingPage extends ConsumerStatefulWidget {
 }
 
 class _RecordingPageState extends ConsumerState<RecordingPage> {
+  /// 克隆命名输入框控制器：页面级持有，页面销毁时统一释放。
+  final TextEditingController _cloneNameController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -22,6 +27,12 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(recorderControllerProvider.notifier).init();
     });
+  }
+
+  @override
+  void dispose() {
+    _cloneNameController.dispose();
+    super.dispose();
   }
 
   @override
@@ -173,7 +184,7 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
           const SizedBox(height: 4),
           Text(
             '累计 ${formatRecordingDuration(state.totalSeconds)}，'
-            '达到 3 分钟即可提交克隆',
+            '达到 3 分钟即可开始克隆',
             style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
           ),
         ],
@@ -379,7 +390,7 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
     );
   }
 
-  /// 底部：总时长大字 + 提交克隆按钮。
+  /// 底部：总时长大字 + 开始克隆按钮。
   Widget _buildBottomPanel(
     RecordingState state,
     RecorderController controller,
@@ -400,7 +411,7 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
         if (!canSubmit) ...[
           const SizedBox(height: 4),
           Text(
-            '录满 10 段且总时长 ≥ 3 分钟（当前 ${state.completedCount}/10 段）方可提交',
+            '录满 10 段且总时长 ≥ 3 分钟（当前 ${state.completedCount}/10 段）方可开始克隆',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
           ),
@@ -408,29 +419,96 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
         const SizedBox(height: 12),
         FilledButton(
           key: const Key('submitCloneButton'),
-          onPressed: canSubmit ? () => _showCloneComingSoon(context) : null,
+          onPressed: canSubmit ? _startCloneFlow : null,
           style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-          child: const Text('提交克隆'),
+          child: const Text('开始克隆'),
         ),
       ],
     );
   }
 
-  void _showCloneComingSoon(BuildContext context) {
-    showDialog<void>(
+  /// 提交克隆：弹出命名对话框 → 调 createVoice 创建 pending 音色 → 进入音色库。
+  Future<void> _startCloneFlow() async {
+    final state = ref.read(recorderControllerProvider);
+    final name = await _askCloneName();
+    if (name == null || !mounted) {
+      return;
+    }
+    try {
+      await ref
+          .read(apiClientProvider)
+          .createVoice(name: name, sampleDurationSeconds: state.totalSeconds);
+      if (mounted) {
+        // 克隆任务已创建（pending），跳转音色库页查看进度
+        context.go('/voices');
+      }
+    } on ApiException catch (error) {
+      _handleCloneError(error);
+    }
+  }
+
+  /// 命名对话框：默认名「我的声音」，空输入回退默认名。
+  Future<String?> _askCloneName() async {
+    _cloneNameController.text = '我的声音';
+    final name = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        key: const Key('cloneComingSoonDialog'),
-        title: const Text('克隆功能即将开放（T5）'),
-        content: const Text('录音样本已就绪。声音克隆与上传功能将在下一阶段开放，敬请期待！'),
+        key: const Key('cloneNameDialog'),
+        title: const Text('给克隆的音色命名'),
+        content: TextField(
+          key: const Key('cloneNameField'),
+          controller: _cloneNameController,
+          maxLength: 50,
+          decoration: const InputDecoration(hintText: '我的声音'),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('知道了'),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('cloneNameConfirmButton'),
+            onPressed: () {
+              final trimmed = _cloneNameController.text.trim();
+              Navigator.of(dialogContext)
+                  .pop(trimmed.isEmpty ? '我的声音' : trimmed);
+            },
+            child: const Text('开始克隆'),
           ),
         ],
       ),
     );
+    return name;
+  }
+
+  /// 克隆提交失败提示：403 未签协议引导去签署；400 时长不足给出口径；其余透传后端提示。
+  void _handleCloneError(ApiException error) {
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    if (error.code == 'AGREEMENT_REQUIRED') {
+      messenger
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('克隆声音前需先签署《声音授权协议》，请先完成授权'),
+          ),
+        );
+      context.push('/voice-agreement');
+      return;
+    }
+    if (error.code == 'DURATION_TOO_SHORT') {
+      messenger
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(content: Text('录音时长不足 3 分钟，无法开始克隆')),
+        );
+      return;
+    }
+    messenger
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(error.message)));
   }
 }
 
