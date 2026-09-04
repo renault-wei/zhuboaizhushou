@@ -28,6 +28,9 @@ uploads/
 *.mp4
 !docs/samples/*.mp4
 
+# FFmpeg 静态二进制（不入库，见 server/bin/README 或 FFMPEG_PATH 说明）
+server/bin/
+
 # 密钥
 *.pem
 *.p8
