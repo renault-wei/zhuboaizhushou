@@ -6,6 +6,7 @@ build/
 .env.*
 !.env.example
 *.log
+*.log.err
 .DS_Store
 Thumbs.db
 
