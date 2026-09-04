@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import 'package:starvoice_app/features/coupons/presentation/coupon_list_page.dart';
 import 'package:starvoice_app/features/lives/presentation/live_form_page.dart';
 import 'package:starvoice_app/features/lives/presentation/live_list_page.dart';
+import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/providers.dart';
 
 import 'fake_backend.dart';
@@ -48,6 +51,7 @@ Map<String, dynamic> _liveJson({
   required String id,
   required String title,
   String status = 'idle',
+  String videoSourceUrl = '',
   String? voiceId,
   String? scriptId,
   String? couponId,
@@ -56,7 +60,7 @@ Map<String, dynamic> _liveJson({
   return <String, dynamic>{
     'id': id,
     'title': title,
-    'videoSourceUrl': '',
+    'videoSourceUrl': videoSourceUrl,
     'couponId': couponId,
     'rtmpUrl': null,
     'voiceId': voiceId,
@@ -125,6 +129,16 @@ Future<void> _scrollTo(WidgetTester tester, Finder finder) async {
   await tester.pumpAndSettle();
 }
 
+/// 向上滚动到目标控件（配合 _scrollTo 在顶部输入框与底部按钮间来回切换）。
+Future<void> _scrollUpTo(WidgetTester tester, Finder finder) async {
+  await tester.scrollUntilVisible(
+    finder,
+    -120,
+    scrollable: find.byType(Scrollable).first,
+  );
+  await tester.pumpAndSettle();
+}
+
 /// 便捷断言：查找 key 后校验 widget 类型。
 T _widget<T extends Widget>(WidgetTester tester, Key key) {
   return tester.widget<T>(find.byKey(key));
@@ -137,21 +151,34 @@ void main() {
 
     expect(find.byKey(const Key('liveFormPage')), findsOneWidget);
     expect(find.text('新建开播配置'), findsOneWidget);
-    expect(find.text('T11 上传视频后回填，当前置灰'), findsOneWidget);
+    // T11：新建草稿尚无 liveId，提示先保存、再从列表进入编辑后操作
+    expect(
+      find.byKey(const Key('liveVideoNewModeHint')),
+      findsOneWidget,
+    );
+
+    // 保存按钮位于表单底部，先滚动到视野内再取控件
+    final saveButtonFinder = find.byKey(const Key('liveSaveButton'));
+    final titleFieldFinder = find.byKey(const Key('liveTitleField'));
 
     // 未输入标题：保存按钮禁用
+    await _scrollTo(tester, saveButtonFinder);
     var saveButton = _widget<FilledButton>(tester, const Key('liveSaveButton'));
     expect(saveButton.onPressed, isNull);
 
     // 纯空白标题仍禁用
-    await tester.enterText(find.byKey(const Key('liveTitleField')), '   ');
+    await _scrollUpTo(tester, titleFieldFinder);
+    await tester.enterText(titleFieldFinder, '   ');
     await tester.pump();
+    await _scrollTo(tester, saveButtonFinder);
     saveButton = _widget<FilledButton>(tester, const Key('liveSaveButton'));
     expect(saveButton.onPressed, isNull);
 
     // 输入合法标题后可保存
-    await tester.enterText(find.byKey(const Key('liveTitleField')), '火锅店午市循环直播');
+    await _scrollUpTo(tester, titleFieldFinder);
+    await tester.enterText(titleFieldFinder, '火锅店午市循环直播');
     await tester.pump();
+    await _scrollTo(tester, saveButtonFinder);
     saveButton = _widget<FilledButton>(tester, const Key('liveSaveButton'));
     expect(saveButton.onPressed, isNotNull);
   });
@@ -249,10 +276,148 @@ void main() {
     );
 
     // 合规提示在表单页可见
+    await _scrollTo(tester, find.textContaining('「AI 智能直播」角标'));
     expect(
       find.textContaining('「AI 智能直播」角标'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('T11 编辑模式：视频路径输入后上传按钮从置灰变为可点', (WidgetTester tester) async {
+    final backend = FakeBackend(
+      douyinBound: true,
+      voices: <Map<String, dynamic>>[
+        _voiceJson(id: 'v-ready', name: '主播小美', status: 'ready'),
+      ],
+      scripts: <Map<String, dynamic>>[
+        _scriptJson(id: 'script-001', title: '火锅套餐话术', status: 'ready'),
+      ],
+      lives: <Map<String, dynamic>>[
+        _liveJson(
+          id: 'live-001',
+          title: '午市循环直播',
+          voiceId: 'v-ready',
+          scriptId: 'script-001',
+          couponId: 'c-001-mock',
+        ),
+      ],
+    );
+    await _pumpFormPage(tester, backend, liveId: 'live-001');
+
+    // 尚未上传：展示空态文案，上传 / 生成按钮均禁用
+    final uploadButtonFinder = find.byKey(const Key('liveVideoUploadButton'));
+    await _scrollTo(tester, uploadButtonFinder);
+    expect(find.byKey(const Key('liveVideoSourceText')), findsOneWidget);
+    expect(find.text('尚未上传实景视频'), findsOneWidget);
+    expect(
+      _widget<FilledButton>(tester, const Key('liveVideoUploadButton'))
+          .onPressed,
+      isNull,
+    );
+    expect(
+      _widget<FilledButton>(tester, const Key('livePrepareButton')).onPressed,
+      isNull,
+    );
+
+    // 输入本机路径后上传按钮点亮（真实调用由 ApiClient 单测覆盖）
+    await tester.enterText(
+      find.byKey(const Key('liveVideoPathField')),
+      r'D:\videos\scene.mp4',
+    );
+    await tester.pump();
+    expect(
+      _widget<FilledButton>(tester, const Key('liveVideoUploadButton'))
+          .onPressed,
+      isNotNull,
+    );
+  });
+
+  testWidgets('T11 生成直播视频：prepare 成功提示「可开播」，状态推进 ready 且防重复生成', (WidgetTester tester) async {
+    final backend = FakeBackend(
+      douyinBound: true,
+      voices: <Map<String, dynamic>>[
+        _voiceJson(id: 'v-ready', name: '主播小美', status: 'ready'),
+      ],
+      scripts: <Map<String, dynamic>>[
+        _scriptJson(id: 'script-001', title: '火锅套餐话术', status: 'ready'),
+      ],
+      lives: <Map<String, dynamic>>[
+        _liveJson(
+          id: 'live-001',
+          title: '午市循环直播',
+          videoSourceUrl: '/uploads/videos/live-001.mp4',
+          voiceId: 'v-ready',
+          scriptId: 'script-001',
+          couponId: 'c-001-mock',
+        ),
+      ],
+    );
+    await _pumpFormPage(tester, backend, liveId: 'live-001');
+
+    // 已上传回填：展示「已上传：文件名」，生成按钮可用
+    final prepareButtonFinder = find.byKey(const Key('livePrepareButton'));
+    await _scrollTo(tester, prepareButtonFinder);
+    expect(
+      tester.widget<Text>(find.byKey(const Key('liveVideoSourceText'))).data,
+      '已上传：live-001.mp4',
+    );
+    expect(
+      _widget<FilledButton>(tester, const Key('livePrepareButton')).onPressed,
+      isNotNull,
+    );
+
+    // 点击生成：真实调用 prepareLive（服务端前置校验 + 合成）
+    await tester.tap(prepareButtonFinder);
+    await tester.pumpAndSettle();
+
+    expect(find.text('已生成，可开播（T12）'), findsOneWidget);
+    expect(find.text('已生成：live-001.mp4'), findsOneWidget);
+    expect(backend.lives.single['status'], 'ready');
+    expect(
+      backend.lives.single['videoSourceUrl'],
+      '/uploads/lives/live-001.mp4',
+    );
+
+    // 本页已合成：生成按钮置灰，避免重复合成
+    expect(
+      _widget<FilledButton>(tester, const Key('livePrepareButton')).onPressed,
+      isNull,
+    );
+
+    // 等待 SnackBar 自动消失，避免遗留计时器
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+  });
+
+  test('ApiClient.uploadLiveVideo：multipart 真实上传临时文件后回填 videoSourceUrl', () async {
+    final tempDir = await Directory.systemTemp.createTemp('starvoice_upload_');
+    addTearDown(() async {
+      // Windows 下 dio 可能短暂持有文件句柄，重试几次再清理，避免偶发占用失败
+      for (var attempt = 0; attempt < 20; attempt++) {
+        try {
+          await tempDir.delete(recursive: true);
+          return;
+        } on FileSystemException {
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }
+    });
+    final file = File(
+      '${tempDir.path}${Platform.pathSeparator}scene.mp4',
+    )..writeAsBytesSync(<int>[0, 1, 2, 3, 4]);
+
+    final backend = FakeBackend(
+      douyinBound: true,
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市循环直播'),
+      ],
+    );
+    final client = ApiClient(buildMockDio(backend));
+
+    final live = await client.uploadLiveVideo('live-001', file.path);
+
+    expect(live.videoSourceUrl, '/uploads/videos/live-001.mp4');
+    expect(backend.lives.single['videoSourceUrl'], '/uploads/videos/live-001.mp4');
   });
 
   testWidgets('端到端：列表 → 新建（选音色/话术/券）→ 保存 → 返回列表出现草稿', (WidgetTester tester) async {

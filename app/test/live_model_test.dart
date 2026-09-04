@@ -66,8 +66,12 @@ void main() {
     expect(live.aiBadgeShown, isTrue);
   });
 
-  test('status 解析：五个合法值 + 未知值兜底 failed', () {
+  test('status 解析：六个合法值 + 未知值兜底 failed', () {
     expect(Live.fromJson(_liveJson(status: 'idle')).status, LiveStatus.idle);
+    expect(
+      Live.fromJson(_liveJson(status: 'processing')).status,
+      LiveStatus.processing,
+    );
     expect(Live.fromJson(_liveJson(status: 'ready')).status, LiveStatus.ready);
     expect(Live.fromJson(_liveJson(status: 'live')).status, LiveStatus.live);
     expect(Live.fromJson(_liveJson(status: 'ended')).status, LiveStatus.ended);
@@ -80,11 +84,12 @@ void main() {
 
   test('状态枚举中文标签齐全', () {
     expect(LiveStatus.idle.label, '草稿');
+    expect(LiveStatus.processing.label, '合成中');
     expect(LiveStatus.ready.label, '就绪');
     expect(LiveStatus.live.label, '直播中');
     expect(LiveStatus.ended.label, '已结束');
     expect(LiveStatus.failed.label, '失败');
-    expect(LiveStatus.values, hasLength(5));
+    expect(LiveStatus.values, hasLength(6));
   });
 
   test('isEditable：仅 idle 草稿可编辑', () {
@@ -103,6 +108,11 @@ void main() {
     expect(idle.isLive, isFalse);
     expect(idle.isFinished, isFalse);
     expect(idle.isDeleteProtected, isFalse);
+
+    final processing = Live.fromJson(_liveJson(status: 'processing'));
+    expect(processing.isLive, isFalse);
+    expect(processing.isFinished, isFalse);
+    expect(processing.isDeleteProtected, isTrue);
 
     final ready = Live.fromJson(_liveJson(status: 'ready'));
     expect(ready.isLive, isFalse);

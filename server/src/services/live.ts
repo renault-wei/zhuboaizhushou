@@ -12,8 +12,8 @@ export const DEFAULT_LIST_LIMIT = 50;
 
 // ---------- 类型定义 ----------
 
-/** 直播状态：idle = 草稿 / ready = 配置完成 / live = 直播中 / ended / failed */
-export type LiveStatus = 'idle' | 'ready' | 'live' | 'ended' | 'failed';
+/** 直播状态：idle = 草稿 / processing = 合成中 / ready = 配置完成 / live = 直播中 / ended / failed */
+export type LiveStatus = 'idle' | 'processing' | 'ready' | 'live' | 'ended' | 'failed';
 
 /** 开播配置（Live）对外结构：时间字段统一为 ISO8601 字符串 */
 export interface Live {
@@ -266,7 +266,7 @@ export async function updateLive(
 /**
  * 删除开播配置：归属隔离 + 状态保护。
  * - 非本人或不存在 → 返回 false（路由层转 404）；
- * - status = live / ready（直播进行中或已就绪）→ 抛 LIVE_IN_PROGRESS（路由层转 409）；
+ * - status = live / ready / processing（直播进行中、已就绪或合成中）→ 抛 LIVE_IN_PROGRESS（路由层转 409）；
  * - 仅 idle / ended / failed 允许删除。
  */
 export async function deleteLive(userId: string, id: string): Promise<boolean> {
@@ -274,12 +274,72 @@ export async function deleteLive(userId: string, id: string): Promise<boolean> {
   if (!existing) {
     return false;
   }
-  if (existing.status === 'live' || existing.status === 'ready') {
-    throw new LiveError('LIVE_IN_PROGRESS', '直播进行中或已就绪，不可删除');
+  if (existing.status === 'live' || existing.status === 'ready' || existing.status === 'processing') {
+    throw new LiveError('LIVE_IN_PROGRESS', '直播进行中、已就绪或合成中，不可删除');
   }
   const deleted = await db
     .delete(livesTable)
     .where(and(eq(livesTable.id, id), eq(livesTable.userId, userId)))
     .returning({ id: livesTable.id });
   return deleted.length > 0;
+}
+
+// ---------- T11 合成流程辅助（prepare 路由专用，禁止外部直接改状态）----------
+
+/** 合成上下文：开播配置 + 绑定话术（用于敏感词 pass 校验与取话术全文合成） */
+export interface LiveComposeContext {
+  live: Live;
+  /** 绑定的 ready 话术；未绑定或引用已被删除时为 null */
+  script: {
+    content: string;
+    status: string;
+    sensitiveCheckStatus: string | null;
+  } | null;
+}
+
+/** 取开播配置与其绑定话术：归属隔离，非本人或不存在返回 null（路由层转 404） */
+export async function getLiveComposeContext(
+  userId: string,
+  id: string,
+): Promise<LiveComposeContext | null> {
+  const row = await findOwnedLive(userId, id);
+  if (!row) {
+    return null;
+  }
+  let script: LiveComposeContext['script'] = null;
+  if (row.scriptId) {
+    const rows = await db
+      .select({
+        content: scriptsTable.content,
+        status: scriptsTable.status,
+        sensitiveCheckStatus: scriptsTable.sensitiveCheckStatus,
+      })
+      .from(scriptsTable)
+      .where(eq(scriptsTable.id, row.scriptId))
+      .limit(1);
+    script = rows[0] ?? null;
+  }
+  return { live: toLive(row), script };
+}
+
+/**
+ * 内部状态流转：仅供 T11 合成流程置 processing / ready / failed，并回填合成产物 URL。
+ * 归属隔离校验同其它更新；非本人或不存在返回 null。
+ */
+export async function updateLiveInternal(
+  userId: string,
+  id: string,
+  patch: { status: LiveStatus; videoSourceUrl?: string },
+): Promise<Live | null> {
+  const changes: { status: LiveStatus; videoSourceUrl?: string } = { status: patch.status };
+  if (patch.videoSourceUrl !== undefined) {
+    changes.videoSourceUrl = patch.videoSourceUrl;
+  }
+  const updated = await db
+    .update(livesTable)
+    .set(changes)
+    .where(and(eq(livesTable.id, id), eq(livesTable.userId, userId)))
+    .returning();
+  const row = updated[0];
+  return row ? toLive(row) : null;
 }

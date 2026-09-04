@@ -1,10 +1,12 @@
 /// 开播配置数据模型：字段与服务端 /api/lives 系列接口保持一致。
-/// status 取值：idle 草稿 / ready 就绪 / live 直播中 / ended 已结束 / failed 失败。
+/// status 取值：idle 草稿 / processing 合成中 / ready 就绪 / live 直播中 /
+/// ended 已结束 / failed 失败。
 ///
 /// 合规红线：aiBadgeShown 恒为 true——「AI 智能直播」角标由服务端强制叠加、不提供关闭入口，
 /// 客户端仅透传展示，不提供任何隐藏/关闭开关。
 enum LiveStatus {
   idle('草稿'),
+  processing('合成中'),
   ready('就绪'),
   live('直播中'),
   ended('已结束'),
@@ -69,13 +71,14 @@ class Live {
   /// 直播标题（1-100 字）
   final String title;
 
-  /// 实景视频源：T10 默认空串，T11 上传视频后回填
+  /// 实景视频源：T10 默认空串，T11 上传视频后回填 /uploads/videos/...，
+  /// prepare 合成成功后更新为产物路径 /uploads/lives/...
   final String videoSourceUrl;
 
   /// 抖音团购券 id（T10 直接存档，不校验持有关系）
   final String? couponId;
 
-  /// RTMP 推流地址：T10 阶段为空，推流在 T11/T12 接入
+  /// RTMP 推流地址：T10/T11 阶段为空，实际推流在 T12 接入
   final String? rtmpUrl;
 
   /// 绑定的音色 id
@@ -84,7 +87,7 @@ class Live {
   /// 绑定的话术 id
   final String? scriptId;
 
-  /// 直播状态：idle / ready / live / ended / failed
+  /// 直播状态：idle / processing / ready / live / ended / failed
   final LiveStatus status;
 
   /// 合规角标标记：恒为 true（服务端强制叠加「AI 智能直播」，客户端无关闭入口）
@@ -105,7 +108,7 @@ class Live {
   /// 展示用状态中文标签
   String get statusLabel => status.label;
 
-  /// 是否可编辑：仅 idle（草稿）可编辑；直播中/已结束不可编辑
+  /// 是否可编辑：仅 idle（草稿）可编辑；合成中/就绪/直播中/已结束均不可编辑
   bool get isEditable => status == LiveStatus.idle;
 
   /// 是否直播中
@@ -115,9 +118,39 @@ class Live {
   bool get isFinished =>
       status == LiveStatus.ended || status == LiveStatus.failed;
 
-  /// 是否删除受保护（ready/live 不可删，删除会命中服务端 409）
+  /// 是否删除受保护（processing/ready/live 不可删，删除会命中服务端 409）
   bool get isDeleteProtected =>
-      status == LiveStatus.ready || status == LiveStatus.live;
+      status == LiveStatus.processing ||
+      status == LiveStatus.ready ||
+      status == LiveStatus.live;
+}
+
+/// 合成 / 直播状态查询结果：对应 GET /api/lives/:id/stream-status 的返回形状，
+/// 供客户端轮询合成进度与产物地址。
+class LiveStreamStatus {
+  const LiveStreamStatus({
+    required this.status,
+    required this.videoSourceUrl,
+    required this.aiBadgeShown,
+  });
+
+  factory LiveStreamStatus.fromJson(Map<String, dynamic> json) {
+    return LiveStreamStatus(
+      status: LiveStatus.fromWire(json['status']?.toString()),
+      videoSourceUrl: json['videoSourceUrl']?.toString() ?? '',
+      // 合规兜底：缺失按 true 处理，与 Live.fromJson 保持一致
+      aiBadgeShown: json['aiBadgeShown'] != false,
+    );
+  }
+
+  /// 当前状态：idle / processing / ready / live / ended / failed
+  final LiveStatus status;
+
+  /// 实景视频源 / 合成产物路径（空串表示尚未上传）
+  final String videoSourceUrl;
+
+  /// 合规角标标记：恒为 true（服务端强制叠加，无关闭入口）
+  final bool aiBadgeShown;
 }
 
 /// JSON 里的可空字段：null / 空串统一归一为 null。

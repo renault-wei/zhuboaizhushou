@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import multipart from '@fastify/multipart';
 import { env } from './config/env';
 import { authPlugin } from './plugins/auth';
 import { agreementsRoutes } from './routes/agreements';
@@ -36,9 +37,11 @@ export function buildApp() {
   app.register(authRoutes);
   app.register(douyinRoutes);
   app.register(agreementsRoutes);
- app.register(healthRoutes);
+  app.register(healthRoutes);
   app.register(scriptsRoutes);
- app.register(voicesRoutes);
+  app.register(voicesRoutes);
+  // 视频上传（multipart）：单文件上限 200MB，超出返回 413
+  app.register(multipart, { limits: { fileSize: 200 * 1024 * 1024 } });
   app.register(livesRoutes);
 
   return app;

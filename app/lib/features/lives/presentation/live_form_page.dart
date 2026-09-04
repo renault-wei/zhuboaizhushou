@@ -1,7 +1,8 @@
 /// 开播配置表单页：/lives/new（新建）与 /lives/:id（编辑）共用同一页面。
 /// 商家绑定：音色（来自我的音色，仅 ready 可选）+ 话术（仅 ready 可选）+
 /// 团购券（push /coupons 点选后 pop 回券 id）+ 直播标题。
-/// T10 仅做配置 CRUD：实景视频源留灰（T11 上传视频后 PATCH 回填），不含推流 / 开播能力；
+/// T11 点亮实景视频区：上传实景视频（MVP 简化为本机 mp4 路径输入）+「生成直播视频」合成，
+/// 产物为本地文件、不推流（推流 T12）；新建草稿先保存、再从列表进入编辑后操作。
 /// 「AI 智能直播」角标由服务端强制叠加为 true，本页面没有任何关闭入口。
 library;
 
@@ -30,11 +31,24 @@ class LiveFormPage extends ConsumerStatefulWidget {
 
 class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   late final TextEditingController _titleController;
+  late final TextEditingController _videoPathController;
 
   /// 已选择的绑定项：null 表示未绑定（提交时置空对应字段）。
   String? _voiceId;
   String? _scriptId;
   String? _couponId;
+
+  /// 服务端回填的实景视频源：上传 → /uploads/videos/...，合成成功 → /uploads/lives/...
+  String _videoSourceUrl = '';
+
+  /// 是否已在本页完成合成（成功后禁用重复生成）
+  bool _composed = false;
+
+  /// 是否正在上传视频
+  bool _videoUploading = false;
+
+  /// 是否正在生成直播视频
+  bool _preparing = false;
 
   /// 编辑模式初值是否已回填到本地（避免 controller 重建覆盖用户输入）。
   bool _hydrated = false;
@@ -45,6 +59,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   void initState() {
     super.initState();
     _titleController = TextEditingController()..addListener(_onTitleChanged);
+    _videoPathController = TextEditingController()
+      ..addListener(_onVideoPathChanged);
     // 首帧后再加载可选项与初值，避免在 build 阶段发起网络请求
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(liveFormControllerProvider(widget.liveId).notifier).load();
@@ -54,11 +70,19 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   @override
   void dispose() {
     _titleController.dispose();
+    _videoPathController.dispose();
     super.dispose();
   }
 
   /// 标题变化时刷新底部保存按钮的可用态。
   void _onTitleChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  /// 视频路径变化时刷新「上传实景视频」按钮可用态。
+  void _onVideoPathChanged() {
     if (mounted) {
       setState(() {});
     }
@@ -87,6 +111,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       _voiceId = initial.voiceId;
       _scriptId = initial.scriptId;
       _couponId = initial.couponId;
+      _videoSourceUrl = initial.videoSourceUrl;
     });
   }
 
@@ -114,6 +139,78 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         _showSnack('保存失败：${error.message}');
       }
     }
+  }
+
+  /// 上传实景视频：真实调用 /api/lives/:id/video（multipart），成功后回填视频源。
+  Future<void> _uploadVideo() async {
+    final path = _videoPathController.text.trim();
+    if (path.isEmpty) {
+      _showSnack('请先填写本机 mp4 文件路径');
+      return;
+    }
+    setState(() {
+      _videoUploading = true;
+    });
+    try {
+      final live = await ref
+          .read(apiClientProvider)
+          .uploadLiveVideo(widget.liveId, path);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _videoSourceUrl = live.videoSourceUrl;
+        _composed = false;
+      });
+      _showSnack('实景视频已上传，可点击「生成直播视频」');
+    } on ApiException catch (error) {
+      if (mounted) {
+        _showSnack('视频上传失败：${error.message}');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _videoUploading = false;
+        });
+      }
+    }
+  }
+
+  /// 生成直播视频：真实调用 /api/lives/:id/prepare（FFmpeg 合成），
+  /// 成功后提示可开播（T12）。T11 不推流，只产出本地合成文件。
+  Future<void> _prepareLive() async {
+    setState(() {
+      _preparing = true;
+    });
+    try {
+      final live = await ref
+          .read(apiClientProvider)
+          .prepareLive(widget.liveId);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _videoSourceUrl = live.videoSourceUrl;
+        _composed = true;
+      });
+      _showSnack('已生成，可开播（T12）');
+    } on ApiException catch (error) {
+      if (mounted) {
+        _showSnack('生成失败：${error.message}');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _preparing = false;
+        });
+      }
+    }
+  }
+
+  /// 从 URL 或本机路径里取文件名段（Windows 与 POSIX 分隔符都兼容）。
+  String _videoFileName(String source) {
+    final segment = source.split(RegExp(r'[\\/]')).last;
+    return segment.isEmpty ? source : segment;
   }
 
   @override
@@ -197,7 +294,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         const SizedBox(height: 12),
         _buildCouponPicker(state, coupon),
         const SizedBox(height: 12),
-        _buildVideoSourcePlaceholder(),
+        _buildVideoSources(state),
         const SizedBox(height: 12),
         _buildComplianceNote(),
         const SizedBox(height: 20),
@@ -284,15 +381,155 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     );
   }
 
-  /// 实景视频源：T10 置灰占位，T11 上传视频后 PATCH videoSourceUrl 回填。
-  Widget _buildVideoSourcePlaceholder() {
-    return ListTile(
-      key: const Key('liveVideoPlaceholder'),
-      contentPadding: EdgeInsets.zero,
-      enabled: false,
-      leading: const Icon(Icons.videocam_off_outlined),
-      title: const Text('实景视频源'),
-      subtitle: const Text('T11 上传视频后回填，当前置灰'),
+  /// 实景视频区（T11 点亮）：本机 mp4 路径输入 + 上传实景视频 + 「生成直播视频」合成。
+  /// 新建草稿还没有 liveId，先保存、再从列表进入编辑后操作；
+  /// prepare 由服务端做前置校验（视频 / 话术敏感词 / 音色）后同步合成，
+  /// 产物为本地合成文件：T11 不推流、不接 RTMP。
+  Widget _buildVideoSources(LiveFormState state) {
+    final busy = _videoUploading || _preparing;
+    // 仅编辑模式且初始为草稿（idle）可操作；合成中/就绪等由服务端保护
+    final canOperate = _isEdit && !busy && (state.initial?.isEditable ?? false);
+    final hasSource = _videoSourceUrl.isNotEmpty;
+    final canUpload =
+        canOperate && _videoPathController.text.trim().isNotEmpty;
+    final canPrepare = canOperate && hasSource && !_composed;
+    final sourceLabel = _composed
+        ? '已生成：${_videoFileName(_videoSourceUrl)}'
+        : (hasSource
+            ? '已上传：${_videoFileName(_videoSourceUrl)}'
+            : '尚未上传实景视频');
+    return Container(
+      key: const Key('liveVideoSection'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.indigo.withValues(alpha: 0.04),
+        border: Border.all(color: Colors.indigo.shade100),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.videocam_outlined, size: 18),
+              SizedBox(width: 6),
+              Text(
+                '实景视频',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '上传本机实景视频，再生成直播视频（循环播放 + 音轨 + 角标合成到本地文件）。',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          ),
+          if (!_isEdit) ...[
+            const SizedBox(height: 8),
+            Text(
+              '新建草稿先保存，再从列表进入编辑后上传实景视频并生成',
+              key: const Key('liveVideoNewModeHint'),
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            ),
+          ],
+          const SizedBox(height: 10),
+          if (busy)
+            _buildVideoBusyHint()
+          else ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextField(
+                    key: const Key('liveVideoPathField'),
+                    controller: _videoPathController,
+                    enabled: canOperate,
+                    decoration: const InputDecoration(
+                      labelText: '实景视频本机路径',
+                      hintText: r'D:\videos\scene.mp4',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton.tonal(
+                  key: const Key('liveVideoUploadButton'),
+                  onPressed: canUpload ? _uploadVideo : null,
+                  child: const Text('上传实景视频'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(
+                  hasSource
+                      ? Icons.check_circle_outline
+                      : Icons.info_outline,
+                  size: 16,
+                  color:
+                      hasSource ? Colors.green.shade600 : Colors.grey.shade500,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    sourceLabel,
+                    key: const Key('liveVideoSourceText'),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color:
+                          hasSource ? Colors.green.shade700 : Colors.grey.shade600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                key: const Key('livePrepareButton'),
+                onPressed: canPrepare ? _prepareLive : null,
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(44),
+                ),
+                child: const Text('生成直播视频'),
+              ),
+            ),
+            if (_isEdit && !canOperate)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text(
+                  '仅草稿状态可操作（合成中 / 就绪等不可重复生成）',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// 上传 / 合成进行中的进度提示。
+  Widget _buildVideoBusyHint() {
+    return Row(
+      children: [
+        const SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            _videoUploading ? '正在上传实景视频…' : '正在合成直播视频…',
+            key: const Key('liveVideoBusyText'),
+            style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+          ),
+        ),
+      ],
     );
   }
 

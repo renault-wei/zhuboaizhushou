@@ -410,6 +410,54 @@ class ApiClient {
     }
   }
 
+  /// 上传实景视频（multipart 字段 video，仅 mp4，≤200MB）：服务端落盘
+  /// uploads/videos/{id}.mp4 并回填 videoSourceUrl 后返回最新开播配置。
+  /// [filePath] 为本机 mp4 文件绝对路径。
+  Future<Live> uploadLiveVideo(String id, String filePath) async {
+    try {
+      final fileName = filePath.split(RegExp(r'[\\/]')).last;
+      final formData = FormData.fromMap(<String, dynamic>{
+        'video': await MultipartFile.fromFile(filePath, filename: fileName),
+      });
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/lives/$id/video',
+        data: formData,
+      );
+      return _parseLive(response.data);
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 触发合成（prepare）：服务端前置校验（已传视频 / 话术 ready+pass / 已选音色），
+  /// 成功把状态推进到 ready 并返回最新开播配置；失败抛 [ApiException]。
+  Future<Live> prepareLive(String id, {int? durationSeconds}) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/lives/$id/prepare',
+        data: <String, dynamic>{
+          'durationSeconds': ?durationSeconds,
+        },
+      );
+      return _parseLive(response.data);
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 查询合成 / 直播状态（客户端轮询用），返回 { status, videoSourceUrl,
+  /// aiBadgeShown }；aiBadgeShown 由服务端写死为 true。
+  Future<LiveStreamStatus> getLiveStreamStatus(String id) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/api/lives/$id/stream-status',
+      );
+      return LiveStreamStatus.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
   /// 从响应体解析 Live：POST/PATCH 形如 { live: {...} }，GET :id 直接返回对象本身。
   Live _parseLive(Map<String, dynamic>? data) {
     final raw = data?['live'];

@@ -202,6 +202,24 @@ class FakeBackend implements HttpClientAdapter {
     if (voiceItem != null && options.method == 'DELETE') {
       return _deleteVoice(voiceItem.group(1)!);
     }
+    // T11 推流引擎 v1：/api/lives/:id 下的子路径（video / prepare / stream-status），
+    // 需先于单段正则匹配，避免被 /api/lives/:id 的 GET/PATCH/DELETE 规则吞掉。
+    final liveAction =
+        RegExp(r'^/api/lives/([^/]+)/(video|prepare|stream-status)$')
+            .firstMatch(path);
+    if (liveAction != null && options.method == 'POST') {
+      switch (liveAction.group(2)) {
+        case 'video':
+          return _uploadLiveVideo(liveAction.group(1)!, options);
+        case 'prepare':
+          return _prepareLive(liveAction.group(1)!);
+      }
+    }
+    if (liveAction != null &&
+        options.method == 'GET' &&
+        liveAction.group(2) == 'stream-status') {
+      return _streamStatus(liveAction.group(1)!);
+    }
     final liveItem = RegExp(r'^/api/lives/([^/]+)$').firstMatch(path);
     if (liveItem != null && options.method == 'GET') {
       return _getLive(liveItem.group(1)!);
@@ -349,7 +367,7 @@ class FakeBackend implements HttpClientAdapter {
       return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
     }
     final status = lives[index]['status'];
-    if (status == 'live' || status == 'ready') {
+    if (status == 'processing' || status == 'live' || status == 'ready') {
       return _jsonResponse(
         {'error': 'LIVE_IN_PROGRESS', 'message': '直播进行中或已就绪，不可删除'},
         409,
@@ -357,6 +375,90 @@ class FakeBackend implements HttpClientAdapter {
     }
     lives.removeAt(index);
     return _jsonResponse({'ok': true});
+  }
+
+  /// 上传实景视频（multipart 字段 video）：镜像服务端落盘语义，
+  /// 把 videoSourceUrl 回填为 /uploads/videos/{id}.mp4。测试不读取文件内容，
+  /// 只校验 FormData 里存在名为 video 的文件字段。
+  ResponseBody _uploadLiveVideo(String id, RequestOptions options) {
+    final index = lives.indexWhere((live) => live['id'] == id);
+    if (index < 0) {
+      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+    }
+    final data = options.data;
+    final hasVideo =
+        data is FormData && data.files.any((entry) => entry.key == 'video');
+    if (!hasVideo) {
+      return _jsonResponse(
+        {'error': 'VIDEO_REQUIRED', 'message': '缺少视频文件（multipart 字段 video）'},
+        400,
+      );
+    }
+    final now = DateTime.now().toUtc().toIso8601String();
+    final updated = <String, dynamic>{
+      ...lives[index],
+      'videoSourceUrl': '/uploads/videos/$id.mp4',
+      'updatedAt': now,
+    };
+    lives[index] = updated;
+    return _jsonResponse({'live': updated});
+  }
+
+  /// 触发合成（prepare）：镜像服务端前置校验（视频 / 话术 ready+pass / 音色），
+  /// mock 合成瞬间完成，直接把状态推进到 ready（真实 FFmpeg 合成在服务端）。
+  ResponseBody _prepareLive(String id) {
+    final index = lives.indexWhere((live) => live['id'] == id);
+    if (index < 0) {
+      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+    }
+    final live = lives[index];
+    if ((live['videoSourceUrl']?.toString() ?? '').isEmpty) {
+      return _jsonResponse(
+        {'error': 'VIDEO_NOT_UPLOADED', 'message': '请先上传实景视频再生成'},
+        400,
+      );
+    }
+    final scriptId = _liveNullable(live['scriptId']);
+    final script = scriptId == null ? null : _findScript(scriptId);
+    final scriptReady = script != null &&
+        script['status'] == 'ready' &&
+        script['sensitiveCheckStatus'] == 'pass';
+    if (!scriptReady) {
+      return _jsonResponse(
+        {'error': 'SCRIPT_NOT_READY', 'message': '话术未就绪或敏感词未通过，不能生成'},
+        400,
+      );
+    }
+    final voiceId = _liveNullable(live['voiceId']);
+    if (voiceId == null || voices.indexWhere((voice) => voice['id'] == voiceId) < 0) {
+      return _jsonResponse(
+        {'error': 'VOICE_NOT_SELECTED', 'message': '请先绑定可用的音色'},
+        400,
+      );
+    }
+    final now = DateTime.now().toUtc().toIso8601String();
+    final updated = <String, dynamic>{
+      ...live,
+      'status': 'ready',
+      'videoSourceUrl': '/uploads/lives/$id.mp4',
+      'updatedAt': now,
+    };
+    lives[index] = updated;
+    return _jsonResponse({'live': updated});
+  }
+
+  /// 合成 / 直播状态查询：返回 { status, videoSourceUrl, aiBadgeShown }。
+  /// aiBadgeShown 由服务端写死 true，客户端无关闭入口。
+  ResponseBody _streamStatus(String id) {
+    final live = _findLive(id);
+    if (live == null) {
+      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+    }
+    return _jsonResponse(<String, dynamic>{
+      'status': live['status'],
+      'videoSourceUrl': live['videoSourceUrl'],
+      'aiBadgeShown': live['aiBadgeShown'],
+    });
   }
 
   Map<String, dynamic>? _findLive(String id) {

@@ -3,14 +3,20 @@ import {
   createLive,
   deleteLive,
   getLiveById,
+  getLiveComposeContext,
   listLives,
   LiveError,
   LiveStatus,
   updateLive,
+  updateLiveInternal,
 } from '../services/live';
+import { createWriteStream, mkdirSync, rmSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { streamingService } from '../services/streaming';
 
 // 直播状态全集：用于列表 ?status= 过滤校验（与服务端 live_status 枚举一致）
-const LIVE_STATUSES: LiveStatus[] = ['idle', 'ready', 'live', 'ended', 'failed'];
+const LIVE_STATUSES: LiveStatus[] = ['idle', 'processing', 'ready', 'live', 'ended', 'failed'];
 
 interface LiveIdParams {
   id: string;
@@ -90,6 +96,31 @@ function readOptionalText(raw: unknown): string | null {
   return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : null;
 }
 
+/** 读取 prepare 请求体：durationSeconds 可选，clamp 到 [10, 3600]，缺省 30 */
+function readPrepareBody(body: unknown): number {
+  if (typeof body !== 'object' || body === null) {
+    return 30;
+  }
+  const record = body as Record<string, unknown>;
+  const raw = record.durationSeconds;
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return 30;
+  }
+  const seconds = Math.floor(raw);
+  if (seconds < 10) {
+    return 10;
+  }
+  if (seconds > 3600) {
+    return 3600;
+  }
+  return seconds;
+}
+
+/** 本地视频文件根目录：以服务进程工作目录为基准（测试 / 生产均从 server/ 启动） */
+function uploadsPath(...segments: string[]): string {
+  return resolve(process.cwd(), 'uploads', ...segments);
+}
+
 /** 把业务错误码翻译成 HTTP 状态码（400 / 404 / 409） */
 function statusCodeOf(code: string): number {
   switch (code) {
@@ -104,7 +135,8 @@ function statusCodeOf(code: string): number {
 
 /**
  * 开播配置（lives）CRUD 路由：全部要求登录态。
- * 职责边界：T10 仅做配置草稿的增删改查，不含推流 / RTMP / 合成逻辑。
+ * 职责边界：T10 配置草稿增删改查；T11 新增实景视频上传、合成准备（prepare）、流状态查询。
+ * 不含实际推流（RTMP / 抖音）逻辑，合成产物为本地 mp4 文件，推流留 T12。
  * 合规红线：aiBadgeShown 由服务端写死 true（强制叠加'AI 智能直播'角标、不提供关闭入口），
  * 请求体即使传 false / status 等字段也一律忽略，防止篡改合规标记。
  */
@@ -175,7 +207,7 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-  // 删除开播配置：仅 idle/ended/failed 可删；live/ready 返回 409（删除保护）
+  // 删除开播配置：仅 idle/ended/failed 可删；live/ready/processing 返回 409（删除保护）
   app.delete('/api/lives/:id', { preHandler: app.authenticate }, async (request, reply) => {
     const { id } = request.params as LiveIdParams;
     try {
@@ -190,5 +222,111 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       }
       throw err;
     }
+  });
+
+  // 上传实景视频（multipart 字段 video，仅 mp4，≤200MB）：落盘 uploads/videos/{id}.mp4 并回填 videoSourceUrl
+  app.post('/api/lives/:id/video', { preHandler: app.authenticate }, async (request, reply) => {
+    const { id } = request.params as LiveIdParams;
+    const live = await getLiveById(request.user.userId, id);
+    if (!live) {
+      return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
+    }
+    if (!request.isMultipart()) {
+      return reply.code(400).send({ error: 'VIDEO_REQUIRED', message: '请用 multipart 上传 mp4 视频' });
+    }
+    const file = await request.file();
+    if (!file || file.fieldname !== 'video') {
+      return reply.code(400).send({ error: 'VIDEO_REQUIRED', message: '缺少 video 文件字段' });
+    }
+    const fileName = file.filename ?? '';
+    const mimetype = file.mimetype ?? '';
+    const isMp4 = fileName.toLowerCase().endsWith('.mp4') || mimetype === 'video/mp4';
+    if (!isMp4) {
+      return reply.code(400).send({ error: 'VIDEO_TYPE_INVALID', message: '仅支持 mp4 视频' });
+    }
+    try {
+      mkdirSync(uploadsPath('videos'), { recursive: true });
+      const destination = uploadsPath('videos', `${id}.mp4`);
+      await pipeline(file.file, createWriteStream(destination));
+      const stats = statSync(destination);
+      if (!stats.isFile() || stats.size <= 0) {
+        rmSync(destination, { force: true });
+        return reply.code(400).send({ error: 'VIDEO_EMPTY', message: '上传的视频为空文件' });
+      }
+      const updated = await updateLive(request.user.userId, id, {
+        videoSourceUrl: `/uploads/videos/${id}.mp4`,
+      });
+      if (!updated) {
+        rmSync(destination, { force: true });
+        return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
+      }
+      return { live: updated };
+    } catch (err) {
+      // 任何写盘 / 更新失败：清理半成品文件，避免残留脏数据
+      rmSync(uploadsPath('videos', `${id}.mp4`), { force: true });
+      throw err;
+    }
+  });
+
+  // 触发合成（prepare）：前置校验（视频已传 / 话术 ready+pass / 已选音色）→ processing → 合成 → ready/failed
+  app.post('/api/lives/:id/prepare', { preHandler: app.authenticate }, async (request, reply) => {
+    const { id } = request.params as LiveIdParams;
+    const durationSeconds = readPrepareBody(request.body);
+    const context = await getLiveComposeContext(request.user.userId, id);
+    if (!context) {
+      return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
+    }
+    const { live, script } = context;
+    if (!live.videoSourceUrl) {
+      return reply.code(400).send({ error: 'VIDEO_NOT_UPLOADED', message: '请先上传实景视频' });
+    }
+    const scriptReady =
+      script !== null && script.status === 'ready' && script.sensitiveCheckStatus === 'pass';
+    if (!scriptReady) {
+      return reply.code(400).send({ error: 'SCRIPT_NOT_READY', message: '请先生成已通过敏感词扫描的话术' });
+    }
+    if (!live.voiceId) {
+      return reply.code(400).send({ error: 'VOICE_NOT_SELECTED', message: '请先选择克隆音色' });
+    }
+    const processing = await updateLiveInternal(request.user.userId, id, { status: 'processing' });
+    if (!processing) {
+      return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
+    }
+    try {
+      await streamingService.composeLive({
+        sourceVideoPath: uploadsPath('videos', `${id}.mp4`),
+        scriptText: script?.content ?? '',
+        outputPath: uploadsPath('lives', `${id}.mp4`),
+        durationSeconds,
+      });
+    } catch (err) {
+      // 合成失败：状态置 failed，把 ffmpeg 错误摘要带回给前端排查
+      await updateLiveInternal(request.user.userId, id, { status: 'failed' });
+      const message =
+        err instanceof Error && err.message ? err.message.slice(0, 500) : '合成失败，请稍后重试';
+      return reply.code(500).send({ error: 'COMPOSE_FAILED', message });
+    }
+    const updated = await updateLiveInternal(request.user.userId, id, {
+      status: 'ready',
+      videoSourceUrl: `/uploads/lives/${id}.mp4`,
+    });
+    if (!updated) {
+      return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
+    }
+    return { live: updated };
+  });
+
+  // 合成 / 直播状态查询：供客户端轮询使用
+  app.get('/api/lives/:id/stream-status', { preHandler: app.authenticate }, async (request, reply) => {
+    const { id } = request.params as LiveIdParams;
+    const live = await getLiveById(request.user.userId, id);
+    if (!live) {
+      return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
+    }
+    return {
+      status: live.status,
+      videoSourceUrl: live.videoSourceUrl,
+      aiBadgeShown: live.aiBadgeShown,
+    };
   });
 };

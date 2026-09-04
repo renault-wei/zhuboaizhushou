@@ -28,8 +28,15 @@ export const scriptStatusEnum = pgEnum('script_status', ['draft', 'ready', 'bloc
 // 敏感词扫描结果：pass = 通过，blocked = 命中拦截级词
 export const sensitiveCheckStatusEnum = pgEnum('sensitive_check_status', ['pass', 'blocked']);
 
-// 直播状态：idle = 已创建，ready = 开播配置完成，live = 直播中，ended = 已结束
-export const liveStatusEnum = pgEnum('live_status', ['idle', 'ready', 'live', 'ended', 'failed']);
+// 直播状态：idle = 已创建，processing = 合成中，ready = 开播配置完成，live = 直播中，ended = 已结束，failed = 合成失败
+export const liveStatusEnum = pgEnum('live_status', [
+  'idle',
+  'processing',
+  'ready',
+  'live',
+  'ended',
+  'failed',
+]);
 
 // 订单状态：pending = 待支付，paid = 已支付，refunded = 已退款，closed = 已关闭
 export const orderStatusEnum = pgEnum('order_status', ['pending', 'paid', 'refunded', 'closed']);

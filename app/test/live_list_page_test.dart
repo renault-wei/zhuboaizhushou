@@ -84,7 +84,7 @@ void main() {
     expect(find.byKey(const Key('liveRefreshButton')), findsOneWidget);
   });
 
-  testWidgets('列表分段：草稿 / 就绪进行中 / 已结束分组展示，摘要含绑定资源名', (WidgetTester tester) async {
+  testWidgets('列表分段：草稿 / 就绪·合成中·直播中 / 已结束分组展示，摘要含绑定资源名', (WidgetTester tester) async {
     final backend = FakeBackend(
       douyinBound: true,
       voices: <Map<String, dynamic>>[
@@ -127,7 +127,7 @@ void main() {
 
     // 三分段标题
     expect(find.text('草稿（1）'), findsOneWidget);
-    expect(find.text('就绪 / 进行中（1）'), findsOneWidget);
+    expect(find.text('就绪 / 合成中 / 直播中（1）'), findsOneWidget);
     expect(find.text('已结束（1）'), findsOneWidget);
 
     // 三张卡片与状态徽章
@@ -160,6 +160,30 @@ void main() {
       find.byKey(const Key('liveDelete_live-002')),
     );
     expect(readyDelete.onPressed, isNull);
+  });
+
+  testWidgets('合成中（processing）并入进行中分段：展示「合成中」徽章并受删除保护', (WidgetTester tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-004', title: '午市合成中的直播', status: 'processing'),
+      ],
+    );
+    await _pumpListPage(tester, backend);
+
+    expect(find.text('就绪 / 合成中 / 直播中（1）'), findsOneWidget);
+    expect(find.byKey(const Key('liveCard_live-004')), findsOneWidget);
+    expect(find.byKey(const Key('liveStatus_live-004')), findsOneWidget);
+    expect(find.text('合成中'), findsOneWidget);
+
+    // 非 idle：走「查看」占位，不出现编辑按钮
+    expect(find.byKey(const Key('liveView_live-004')), findsOneWidget);
+    expect(find.byKey(const Key('liveEdit_live-004')), findsNothing);
+
+    // 删除保护：processing 删除按钮禁用（服务端同样 409 拦截）
+    final deleteButton = tester.widget<IconButton>(
+      find.byKey(const Key('liveDelete_live-004')),
+    );
+    expect(deleteButton.onPressed, isNull);
   });
 
   testWidgets('删除保护：就绪配置点查看展示占位提示，禁用删除不弹确认框', (WidgetTester tester) async {
