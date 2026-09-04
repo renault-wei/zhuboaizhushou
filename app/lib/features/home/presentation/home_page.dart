@@ -67,6 +67,8 @@ class HomePage extends ConsumerWidget {
               const _CloneVoiceCard(),
               const SizedBox(height: 16),
               const _VoiceLibraryCard(),
+              const SizedBox(height: 16),
+              const _ScriptLibraryCard(),
               const SizedBox(height: 24),
               OutlinedButton(
                 key: const Key('logoutButton'),
@@ -792,6 +794,128 @@ class _VoiceLibraryCardState extends ConsumerState<_VoiceLibraryCard> {
                 minimumSize: const Size.fromHeight(44),
               ),
               child: const Text('进入音色库'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 「话术生成」入口卡片：位于「我的音色」卡片下方。
+/// 展示已有话术数量，点击进入话术生成页 /scripts。
+class _ScriptLibraryCard extends ConsumerStatefulWidget {
+  const _ScriptLibraryCard();
+
+  @override
+  ConsumerState<_ScriptLibraryCard> createState() => _ScriptLibraryCardState();
+}
+
+class _ScriptLibraryCardState extends ConsumerState<_ScriptLibraryCard> {
+  bool _loading = true;
+  bool _busy = false;
+  String? _error;
+  int _count = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // 首帧后再拉取话术数量，避免在 build 阶段发起网络请求
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
+  }
+
+  Future<void> _refresh() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    try {
+      final scripts = await ref.read(apiClientProvider).listScripts();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _count = scripts.length;
+        _loading = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = error.message;
+        _loading = false;
+      });
+    }
+  }
+
+  /// 点击入口：进入话术生成页，返回后刷新数量（可能已新增/编辑话术）。
+  Future<void> _handleTap() async {
+    if (_loading || _busy) {
+      return;
+    }
+    setState(() {
+      _busy = true;
+    });
+    await context.push('/scripts');
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _busy = false;
+    });
+    await _refresh();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hint = _error ??
+        (_loading ? '正在同步话术…' : '已有 $_count 条话术，可生成 AI 直播话术');
+    return Card(
+      key: const Key('scriptEntryCard'),
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                const Icon(Icons.notes_rounded, size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  '话术生成',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                Text(
+                  _loading && _error == null ? '同步中' : '$_count 条',
+                  key: const Key('scriptEntryCountLabel'),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _error != null
+                        ? Theme.of(context).colorScheme.error
+                        : Colors.grey.shade600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              hint,
+              key: const Key('scriptEntryHint'),
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonal(
+              key: const Key('scriptEntryOpenButton'),
+              onPressed: _loading || _busy ? null : _handleTap,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(44),
+              ),
+              child: const Text('去生成话术'),
             ),
           ],
         ),

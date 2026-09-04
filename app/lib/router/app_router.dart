@@ -6,6 +6,8 @@ import 'package:starvoice_app/features/agreement/presentation/voice_agreement_pa
 import 'package:starvoice_app/features/douyin/presentation/douyin_bind_page.dart';
 import 'package:starvoice_app/features/home/presentation/home_page.dart';
 import 'package:starvoice_app/features/recording/presentation/recording_page.dart';
+import 'package:starvoice_app/features/scripts/presentation/script_edit_page.dart';
+import 'package:starvoice_app/features/scripts/presentation/script_generate_page.dart';
 import 'package:starvoice_app/features/splash/presentation/splash_page.dart';
 import 'package:starvoice_app/features/voices/presentation/voice_library_page.dart';
 
@@ -47,6 +49,16 @@ GoRouter createAppRouter(AuthController authController) {
       GoRoute(
         path: '/voices',
         builder: (context, state) => const VoiceLibraryPage(),
+      ),
+      GoRoute(
+        path: '/scripts',
+        builder: (context, state) => const ScriptGeneratePage(),
+      ),
+      GoRoute(
+        path: '/scripts/:id/edit',
+        builder: (context, state) => ScriptEditPage(
+          scriptId: state.pathParameters['id'] ?? '',
+        ),
       ),
     ],
   );

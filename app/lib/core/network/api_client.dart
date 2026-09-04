@@ -4,6 +4,7 @@ import 'package:starvoice_app/core/models/douyin_bind_status.dart';
 import 'package:starvoice_app/core/models/user_profile.dart';
 import 'package:starvoice_app/core/models/voice.dart';
 import 'package:starvoice_app/core/models/voice_agreement.dart';
+import 'package:starvoice_app/core/models/script.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 
 /// 发送验证码的结果。dev 模式下服务端会额外返回明文 [code] 便于联调。
@@ -229,6 +230,66 @@ class ApiClient {
     }
   }
 
+  /// 生成话术：真实调用 DeepSeek（需数秒），返回 201 + 已完成敏感词扫描的话术。
+  Future<Script> generateScript({
+    required String industry,
+    String? title,
+    required Map<String, String> product,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/scripts/generate',
+        data: <String, dynamic>{
+          'industry': industry,
+          'title': ?title,
+          'product': product,
+        },
+      );
+      return Script.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 我的话术列表（服务端按创建时间倒序返回）。
+  Future<List<Script>> listScripts() async {
+    try {
+      final response = await _dio.get<List<dynamic>>('/api/scripts');
+      final data = response.data;
+      if (data is List) {
+        return data
+            .whereType<Map>()
+            .map((item) => Script.fromJson(Map<String, dynamic>.from(item)))
+            .toList();
+      }
+      return <Script>[];
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 查询单条话术（含归属校验）。
+  Future<Script> getScript(String id) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/api/scripts/$id');
+      return Script.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 编辑保存话术：服务端保存后会重新做敏感词扫描并返回最新话术。
+  Future<Script> updateScript(String id, {required String content, String? title}) async {
+    try {
+      final response = await _dio.put<Map<String, dynamic>>(
+        '/api/scripts/$id',
+        data: <String, dynamic>{'content': content, 'title': ?title},
+      );
+      return Script.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
   /// 把 dio 异常统一转换为携带后端中文 message 的 [ApiException]。
   ApiException _toApiException(DioException error) {
     final response = error.response;

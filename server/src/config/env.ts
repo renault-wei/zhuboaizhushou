@@ -46,6 +46,8 @@ export const env = {
   deepseek: {
     apiKey: optionalEnv('DEEPSEEK_API_KEY'),
     baseUrl: optionalEnv('DEEPSEEK_BASE_URL') ?? 'https://api.deepseek.com',
+    // 话术生成模型：默认 deepseek-chat，可用 DEEPSEEK_MODEL 覆盖
+    model: optionalEnv('DEEPSEEK_MODEL') ?? 'deepseek-chat',
   },
 
   // 阿里云 CosyVoice：声音克隆 + TTS

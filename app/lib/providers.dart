@@ -8,6 +8,7 @@ import 'package:starvoice_app/core/network/auth_interceptor.dart';
 import 'package:starvoice_app/core/storage/session_storage.dart';
 import 'package:starvoice_app/features/auth/application/auth_controller.dart';
 import 'package:starvoice_app/features/recording/application/recorder_controller.dart';
+import 'package:starvoice_app/features/scripts/application/script_controller.dart';
 import 'package:starvoice_app/features/voices/application/voice_library_controller.dart';
 import 'package:starvoice_app/router/app_router.dart';
 
@@ -105,4 +106,11 @@ final recorderControllerProvider =
 final voiceLibraryControllerProvider = StateNotifierProvider.autoDispose<
     VoiceLibraryController, VoiceLibraryState>((ref) {
   return VoiceLibraryController(ref.watch(apiClientProvider));
+});
+
+/// 话术库控制器：话术生成页使用（列表加载 + DeepSeek 生成）。
+/// autoDispose：离开话术页即销毁，避免页面级状态长期驻留。
+final scriptControllerProvider = StateNotifierProvider.autoDispose<
+    ScriptController, ScriptState>((ref) {
+  return ScriptController(ref.watch(apiClientProvider));
 });
