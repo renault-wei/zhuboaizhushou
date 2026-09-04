@@ -5,6 +5,7 @@ import 'package:starvoice_app/features/auth/presentation/login_page.dart';
 import 'package:starvoice_app/features/agreement/presentation/voice_agreement_page.dart';
 import 'package:starvoice_app/features/douyin/presentation/douyin_bind_page.dart';
 import 'package:starvoice_app/features/home/presentation/home_page.dart';
+import 'package:starvoice_app/features/recording/presentation/recording_page.dart';
 import 'package:starvoice_app/features/splash/presentation/splash_page.dart';
 
 /// 构建全局路由：根据认证状态在 启动页 / 登录页 / 首页 之间做守卫跳转。
@@ -30,8 +31,18 @@ GoRouter createAppRouter(AuthController authController) {
       GoRoute(path: '/splash', builder: (context, state) => const SplashPage()),
       GoRoute(path: '/login', builder: (context, state) => const LoginPage()),
       GoRoute(path: '/home', builder: (context, state) => const HomePage()),
-      GoRoute(path: '/douyin-bind', builder: (context, state) => const DouyinBindPage()),
-      GoRoute(path: '/voice-agreement', builder: (context, state) => const VoiceAgreementPage()),
+      GoRoute(
+        path: '/douyin-bind',
+        builder: (context, state) => const DouyinBindPage(),
+      ),
+      GoRoute(
+        path: '/voice-agreement',
+        builder: (context, state) => const VoiceAgreementPage(),
+      ),
+      GoRoute(
+        path: '/recording',
+        builder: (context, state) => const RecordingPage(),
+      ),
     ],
   );
 }

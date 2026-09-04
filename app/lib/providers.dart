@@ -7,6 +7,7 @@ import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/core/network/auth_interceptor.dart';
 import 'package:starvoice_app/core/storage/session_storage.dart';
 import 'package:starvoice_app/features/auth/application/auth_controller.dart';
+import 'package:starvoice_app/features/recording/application/recorder_controller.dart';
 import 'package:starvoice_app/router/app_router.dart';
 
 /// 本地会话存储
@@ -66,20 +67,21 @@ final apiClientProvider = Provider<ApiClient>((ref) {
 });
 
 /// 认证控制器：登录态、会话恢复、登录/登出动作
-final authControllerProvider =
-    StateNotifierProvider<AuthController, AuthState>((ref) {
-  final controller = AuthController(
-    ref.watch(sessionStorageProvider),
-    ref.watch(apiClientProvider),
-  );
-  // 订阅 401 事件：token 失效时清理本地会话并回到登录页
-  final unauthorizedBus = ref.watch(unauthorizedBusProvider);
-  unauthorizedBus.setListener(controller.handleUnauthorized);
-  ref.onDispose(() {
-    unauthorizedBus.clearListener();
-  });
-  return controller;
-});
+final authControllerProvider = StateNotifierProvider<AuthController, AuthState>(
+  (ref) {
+    final controller = AuthController(
+      ref.watch(sessionStorageProvider),
+      ref.watch(apiClientProvider),
+    );
+    // 订阅 401 事件：token 失效时清理本地会话并回到登录页
+    final unauthorizedBus = ref.watch(unauthorizedBusProvider);
+    unauthorizedBus.setListener(controller.handleUnauthorized);
+    ref.onDispose(() {
+      unauthorizedBus.clearListener();
+    });
+    return controller;
+  },
+);
 
 /// 全局路由
 final routerProvider = Provider<GoRouter>((ref) {
@@ -87,3 +89,12 @@ final routerProvider = Provider<GoRouter>((ref) {
   ref.onDispose(router.dispose);
   return router;
 });
+
+/// 录音控制器：录音页使用，默认注入 record 插件实现。
+final recorderControllerProvider =
+    StateNotifierProvider<RecorderController, RecordingState>((ref) {
+      return RecorderController(
+        RecordPluginRecorder(),
+        defaultRecordingsDirectory,
+      );
+    });

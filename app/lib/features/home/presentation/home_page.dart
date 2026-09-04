@@ -46,9 +46,7 @@ class HomePage extends ConsumerWidget {
               Text(
                 '欢迎使用星辰语音',
                 textAlign: TextAlign.center,
-                style: Theme.of(context)
-                    .textTheme
-                    .headlineSmall
+                style: Theme.of(context).textTheme.headlineSmall
                     ?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 40),
@@ -65,6 +63,8 @@ class HomePage extends ConsumerWidget {
               const _DouyinAccountCard(),
               const SizedBox(height: 16),
               const _VoiceAgreementCard(),
+              const SizedBox(height: 16),
+              const _CloneVoiceCard(),
               const SizedBox(height: 24),
               OutlinedButton(
                 key: const Key('logoutButton'),
@@ -204,10 +204,7 @@ class _DouyinAccountCardState extends ConsumerState<_DouyinAccountCard> {
             style: TextStyle(color: Theme.of(context).colorScheme.error),
           ),
           const SizedBox(height: 8),
-          OutlinedButton(
-            onPressed: _refresh,
-            child: const Text('重试'),
-          ),
+          OutlinedButton(onPressed: _refresh, child: const Text('重试')),
         ],
       );
     }
@@ -222,7 +219,9 @@ class _DouyinAccountCardState extends ConsumerState<_DouyinAccountCard> {
           FilledButton.tonal(
             key: const Key('douyinBindButton'),
             onPressed: _goBind,
-            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(44),
+            ),
             child: const Text('去绑定'),
           ),
         ],
@@ -254,7 +253,10 @@ class _DouyinAccountCardState extends ConsumerState<_DouyinAccountCard> {
               Text(
                 status.nickname ?? '已绑定抖音号',
                 key: const Key('douyinNickname'),
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
                 overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 2),
@@ -334,7 +336,8 @@ class _VoiceAgreementCard extends ConsumerStatefulWidget {
   const _VoiceAgreementCard();
 
   @override
-  ConsumerState<_VoiceAgreementCard> createState() => _VoiceAgreementCardState();
+  ConsumerState<_VoiceAgreementCard> createState() =>
+      _VoiceAgreementCardState();
 }
 
 class _VoiceAgreementCardState extends ConsumerState<_VoiceAgreementCard> {
@@ -357,7 +360,9 @@ class _VoiceAgreementCardState extends ConsumerState<_VoiceAgreementCard> {
       });
     }
     try {
-      final status = await ref.read(apiClientProvider).fetchVoiceAgreementStatus();
+      final status = await ref
+          .read(apiClientProvider)
+          .fetchVoiceAgreementStatus();
       if (!mounted) {
         return;
       }
@@ -398,10 +403,7 @@ class _VoiceAgreementCardState extends ConsumerState<_VoiceAgreementCard> {
             style: TextStyle(color: Theme.of(context).colorScheme.error),
           ),
           const SizedBox(height: 8),
-          OutlinedButton(
-            onPressed: _refresh,
-            child: const Text('重试'),
-          ),
+          OutlinedButton(onPressed: _refresh, child: const Text('重试')),
         ],
       );
     }
@@ -421,7 +423,11 @@ class _VoiceAgreementCardState extends ConsumerState<_VoiceAgreementCard> {
           children: [
             Row(
               children: [
-                Icon(Icons.warning_amber_rounded, size: 20, color: scheme.onErrorContainer),
+                Icon(
+                  Icons.warning_amber_rounded,
+                  size: 20,
+                  color: scheme.onErrorContainer,
+                ),
                 const SizedBox(width: 8),
                 Text(
                   '尚未签署声音授权协议',
@@ -447,7 +453,9 @@ class _VoiceAgreementCardState extends ConsumerState<_VoiceAgreementCard> {
             FilledButton(
               key: const Key('goVoiceAgreementButton'),
               onPressed: _goSign,
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(40)),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(40),
+              ),
               child: const Text('去签署'),
             ),
           ],
@@ -504,6 +512,163 @@ class _VoiceAgreementCardState extends ConsumerState<_VoiceAgreementCard> {
             ),
             const SizedBox(height: 12),
             _buildContent(),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 「克隆我的声音」卡片：位于声音授权卡片下方。
+/// 未签署协议 → 跳协议页并提示「请先完成声音授权」；已签署 → 进入录音页 /recording。
+class _CloneVoiceCard extends ConsumerStatefulWidget {
+  const _CloneVoiceCard();
+
+  @override
+  ConsumerState<_CloneVoiceCard> createState() => _CloneVoiceCardState();
+}
+
+class _CloneVoiceCardState extends ConsumerState<_CloneVoiceCard> {
+  bool _loading = true;
+  bool _busy = false;
+  bool _signed = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    // 首帧后再拉取签署状态，避免在 build 阶段发起网络请求
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
+  }
+
+  Future<void> _refresh() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    try {
+      final status = await ref
+          .read(apiClientProvider)
+          .fetchVoiceAgreementStatus();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _signed = status.signed;
+        _loading = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = error.message;
+        _loading = false;
+      });
+    }
+  }
+
+  /// 点击入口：以最新签署状态决定去向，避免本地缓存过期。
+  Future<void> _handleTap() async {
+    if (_loading || _busy) {
+      return;
+    }
+    setState(() {
+      _busy = true;
+    });
+    try {
+      final status = await ref
+          .read(apiClientProvider)
+          .fetchVoiceAgreementStatus();
+      if (!mounted) {
+        return;
+      }
+      if (status.signed) {
+        await context.push('/recording');
+      } else {
+        _showSnack('请先完成声音授权');
+        await context.push('/voice-agreement');
+      }
+      if (!mounted) {
+        return;
+      }
+      // 协议页/录音页返回后刷新状态
+      await _refresh();
+    } on ApiException catch (error) {
+      _showSnack(error.message);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hint = _error ?? (_signed ? '已签署授权，可开始采集声音样本' : '完成声音授权后即可开始录音克隆');
+    return Card(
+      key: const Key('cloneVoiceCard'),
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.mic, size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  '克隆我的声音',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                Text(
+                  _signed ? '已授权' : '未授权',
+                  key: const Key('cloneVoiceStatusLabel'),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _signed
+                        ? Colors.green.shade700
+                        : Colors.grey.shade600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              hint,
+              key: const Key('cloneVoiceHint'),
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonal(
+              key: const Key('cloneVoiceStartButton'),
+              onPressed: _loading || _busy ? null : _handleTap,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(44),
+              ),
+              child: _busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Text(_signed ? '开始录音' : '去完成声音授权'),
+            ),
           ],
         ),
       ),

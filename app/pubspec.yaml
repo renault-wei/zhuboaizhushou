@@ -42,6 +42,8 @@ dependencies:
   go_router: ^14.6.2
   # 本地键值存储（token / user / 登录时间）
   shared_preferences: ^2.3.3
+  record: ^7.1.1
+  path_provider: ^2.1.6
 
 dev_dependencies:
   flutter_test:
