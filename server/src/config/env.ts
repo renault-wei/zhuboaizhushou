@@ -53,6 +53,8 @@ export const env = {
     apiKey: optionalEnv('COSYVOICE_API_KEY'),
     baseUrl: optionalEnv('COSYVOICE_BASE_URL'),
     model: optionalEnv('COSYVOICE_MODEL') ?? 'cosyvoice-v2',
+    // MOCK_COSYVOICE=true：即使配置了真实 key 也强制走 mock（真实 CosyVoice 尚未接入，T5 仅 mock）
+    forceMock: optionalEnv('MOCK_COSYVOICE') === 'true',
   },
 
   // 抖音开放平台：OAuth + 团购券 + 推流

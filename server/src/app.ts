@@ -5,6 +5,7 @@ import { agreementsRoutes } from './routes/agreements';
 import { authRoutes } from './routes/auth';
 import { douyinRoutes } from './routes/douyin';
 import { healthRoutes } from './routes/health';
+import { voicesRoutes } from './routes/voices';
 
 // 组装 Fastify 应用实例：集中注册插件与路由，便于后续测试复用
 export function buildApp() {
@@ -18,6 +19,7 @@ export function buildApp() {
   app.register(douyinRoutes);
   app.register(agreementsRoutes);
   app.register(healthRoutes);
+  app.register(voicesRoutes);
 
   return app;
 }
