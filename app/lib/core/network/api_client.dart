@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import 'package:starvoice_app/core/models/coupon.dart';
 import 'package:starvoice_app/core/models/douyin_bind_status.dart';
 import 'package:starvoice_app/core/models/user_profile.dart';
 import 'package:starvoice_app/core/models/voice.dart';
@@ -130,6 +131,25 @@ class ApiClient {
         data: <String, dynamic>{},
       );
       return DouyinBindStatus.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 拉取当前抖音账号的团购券列表（必须先绑定抖音号）。
+  /// 未绑定抖音号时服务端返回 403 DOUYIN_NOT_BOUND。
+  Future<List<Coupon>> fetchCoupons() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/api/douyin/coupons');
+      final data = response.data ?? <String, dynamic>{};
+      final raw = data['coupons'];
+      if (raw is List) {
+        return raw
+            .whereType<Map>()
+            .map((item) => Coupon.fromJson(Map<String, dynamic>.from(item)))
+            .toList();
+      }
+      return <Coupon>[];
     } on DioException catch (error) {
       throw _toApiException(error);
     }

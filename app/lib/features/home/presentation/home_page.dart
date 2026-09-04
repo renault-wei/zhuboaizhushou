@@ -69,6 +69,8 @@ class HomePage extends ConsumerWidget {
               const _VoiceLibraryCard(),
               const SizedBox(height: 16),
               const _ScriptLibraryCard(),
+              const SizedBox(height: 16),
+              const _CouponEntryCard(),
               const SizedBox(height: 24),
               OutlinedButton(
                 key: const Key('logoutButton'),
@@ -918,6 +920,54 @@ class _ScriptLibraryCardState extends ConsumerState<_ScriptLibraryCard> {
               child: const Text('去生成话术'),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 「团购券」入口卡片：位于「话术生成」卡片下方。
+/// 点击进入团购券列表页 /coupons，供后续开播配置选择「直播挂载商品」。
+class _CouponEntryCard extends StatelessWidget {
+  const _CouponEntryCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      key: const Key('couponEntryCard'),
+      margin: EdgeInsets.zero,
+      child: InkWell(
+        key: const Key('couponEntryOpenButton'),
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => context.push('/coupons'),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  const Icon(Icons.confirmation_number_outlined, size: 20),
+                  const SizedBox(width: 8),
+                  const Text(
+                    '团购券',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const Spacer(),
+                  Icon(
+                    Icons.chevron_right,
+                    size: 20,
+                    color: Colors.grey.shade500,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '拉取抖音团购券，为实景直播挂载商品',
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+              ),
+            ],
+          ),
         ),
       ),
     );

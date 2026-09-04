@@ -7,6 +7,7 @@ import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/core/network/auth_interceptor.dart';
 import 'package:starvoice_app/core/storage/session_storage.dart';
 import 'package:starvoice_app/features/auth/application/auth_controller.dart';
+import 'package:starvoice_app/features/coupons/application/coupon_controller.dart';
 import 'package:starvoice_app/features/recording/application/recorder_controller.dart';
 import 'package:starvoice_app/features/scripts/application/script_controller.dart';
 import 'package:starvoice_app/features/voices/application/voice_library_controller.dart';
@@ -113,4 +114,11 @@ final voiceLibraryControllerProvider = StateNotifierProvider.autoDispose<
 final scriptControllerProvider = StateNotifierProvider.autoDispose<
     ScriptController, ScriptState>((ref) {
   return ScriptController(ref.watch(apiClientProvider));
+});
+
+/// 团购券控制器：团购券列表页使用。
+/// autoDispose：离开券列表页即销毁，避免页面级状态长期驻留。
+final couponControllerProvider = StateNotifierProvider.autoDispose<
+    CouponController, CouponState>((ref) {
+  return CouponController(ref.watch(apiClientProvider));
 });

@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { and, eq, ne } from 'drizzle-orm';
 import { db } from '../db/client';
 import { users } from '../db/schema';
+import { couponService } from '../services/coupon';
 import { DouyinError, douyinOAuthService } from '../services/douyin';
 
 // users 表整行类型（含抖音绑定凭据，仅服务端内部使用，绝不下发客户端）
@@ -143,5 +144,18 @@ export const douyinRoutes: FastifyPluginAsync = async (app) => {
       })
       .where(eq(users.id, request.user.userId));
     return { bound: false };
+  });
+
+  // 拉取当前抖音账号的团购券列表（必须先绑定抖音号）
+  app.get('/api/douyin/coupons', { preHandler: app.authenticate }, async (request, reply) => {
+    const user = await findUserById(request.user.userId);
+    if (!user) {
+      return reply.code(404).send({ error: 'USER_NOT_FOUND', message: '用户不存在' });
+    }
+    if (!user.douyinOpenId) {
+      return reply.code(403).send({ error: 'DOUYIN_NOT_BOUND', message: '请先绑定抖音号' });
+    }
+    const coupons = await couponService.getCoupons(user.douyinOpenId);
+    return { coupons };
   });
 };

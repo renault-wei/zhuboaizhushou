@@ -40,10 +40,13 @@ class FakeBackend implements HttpClientAdapter {
     this.generatedScriptContent = '双人火锅套餐，锅底现炒，欢迎到店品尝。',
     this.failScriptsList = false,
     this.failScriptGenerate = false,
+    this.failCouponsList = false,
     List<Map<String, dynamic>>? voices,
     List<Map<String, dynamic>>? scripts,
+    List<Map<String, dynamic>>? coupons,
   })  : voices = voices ?? <Map<String, dynamic>>[],
-        scripts = scripts ?? <Map<String, dynamic>>[];
+        scripts = scripts ?? <Map<String, dynamic>>[],
+        coupons = coupons ?? _defaultCoupons();
 
   final String userId;
   final String phone;
@@ -66,6 +69,9 @@ class FakeBackend implements HttpClientAdapter {
   final List<Map<String, dynamic>> scripts;
   int _scriptSeq = 0;
 
+  /// 我的团购券（内存）：结构与服务端 /api/douyin/coupons 返回保持一致。
+  final List<Map<String, dynamic>> coupons;
+
   /// 模拟 DeepSeek 返回的话术全文：生成接口使用，测试可自行配置。
   final String generatedScriptContent;
 
@@ -74,6 +80,9 @@ class FakeBackend implements HttpClientAdapter {
 
   /// 模拟话术生成接口 500（测试生成失败分支）。
   final bool failScriptGenerate;
+
+  /// 模拟团购券列表接口 500（测试加载失败分支）。
+  final bool failCouponsList;
 
   @override
   Future<ResponseBody> fetch(
@@ -119,6 +128,18 @@ class FakeBackend implements HttpClientAdapter {
     if (options.method == 'POST' && path.endsWith('/api/douyin/unbind')) {
       douyinBound = false;
       return _jsonResponse({'bound': false});
+    }
+    if (options.method == 'GET' && path.endsWith('/api/douyin/coupons')) {
+      if (failCouponsList) {
+        return _serverError('团购券服务暂不可用');
+      }
+      if (!douyinBound) {
+        return _jsonResponse(
+          {'error': 'DOUYIN_NOT_BOUND', 'message': '请先绑定抖音号'},
+          403,
+        );
+      }
+      return _jsonResponse({'coupons': List<Map<String, dynamic>>.from(coupons)});
     }
     if (options.method == 'GET' && path.endsWith('/api/agreements/voice')) {
       return _jsonResponse({
@@ -424,6 +445,57 @@ class FakeBackend implements HttpClientAdapter {
       'signedAt': agreementSignedAt,
       'version': '1.0',
     };
+  }
+
+  /// 默认团购券列表：与服务端 mock 火锅店券保持一致（5 张）。
+  static List<Map<String, dynamic>> _defaultCoupons() {
+    return <Map<String, dynamic>>[
+      <String, dynamic>{
+        'couponId': 'c-001-mock',
+        'name': '双人火锅套餐',
+        'package': '锅底1份+肥牛1份+羊肉1份+蔬菜拼盘1份+饮料2杯',
+        'price': 128,
+        'originalPrice': 238,
+        'sales': 1200,
+        'imageUrl': '',
+      },
+      <String, dynamic>{
+        'couponId': 'c-002-mock',
+        'name': '四人火锅套餐',
+        'package': '锅底2份+肥牛2份+羊肉2份+海鲜拼盘1份+蔬菜拼盘2份+饮料4杯',
+        'price': 268,
+        'originalPrice': 468,
+        'sales': 860,
+        'imageUrl': '',
+      },
+      <String, dynamic>{
+        'couponId': 'c-003-mock',
+        'name': '招牌麻辣锅底',
+        'package': '牛油麻辣锅底1份（2-4人）',
+        'price': 68,
+        'originalPrice': 98,
+        'sales': 2300,
+        'imageUrl': '',
+      },
+      <String, dynamic>{
+        'couponId': 'c-004-mock',
+        'name': '现切肥牛券',
+        'package': '现切鲜肥牛1份（约200g）',
+        'price': 39,
+        'originalPrice': 59,
+        'sales': 3100,
+        'imageUrl': '',
+      },
+      <String, dynamic>{
+        'couponId': 'c-005-mock',
+        'name': '饮品畅饮券',
+        'package': '酸梅汤/柠檬茶任选2杯',
+        'price': 19,
+        'originalPrice': 28,
+        'sales': 1500,
+        'imageUrl': '',
+      },
+    ];
   }
 
   @override
