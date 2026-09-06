@@ -193,7 +193,7 @@ export const lives = pgTable(
   (table) => [index('lives_user_id_idx').on(table.userId), index('lives_status_idx').on(table.status)],
 );
 
-// ---------- live_danmaku：直播弹幕日志（T13 只读，真实来源待抖音推流接入）----------
+// ---------- live_danmaku：直播弹幕日志（T13 只读 + G3 弹幕网关写入）----------
 export const liveDanmaku = pgTable(
   'live_danmaku',
   {

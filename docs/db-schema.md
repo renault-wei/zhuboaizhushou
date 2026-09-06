@@ -11,6 +11,7 @@ erDiagram
     users ||--o{ voice_agreements : "签署"
     users ||--o{ scripts : "创作"
     users ||--o{ lives : "开播"
+    lives ||--o{ live_danmaku : "收到"
     users ||--o{ orders : "下单"
     users ||--o{ quotas : "按月额度"
     users ||--o{ usage_logs : "消耗流水"
@@ -66,6 +67,13 @@ erDiagram
         timestamp started_at
         timestamp ended_at
     }
+    live_danmaku {
+        uuid id PK
+        uuid live_id FK "级联删除"
+        text content
+        varchar sender_nickname
+        timestamp sent_at
+    }
     orders {
         uuid id PK
         uuid user_id FK
@@ -117,6 +125,7 @@ erDiagram
 | voice_agreements | 《声音授权协议》签署存档 | (user_id, agreement_version) 唯一；幂等签署（合规） |
 | scripts | 话术与敏感词扫描 | product_snapshot 固化商品信息；blocked 状态阻断开播（合规） |
 | lives | 直播记录 | ai_badge_shown 默认 true 不可关闭（合规）；关联音色+话术+券 |
+| live_danmaku | 直播弹幕日志 | 归属 lives 级联删除；读侧=T13 只读日志，写侧=弹幕网关（G3）灌入 |
 | orders | 订单 | 金额单位分；order_no 与 wx_transaction_id 唯一 |
 | quotas | 月度额度 | (user_id, period) 唯一；每月新起一行 |
 | usage_logs | AI 调用流水 | 每次调用一条，含成本（分），后台成本页数据源 |

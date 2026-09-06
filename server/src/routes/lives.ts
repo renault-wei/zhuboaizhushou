@@ -15,6 +15,7 @@ import { resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { streamingService } from '../services/streaming';
 import { endLive, getLiveMonitor, listDanmaku, startLive } from '../services/liveSession';
+import { danmakuGateway, DanmakuError } from '../services/danmaku';
 
 // 直播状态全集：用于列表 ?status= 过滤校验（与服务端 live_status 枚举一致）
 const LIVE_STATUSES: LiveStatus[] = ['idle', 'processing', 'ready', 'live', 'ended', 'failed'];
@@ -95,6 +96,29 @@ function readOptionalId(raw: unknown): string | null {
 /** 可选文本字段：非空字符串才接收，其余一律视为 null */
 function readOptionalText(raw: unknown): string | null {
   return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : null;
+}
+
+/** 读取弹幕写入请求体：content 必填、senderNickname 可选；非字符串一律按空/缺省处理，其余字段忽略 */
+function readDanmakuBody(body: unknown): { content: string; senderNickname: string | null } {
+  if (typeof body !== 'object' || body === null) {
+    return { content: '', senderNickname: null };
+  }
+  const record = body as Record<string, unknown>;
+  const rawContent = record.content;
+  const content = typeof rawContent === 'string' ? rawContent.trim() : '';
+  return { content, senderNickname: readOptionalText(record.senderNickname) };
+}
+
+/** DanmakuError → HTTP 状态码：不存在 404 / 非直播中 409 / 内容非法 400 */
+function danmakuStatusOf(code: DanmakuError['code']): number {
+  switch (code) {
+    case 'LIVE_NOT_FOUND':
+      return 404;
+    case 'LIVE_NOT_LIVE':
+      return 409;
+    default:
+      return 400;
+  }
 }
 
 /** 读取 prepare 请求体：durationSeconds 可选，clamp 到 [10, 3600]，缺省 30 */
@@ -396,5 +420,24 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
     }
     return danmaku;
+  });
+
+  // 弹幕写入（G3 弹幕网关统一事件入口）：校验归属 + 直播中 → 写 live_danmaku 并广播给订阅方（G4 引擎）。
+  // 一期由模拟弹幕脚本注入联调；未来真实抖音采集通道复用同一入口，业务侧无需改动。
+  app.post('/api/lives/:id/danmaku', { preHandler: app.authenticate }, async (request, reply) => {
+    const { id } = request.params as LiveIdParams;
+    const body = readDanmakuBody(request.body);
+    try {
+      const record = await danmakuGateway.ingest(request.user.userId, id, {
+        content: body.content,
+        senderNickname: body.senderNickname,
+      });
+      return reply.code(201).send({ danmaku: record });
+    } catch (err) {
+      if (err instanceof DanmakuError) {
+        return reply.code(danmakuStatusOf(err.code)).send({ error: err.code, message: err.message });
+      }
+      throw err;
+    }
   });
 };

@@ -134,7 +134,7 @@ export async function getLiveMonitor(userId: string, id: string): Promise<LiveMo
  * 弹幕日志（只读）：按 sentAt 倒序取最近 N 条。
  * - 非本人或不存在返回 null（路由转 404）；
  * - 存在但无弹幕返回空数组。
- * T13 不提供写入口，真实弹幕待抖音推流接入后灌入。
+ * 写入口由弹幕网关（G3）提供：POST /api/lives/:id/danmaku 校验归属与直播中状态后落库并广播；
  */
 export async function listDanmaku(
   userId: string,
