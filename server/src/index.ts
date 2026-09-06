@@ -1,12 +1,15 @@
 import { buildApp } from './app';
 import { env } from './config/env';
 import { pool } from './db/client';
+import { interactionEngine } from './services/interactionEngine';
 
 const app = buildApp();
 
 async function bootstrap(): Promise<void> {
   try {
     await app.listen({ host: env.HOST, port: env.PORT });
+    // G4：服务起来后订阅实时弹幕事件，驱动互动引擎（退订句柄随进程生命周期常驻）
+    interactionEngine.subscribe();
   } catch (err) {
     app.log.error(err, '服务启动失败');
     process.exit(1);
