@@ -277,7 +277,7 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
     if (!context) {
       return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
     }
-    const { live, script } = context;
+    const { live, script, voice } = context;
     if (!live.videoSourceUrl) {
       return reply.code(400).send({ error: 'VIDEO_NOT_UPLOADED', message: '请先上传实景视频' });
     }
@@ -286,8 +286,11 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
     if (!scriptReady) {
       return reply.code(400).send({ error: 'SCRIPT_NOT_READY', message: '请先生成已通过敏感词扫描的话术' });
     }
-    if (!live.voiceId) {
-      return reply.code(400).send({ error: 'VOICE_NOT_SELECTED', message: '请先选择克隆音色' });
+    if (!voice?.providerVoiceId) {
+      const message = live.voiceId
+        ? '所选音色不存在或尚未就绪，请等待克隆完成或重新选择'
+        : '请先选择克隆音色';
+      return reply.code(400).send({ error: 'VOICE_NOT_SELECTED', message });
     }
     const processing = await updateLiveInternal(request.user.userId, id, { status: 'processing' });
     if (!processing) {
@@ -299,6 +302,7 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
         scriptText: script?.content ?? '',
         outputPath: uploadsPath('lives', `${id}.mp4`),
         durationSeconds,
+        providerVoiceId: voice.providerVoiceId,
       });
     } catch (err) {
       // 合成失败：状态置 failed，把 ffmpeg 错误摘要带回给前端排查

@@ -59,6 +59,7 @@ const PHONE_OWNER_A = '13920000204'; // 归属隔离 A
 const PHONE_OWNER_B = '13920000205'; // 归属隔离 B
 const PHONE_SMOKE = '13920000206'; // 真合成冒烟
 const PHONE_PROCESSING = '13920000207'; // processing 删除保护
+const PHONE_PENDING_VOICE = '13920000208'; // 音色未就绪拦截
 
 async function registerAndGetToken(phone: string): Promise<string> {
   const send = await app.inject({
@@ -311,6 +312,7 @@ dbIt('prepare 成功：注入 Mock 后状态置 ready、回填产物 URL、角�
       sourceVideoPath: resolve(UPLOADS_DIR, 'videos', `${liveId}.mp4`),
       outputPath: resolve(UPLOADS_DIR, 'lives', `${liveId}.mp4`),
       durationSeconds: 30,
+      providerVoiceId: `cosy-live-streaming-${voiceId}`,
     }),
   );
 
@@ -326,6 +328,35 @@ dbIt('prepare 成功：注入 Mock 后状态置 ready、回填产物 URL、角�
     videoSourceUrl: `/uploads/lives/${liveId}.mp4`,
     aiBadgeShown: true,
   });
+});
+
+// ---------- 音色未就绪（pending）拦截 ----------
+
+dbIt('prepare 前置校验：已选音色但未克隆完成（pending）→ 400 VOICE_NOT_SELECTED', async () => {
+  const token = await registerAndGetToken(PHONE_PENDING_VOICE);
+  await resetUserData(PHONE_PENDING_VOICE);
+  const userId = await userIdOf(PHONE_PENDING_VOICE);
+  const pendingVoiceId = randomUUID();
+  await pool.query(
+    `INSERT INTO voices (id, user_id, name, provider, provider_voice_id, status, sample_duration_seconds)
+     VALUES ($1, $2, '克隆中音色', 'cosyvoice', $3, 'pending', 180)`,
+    [pendingVoiceId, userId, `cosy-pending-${pendingVoiceId}`],
+  );
+  const scriptId = await seedOwnedScript(PHONE_PENDING_VOICE);
+  const liveId = await createLiveDraft(token, { voiceId: pendingVoiceId, scriptId });
+
+  const uploaded = await uploadVideo(token, liveId, Buffer.from('fake-mp4-bytes'));
+  expect(uploaded.statusCode).toBe(200);
+  trackCleanup(resolve(UPLOADS_DIR, 'videos', `${liveId}.mp4`));
+
+  const prepare = await app.inject({
+    method: 'POST',
+    url: `/api/lives/${liveId}/prepare`,
+    headers: bearer(token),
+    payload: {},
+  });
+  expect(prepare.statusCode).toBe(400);
+  expect(prepare.json()).toMatchObject({ error: 'VOICE_NOT_SELECTED' });
 });
 
 // ---------- 合成失败（Mock 抛错，注入一次）----------
@@ -424,6 +455,10 @@ dbIt('status=processing 时删除返回 409，stream-status 返回 processing', 
 // ---------- 真合成冒烟（仅本机存在 server/bin/ffmpeg.exe 时执行一次）----------
 
 smokeIt('真合成冒烟：上传真实 mp4 → prepare → ready，产物非空且时长 > 0', async () => {
+  // 测试护栏：即便本机配置了真实 CosyVoice key，也不得在自动化测试里真调第三方
+  vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+    throw new Error('测试禁止真实调用第三方 CosyVoice TTS');
+  });
   const token = await registerAndGetToken(PHONE_SMOKE);
   await resetUserData(PHONE_SMOKE);
   const voiceId = await seedOwnedVoice(PHONE_SMOKE);

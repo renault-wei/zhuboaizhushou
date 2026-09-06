@@ -1,6 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve } from 'node:path';
+import type { CosyVoiceService } from './voice';
+import { cosyVoiceService, isCosyVoiceReal } from './voice';
 
 // ---------- 常量 ----------
 
@@ -26,11 +28,11 @@ export class StreamingError extends Error {
 
 // ---------- 接口定义 ----------
 
-/** 合成入参：源视频 + 话术全文 + 输出路径 + 目标时长 + 角标文案 */
+/** 合成入参：源视频 + 话术全文 + 输出路径 + 目标时长 + 角标文案 + 绑定音色 */
 export interface ComposeInput {
   /** 商户上传的实景视频绝对路径 */
   sourceVideoPath: string;
-  /** 话术全文（T11 仅作占位，真实 CosyVoice TTS 后续接入时使用） */
+  /** 话术全文：合成口播音轨的朗读文本 */
   scriptText: string;
   /** 合成产物绝对路径（如 uploads/lives/{liveId}.mp4） */
   outputPath: string;
@@ -38,6 +40,8 @@ export interface ComposeInput {
   durationSeconds: number;
   /** 角标文字，缺省用合规默认文案 */
   badgeText?: string;
+  /** 音色的 CosyVoice voice_id：真实模式据此合成口播音轨；缺省时回退占位音轨 */
+  providerVoiceId?: string;
 }
 
 /** 合成结果：产物路径 + 时长 + 文件字节数 */
@@ -49,11 +53,10 @@ export interface ComposeResult {
 
 /**
  * 推流引擎服务接口（T11 只做本地合成，不推流 / 不接 RTMP）。
- * MVP 阶段用本地 FFmpeg mock 实现；未来接云端转码 / 真实 TTS 时保持该接口不变，
- * 仅在工厂函数中切换实现。
+ * MVP 阶段用本地 FFmpeg 实现；未来接云端转码时保持该接口不变，仅在工厂函数中切换实现。
  */
 export interface StreamingService {
-  /** 合成直播视频：源视频循环 + TTS 音轨 + 合规角标 → 本地 mp4 文件 */
+  /** 合成直播视频：源视频循环 + 口播音轨（真实 TTS / 占位音轨）+ 合规角标 → 本地 mp4 文件 */
   composeLive(input: ComposeInput): Promise<ComposeResult>;
 }
 
@@ -61,11 +64,19 @@ export interface StreamingService {
 
 /**
  * 本地 FFmpeg 合成实现：
- * - TTS mock：用 ffmpeg sine 正弦音轨（440Hz）落盘占位，真实 CosyVoice TTS 后续替换；
- * - 合成：-stream_loop -1 循环源视频 + sine 音轨 + drawtext 中文角标 + -t 目标时长；
+ * - 口播音轨：绑定真实音色且开启真实 CosyVoice 时调 DashScope 合成并循环；
+ *   否则（mock 模式 / 未绑定音色）用 ffmpeg sine 正弦音轨（440Hz）落盘占位；
+ * - 合成：-stream_loop -1 循环源视频 + 音轨 + drawtext 中文角标 + -t 目标时长；
  * - Windows 路径转义：drawtext 的 fontfile 内冒号须写成 \:，字体路径用系统字体 simhei.ttf。
  */
 export class MockStreamingService implements StreamingService {
+  /** 真实 CosyVoice TTS 客户端；mock 模式为 null（合成回退 sine 占位音轨） */
+  private readonly cosyVoice: CosyVoiceService | null;
+
+  constructor(cosyVoice?: CosyVoiceService) {
+    this.cosyVoice = cosyVoice ?? null;
+  }
+
   /**
    * FFmpeg 定位三级规则：
    * 1. process.env.FFMPEG_PATH（显式指定，最优先）；
@@ -96,8 +107,9 @@ export class MockStreamingService implements StreamingService {
   }
 
   /**
-   * TTS mock：用 ffmpeg sine 正弦音轨（440Hz，时长 = durationSeconds）生成占位音频文件。
-   * scriptText 参数保留给未来真实 TTS 使用，mock 阶段不参与生成。
+   * 占位音轨（mock 模式 / 未绑定真实音色时兜底）：
+   * 用 ffmpeg sine 正弦音轨（440Hz，时长 = durationSeconds）生成音频文件。
+   * scriptText 参数在真实 TTS 分支使用，此处不参与生成。
    */
   generateTtsTrack(_scriptText: string, outputPath: string, durationSeconds: number): void {
     mkdirSync(dirname(outputPath), { recursive: true });
@@ -115,7 +127,7 @@ export class MockStreamingService implements StreamingService {
     this.assertNonEmptyFile(outputPath, 'TTS_GENERATE_FAILED', 'TTS 音轨产物');
   }
 
-  /** 合成直播视频：源视频循环 + TTS 音轨 + 合规角标 → 本地 mp4（同步跑 FFmpeg） */
+  /** 合成直播视频：源视频循环 + 口播音轨 + 合规角标 → 本地 mp4（同步跑 FFmpeg） */
   async composeLive(input: ComposeInput): Promise<ComposeResult> {
     const ffmpegPath = this.resolveFfmpegPath();
     if (!existsSync(input.sourceVideoPath)) {
@@ -123,13 +135,28 @@ export class MockStreamingService implements StreamingService {
     }
     mkdirSync(dirname(input.outputPath), { recursive: true });
 
-    // TTS 音轨（mock sine 占位）：产物同目录落盘，合成完成后清理
+    // 占位音轨路径（真实 TTS 分支不会用到，finally 兜底清理）
     const ttsTrackPath = join(
       dirname(input.outputPath),
       `${basename(input.outputPath, extname(input.outputPath))}-tts.wav`,
     );
+    let cosyWavPath: string | undefined;
     try {
-      this.generateTtsTrack(input.scriptText, ttsTrackPath, input.durationSeconds);
+      if (input.providerVoiceId && this.cosyVoice) {
+        try {
+          const { wavPath } = await this.cosyVoice.synthesizeSpeech({
+            text: input.scriptText,
+            providerVoiceId: input.providerVoiceId,
+          });
+          cosyWavPath = wavPath;
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err);
+          throw new StreamingError('TTS_GENERATE_FAILED', `真实 TTS 合成失败：${detail}`);
+        }
+      } else {
+        this.generateTtsTrack(input.scriptText, ttsTrackPath, input.durationSeconds);
+      }
+      const audioTrackPath = cosyWavPath ?? ttsTrackPath;
 
       // drawtext 角标：文字用单引号包裹；Windows 路径中的冒号转义成 \:，整体作为单个 filter 参数
       const badgeText = input.badgeText ?? DEFAULT_BADGE_TEXT;
@@ -143,8 +170,10 @@ export class MockStreamingService implements StreamingService {
         '-1',
         '-i',
         input.sourceVideoPath,
+        '-stream_loop',
+        '-1',
         '-i',
-        ttsTrackPath,
+        audioTrackPath,
         '-t',
         String(input.durationSeconds),
         '-vf',
@@ -172,7 +201,10 @@ export class MockStreamingService implements StreamingService {
         fileSizeBytes: stats.size,
       };
     } finally {
-      // 中间 TTS 占位音轨不入库，无论成败都清理，避免 uploads 目录堆积临时文件
+      // 中间音轨（真实 TTS 临时 wav / sine 占位 wav）不入库，无论成败都清理
+      if (cosyWavPath) {
+        rmSync(cosyWavPath, { force: true });
+      }
       rmSync(ttsTrackPath, { force: true });
     }
   }
@@ -208,11 +240,12 @@ export class MockStreamingService implements StreamingService {
 }
 
 /**
- * 推流引擎工厂：T11 无第三方密钥依赖，恒返回本地 FFmpeg 实现；
- * 未来接入真实 CosyVoice TTS / 云端转码时在此切换 RealStreamingService。
+ * 推流引擎工厂：
+ * - 真实 CosyVoice 模式（配置 key 且未开 mock）→ 注入真实 TTS 客户端，绑定音色时走真实合成；
+ * - mock 模式 → 不注入 TTS 客户端，合成回退 sine 占位音轨。
  */
 export function createStreamingService(): StreamingService {
-  return new MockStreamingService();
+  return new MockStreamingService(isCosyVoiceReal() ? cosyVoiceService : undefined);
 }
 
 // 全局单例：prepare 合成流程各处共用同一实现

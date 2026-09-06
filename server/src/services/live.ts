@@ -288,7 +288,7 @@ export async function deleteLive(userId: string, id: string): Promise<boolean> {
 
 // ---------- T11 合成流程辅助（prepare 路由专用，禁止外部直接改状态）----------
 
-/** 合成上下文：开播配置 + 绑定话术（用于敏感词 pass 校验与取话术全文合成） */
+/** 合成上下文：开播配置 + 绑定话术 + 绑定音色（用于敏感词 pass 校验与取话术全文 / 音色合成） */
 export interface LiveComposeContext {
   live: Live;
   /** 绑定的 ready 话术；未绑定或引用已被删除时为 null */
@@ -297,9 +297,11 @@ export interface LiveComposeContext {
     status: string;
     sensitiveCheckStatus: string | null;
   } | null;
+  /** 绑定的 ready 音色；未绑定、未就绪或引用已被删除时为 null */
+  voice: { providerVoiceId: string } | null;
 }
 
-/** 取开播配置与其绑定话术：归属隔离，非本人或不存在返回 null（路由层转 404） */
+/** 取开播配置与其绑定话术 / 音色：归属隔离，非本人或不存在返回 null（路由层转 404） */
 export async function getLiveComposeContext(
   userId: string,
   id: string,
@@ -321,7 +323,16 @@ export async function getLiveComposeContext(
       .limit(1);
     script = rows[0] ?? null;
   }
-  return { live: toLive(row), script };
+  let voice: LiveComposeContext['voice'] = null;
+  if (row.voiceId) {
+    const rows = await db
+      .select({ providerVoiceId: voicesTable.providerVoiceId })
+      .from(voicesTable)
+      .where(and(eq(voicesTable.id, row.voiceId), eq(voicesTable.status, 'ready')))
+      .limit(1);
+    voice = rows[0] ?? null;
+  }
+  return { live: toLive(row), script, voice };
 }
 
 /**
