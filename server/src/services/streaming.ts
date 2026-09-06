@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
 import type { CosyVoiceService } from './voice';
 import { cosyVoiceService, isCosyVoiceReal } from './voice';
+import { locateFfmpeg } from './ffmpeg';
 
 // ---------- 常量 ----------
 
@@ -85,25 +86,12 @@ export class MockStreamingService implements StreamingService {
    * 三级都探测不到时抛 FFMPEG_NOT_FOUND。
    */
   resolveFfmpegPath(): string {
-    const candidates: string[] = [];
-    if (process.env.FFMPEG_PATH) {
-      candidates.push(process.env.FFMPEG_PATH);
+    try {
+      return locateFfmpeg();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new StreamingError('FFMPEG_NOT_FOUND', detail);
     }
-    candidates.push(resolve(process.cwd(), 'bin', 'ffmpeg.exe'));
-    const pathDirs = (process.env.PATH ?? '').split(';').filter((dir) => dir.length > 0);
-    for (const dir of pathDirs) {
-      candidates.push(join(dir, 'ffmpeg.exe'));
-      candidates.push(join(dir, 'ffmpeg'));
-    }
-    for (const candidate of candidates) {
-      if (existsSync(candidate)) {
-        return candidate;
-      }
-    }
-    throw new StreamingError(
-      'FFMPEG_NOT_FOUND',
-      '未找到 FFmpeg：请配置 FFMPEG_PATH，或确认 server/bin/ffmpeg.exe / 系统 PATH 可用',
-    );
   }
 
   /**

@@ -67,6 +67,24 @@ export const env = {
     localTtsVoice: optionalEnv('LOCAL_TTS_VOICE'),
   },
 
+  // 火山引擎（豆包语音）TTS：G5 商用音色旁路（CosyVoice 降为备选）
+  // 适配器骨架已落地（volcTTS.ts），key 到位仅需填 VOLC_TTS_API_KEY；
+  // 真连验证通过后由 liveSpeaker 注入切换，默认不接现出声链路。
+  volcTTS: {
+    // 火山语音控制台 API Key（https://console.volcengine.com/speech/new/setting/apikeys）
+    apiKey: optionalEnv('VOLC_TTS_API_KEY'),
+    // 服务基址：默认官方地址，测试 / 代理环境可覆盖
+    baseUrl: optionalEnv('VOLC_TTS_BASE_URL') ?? 'https://openspeech.bytedance.com',
+    // 合成资源 ID：豆包语音合成大模型 2.0
+    resourceId: optionalEnv('VOLC_TTS_RESOURCE_ID') ?? 'seed-tts-2.0',
+    // 默认音色（发音人 ID）：火山官方示例通用音色；正式使用前按音色列表替换（文档 6561/1257544）
+    speaker: optionalEnv('VOLC_TTS_SPEAKER') ?? 'zh_female_vv_uranus_bigtts',
+    // 采样率：官方可选 8000/16000/22050/24000/32000/44100/48000
+    sampleRate: intEnv('VOLC_TTS_SAMPLE_RATE', 24000),
+    // 语速：范围 [-50, 100]，0 为正常语速
+    speechRate: intEnv('VOLC_TTS_SPEECH_RATE', 0),
+  },
+
   // 抖音开放平台：OAuth + 团购券 + 推流
   douyin: {
     clientKey: optionalEnv('DOUYIN_CLIENT_KEY'),
