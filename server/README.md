@@ -57,6 +57,13 @@ npm run dev
 | npm run db:migrate | 执行迁移 |
 | npm run db:push | 直接按 schema 同步表结构（仅本地首建用） |
 | npm run db:studio | 打开 Drizzle Studio 可视化浏览数据 |
+| npm run audio:smoke | G5 出声冒烟：生成提示音并播到系统默认播放设备（仅 Windows 本机） |
+
+## G5 出声冒烟（Windows 本机）
+
+1. 直接跑 `npm run audio:smoke`，听到「叮咚」即证明后台出声链路通（占位提示音，非产品口播）。
+2. 验收声卡注入：安装 VB-Cable 后，把 CABLE Input 设为系统**默认播放设备**，抖音直播伴侣把麦克风选成 CABLE Output，再跑一次冒烟即可在直播间收到声音。
+3. 真实口播需配置 `COSYVOICE_API_KEY` 并把 `MOCK_COSYVOICE` 设为 `false`（见 `.env.example`）。
 
 ## 目录结构
 

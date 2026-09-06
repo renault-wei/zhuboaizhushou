@@ -13,7 +13,7 @@
 | 前端静态检查 | ✅ `flutter analyze` No issues found（Flutter 3.47.2 @ `E:\dev\flutter`） |
 | 最近提交 | `2f86b92` = G4 实时互动引擎（已推送） |
 | 主推进路线 | v0.2 双模式 G 清单（托管线 G1→G2；现场线 G3→G6→G7） |
-| 下一个里程碑 | G5 现场音频链路（先补决策，见 §3） |
+| 当前推进 | G5 现场音频链路：出声基础已落地，正做声卡注入验收（见 §2） |
 
 ## 1. 能力基线（✅ 已完成，含旧仓库导入部分）
 
@@ -52,12 +52,14 @@
 - [x] 测试：10 例 + 端到端「POST 弹幕 → 引擎回复」联调
 - [ ] 接上 G5 播放后做真机验收（暂挂）
 
-### G5 · 现场音频链路 —— ⏳ 待开发（下一里程碑）
-- [ ] 决策 1：播放端形态 —— 手机 App（AI 副机）还是 Windows 后台模式（推荐先做本机可测的后台模式）
-- [ ] 决策 2：声卡方案 —— 虚拟声卡（如 VB-Cable）注入抖音直播伴侣，还是硬件声卡
+### G5 · 现场音频链路 —— 🟡 进行中（出声基础完成，声卡注入验收待装 VB-Cable）
+- [x] 决策 1：播放端形态 = Windows 后台模式（本机可测，用户已拍板；App 只做控制端）
+- [x] 决策 2：声卡方案 = VB-Cable 虚拟声卡注入抖音直播伴侣（驱动待用户安装，冒烟脚本已备）
 - [ ] 决策 3：真人插话识别方式 —— 副机麦克风能量检测（先做手动接管兜底）
-- [ ] 代码：`onReply` → TTS 合成（复用 `cosyVoiceService`）
-- [ ] 代码：播放队列 + 可打断 + 静音
+- [x] 代码：出声播放器 `voicePlayer.ts`（真实 Windows 播放执行器 + 注入式测试设计）
+- [x] 代码：播放队列 + 可打断 + 静音（服务端核心已落地，单测 4 例；`onReply` 接线下一步）
+- [x] 冒烟：`npm run audio:smoke` 本机出声通过（提示音占位，非产品口播）
+- [ ] 代码：`onReply` → TTS 合成（复用 `cosyVoiceService`；需 COSYVOICE_API_KEY + 音色绑定）
 - [ ] 代码：真人插话闪避（真人说话 AI 闭嘴，停止 X 秒后恢复）
 - [ ] 代码：一键静音 / 真人接管开关（与 G6 共用）
 - [ ] 验收：真机双手机或手机+PC 开播，AI 语音清晰进直播间（需 CosyVoice key + 设备）
@@ -78,10 +80,10 @@
 
 ## 3. 决策点与外部依赖（需要你拍板 / 提供）
 
-1. **G5 播放端形态**（最高优先）：手机 App 出声 vs Windows 后台出声 + 声卡注入。建议：先在 Windows 后台模式跑通本机链路，App 只做控制端。
+1. **G5 播放端形态**：已定 = Windows 后台出声 + VB-Cable 声卡注入直播伴侣（用户拍板）。
 2. **G6 双模式落库**：`lives` 增加 `mode`（A/B）字段是否按此口径实现。
 3. **G2 状态**：默认暂停托管线，等抖音 key 后再动；现场线（G3 采集→G5→G6）优先。
-4. **需要你提供的资源**：CosyVoice 真实 `COSYVOICE_API_KEY`（G1 验收 + G5 真机必需）；声卡/麦克风或虚拟声卡（G5 验收）；抖音测试号 / 开放平台 key（G2）；若接云端看板：GitHub Personal Access Token（仓库 Contents Read + Projects 读写）。
+4. **需要你提供的资源**：安装 VB-Cable 并设为默认播放设备（G5 声卡注入验收，进行中）；CosyVoice 真实 `COSYVOICE_API_KEY`（G1 验收 + G5 真机必需）；抖音测试号 / 开放平台 key（G2）；若接云端看板：GitHub Personal Access Token（仓库 Contents Read + Projects 读写）。
 
 ## 4. 工程债
 
@@ -95,6 +97,8 @@
 - [x] `flutter analyze` → No issues found
 - [ ] 新功能包对应测试补齐后勾选（随 G5 / G6 走）
 
-## 6. 下一步建议（G5 启动前请先答 §3 的 1~2）
+## 6. 下一步建议
 
-> 答完即拆 G5 任务包开工；G5 验收目标：真实 CosyVoice key 就位后，AI 回复能实时出声进直播间。
+1. 你安装 VB-Cable（下载 vb-audio.com/Cable）→ 系统声音里把默认播放设备设为 CABLE Input。
+2. 我再跑一次 `audio:smoke` → 抖音直播伴侣把麦克风选 CABLE Output，验证声音进直播间。
+3. 提供 `COSYVOICE_API_KEY` 后，接 `onReply → TTS 合成 → 播放队列`，完成 G5 真机验收。
