@@ -189,4 +189,38 @@ void main() {
 
     await _unmount(tester);
   });
+
+  testWidgets('就绪：工作台展示「开始直播」，点击后转直播中并出现结束按钮', (tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '晚市就绪直播', status: 'ready'),
+      ],
+    );
+    await _pumpMonitor(tester, backend);
+
+    // 就绪态：主操作是「开始直播」，未开播不发弹幕、AI 待开播
+    expect(find.byKey(const Key('liveMonitorStartButton')), findsOneWidget);
+    expect(find.byKey(const Key('liveEndButton')), findsNothing);
+    expect(find.text('配置已就绪，点击下方「开始直播」后 AI 语音主播将上线播报。'),
+        findsOneWidget);
+    expect(
+      find.text('尚未开播，无法发送测试弹幕；点击「开始直播」进入直播后即可联调。'),
+      findsOneWidget,
+    );
+
+    // 点击开始：后端转 live，工作台切入直播中监控
+    await tester.tap(find.byKey(const Key('liveMonitorStartButton')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(backend.lives.single['status'], 'live');
+    expect(find.byKey(const Key('liveMonitorStartButton')), findsNothing);
+    expect(find.byKey(const Key('liveEndButton')), findsOneWidget);
+    expect(find.text('播报中'), findsOneWidget);
+    expect(find.text('直播已开始，AI 语音主播已上线'), findsOneWidget);
+
+    await _unmount(tester);
+  });
 }

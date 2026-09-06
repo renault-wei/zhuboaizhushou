@@ -4,6 +4,8 @@
 /// 测试弹幕注入（模拟观众提问，触发 G3→G4→G5 真实语音链路）+ 弹幕日志。
 /// 进入页面启动轮询（monitor 每 3s、danmaku 每 3s），退出停止。
 /// 「AI 智能直播」角标恒为 true，本页强制展示角标提示、无关闭入口。
+/// 一键开播入口收口在本页：就绪（ready）场次从列表页进入本工作台后，
+/// 点击「开始直播」开播并进入直播中监控，列表页不再单独提供开播按钮。
 library;
 
 import 'dart:async';
@@ -17,7 +19,8 @@ import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/providers.dart';
 
 /// 现场直播工作台：真人出镜 + 后台 AI 语音主播的直播间控制台，
-/// 展示直播状态 / AI 播报状态 / 弹幕日志，支持测试弹幕注入与一键结束直播。
+/// 展示直播状态 / AI 播报状态 / 弹幕日志，支持一键开始 / 结束直播
+/// （开始入口收口在本页）与测试弹幕注入。
 class LiveMonitorPage extends ConsumerStatefulWidget {
   const LiveMonitorPage({super.key, required this.liveId});
 
@@ -48,6 +51,9 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
 
   /// 结束直播进行中（防重复点击）
   bool _ending = false;
+
+  /// 开始直播进行中（防重复点击）
+  bool _starting = false;
 
   /// 已播时长本地时钟：monitor 轮询间隔内也要每秒递增，故用本地秒数兜底展示。
   int _localSeconds = 0;
@@ -110,8 +116,11 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
         _loading = false;
         _error = null;
       });
-      // 直播已结束（本页外触发）：停止轮询并返回，避免残留定时器
-      if (monitor.status != LiveStatus.live) {
+      // 直播进入终态（ended/failed，本页外触发结束）：停止轮询并返回，
+      // 避免残留定时器；就绪 / 直播中等非终态保持轮询，支撑工作台内
+      // 「就绪 → 开始直播 → 直播中」的状态流转与外部状态变化感知。
+      if (monitor.status == LiveStatus.ended ||
+          monitor.status == LiveStatus.failed) {
         _stopPolling();
       }
     } on ApiException catch (error) {
@@ -192,6 +201,41 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     }
   }
 
+  /// 一键开始直播（G6 收口）：ready → live，成功后立即刷新监控并对齐弹幕
+  /// 日志；「开始直播」入口只保留在本工作台，列表页不再提供开播按钮。
+  Future<void> _startLive() async {
+    final monitor = _monitor;
+    if (_starting || monitor == null || monitor.status != LiveStatus.ready) {
+      return;
+    }
+    setState(() {
+      _starting = true;
+    });
+    try {
+      await ref.read(apiClientProvider).startLive(widget.liveId);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _starting = false;
+      });
+      _showSnack('直播已开始，AI 语音主播已上线');
+      // 立即对齐状态与弹幕，不等下一次轮询
+      await _loadMonitor();
+      await _loadDanmaku();
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _starting = false;
+      });
+      _showSnack('开播失败：${error.message}');
+      // 兜底对齐：失败时状态可能已变化（例如他端已开播），刷新一次
+      _loadMonitor();
+    }
+  }
+
   /// 发送测试弹幕：写入弹幕网关（G3）→ 实时互动引擎（G4）生成回复 →
   /// 本机语音出口播报（G5）。仅直播中可发；成功后清空输入并立即对齐日志。
   Future<void> _sendTestDanmaku() async {
@@ -238,26 +282,58 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
       key: const Key('liveMonitorPage'),
       appBar: AppBar(title: const Text('现场直播工作台')),
       body: _buildBody(),
-      bottomNavigationBar: _ending
-          ? null
-          : SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    key: const Key('liveEndButton'),
-                    onPressed: _endLive,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: Colors.red.shade600,
-                      minimumSize: const Size.fromHeight(48),
-                    ),
-                    child: const Text('结束直播'),
-                  ),
-                ),
-              ),
-            ),
+      bottomNavigationBar: _buildBottomBar(),
     );
+  }
+
+  /// 底部主操作区：就绪（ready）显示「开始直播」，直播中（live）显示红色
+  /// 「结束直播」；其余状态 / 加载中 / 加载失败不展示动作，避免误导按钮。
+  Widget? _buildBottomBar() {
+    final monitor = _monitor;
+    if (_loading || monitor == null) {
+      return null;
+    }
+    if (monitor.status == LiveStatus.ready) {
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              key: const Key('liveMonitorStartButton'),
+              onPressed: _starting ? null : _startLive,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+              ),
+              child: _starting
+                  ? const Text('正在开播…')
+                  : const Text('开始直播'),
+            ),
+          ),
+        ),
+      );
+    }
+    if (monitor.status == LiveStatus.live) {
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              key: const Key('liveEndButton'),
+              onPressed: _ending ? null : _endLive,
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.red.shade600,
+                minimumSize: const Size.fromHeight(48),
+              ),
+              child: const Text('结束直播'),
+            ),
+          ),
+        ),
+      );
+    }
+    // idle / processing / ended / failed：无可用主操作，不展示底部按钮
+    return null;
   }
 
   Widget _buildBody() {
@@ -365,7 +441,7 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                     size: 10, color: Colors.red),
                 const SizedBox(width: 4),
                 Text(
-                  monitor.status == LiveStatus.live ? '直播中' : '已结束',
+                  _phaseLabel(monitor.status),
                   style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
                 ),
               ],
@@ -397,9 +473,51 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     );
   }
 
+  /// 状态卡右侧短描述：直播中 / 已结束 / 就绪待开播等等待态用「待开播」。
+  String _phaseLabel(LiveStatus status) {
+    switch (status) {
+      case LiveStatus.live:
+        return '直播中';
+      case LiveStatus.ended:
+      case LiveStatus.failed:
+        return '已结束';
+      case LiveStatus.ready:
+        return '待开播';
+      case LiveStatus.processing:
+        return '准备中';
+      case LiveStatus.idle:
+        return '草稿';
+    }
+  }
+
   /// AI 语音主播运行卡：真人出镜画面，AI 负责后台语音播报。
   Widget _buildAiHostCard(LiveMonitor monitor) {
     final live = monitor.status == LiveStatus.live;
+    final ready = monitor.status == LiveStatus.ready;
+    final finished = monitor.status == LiveStatus.ended ||
+        monitor.status == LiveStatus.failed;
+    // 主播状态三档：播报中（直播中）/ 待开播（就绪）/ 已停止（终态）；
+    // idle / processing 归为待机（尚未到可开播阶段）。
+    final String stateText;
+    final String note;
+    final Color stateColor;
+    if (live) {
+      stateText = '播报中';
+      note = '真人出镜现场，AI 语音主播在后台实时朗读弹幕、介绍产品并回复提问。';
+      stateColor = Colors.teal.shade700;
+    } else if (ready) {
+      stateText = '待开播';
+      note = '配置已就绪，点击下方「开始直播」后 AI 语音主播将上线播报。';
+      stateColor = Colors.orange.shade700;
+    } else if (finished) {
+      stateText = '已停止';
+      note = '直播已结束，AI 语音播报已停止。';
+      stateColor = Colors.grey;
+    } else {
+      stateText = '待机';
+      note = '直播尚未开播，AI 语音主播暂未上线。';
+      stateColor = Colors.grey;
+    }
     return Card(
       key: const Key('liveMonitorAiHostCard'),
       margin: EdgeInsets.zero,
@@ -442,16 +560,15 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                           vertical: 3,
                         ),
                         decoration: BoxDecoration(
-                          color: (live ? Colors.teal : Colors.grey)
-                              .withValues(alpha: 0.12),
+                          color: stateColor.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
-                          live ? '播报中' : '已停止',
+                          stateText,
                           key: const Key('liveMonitorAiHostState'),
                           style: TextStyle(
                             fontSize: 12,
-                            color: live ? Colors.teal.shade700 : Colors.grey,
+                            color: stateColor,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -460,9 +577,7 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    live
-                        ? '真人出镜现场，AI 语音主播在后台实时朗读弹幕、介绍产品并回复提问。'
-                        : '直播已结束，AI 语音播报已停止。',
+                    note,
                     key: const Key('liveMonitorAiHostNote'),
                     style: TextStyle(
                       fontSize: 13,
@@ -510,9 +625,7 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
           ),
           const SizedBox(height: 4),
           Text(
-            live
-                ? '模拟一条观众提问（如问价格），AI 会立即生成回复并开口播报，用于联调与演示。'
-                : '直播已结束，无法再发送测试弹幕。',
+            _testDanmakuHint(monitor.status),
             key: const Key('liveMonitorTestHint'),
             style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
           ),
@@ -560,6 +673,17 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
         ],
       ),
     );
+  }
+
+  /// 测试弹幕区说明文案：直播中说明联调用途，终态提示已结束，其余提示先开播。
+  String _testDanmakuHint(LiveStatus status) {
+    if (status == LiveStatus.live) {
+      return '模拟一条观众提问（如问价格），AI 会立即生成回复并开口播报，用于联调与演示。';
+    }
+    if (status == LiveStatus.ended || status == LiveStatus.failed) {
+      return '直播已结束，无法再发送测试弹幕。';
+    }
+    return '尚未开播，无法发送测试弹幕；点击「开始直播」进入直播后即可联调。';
   }
 
   /// 合规角标提示：恒 true、无关闭入口。

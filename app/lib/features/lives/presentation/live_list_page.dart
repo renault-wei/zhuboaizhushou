@@ -9,7 +9,8 @@ import 'package:starvoice_app/providers.dart';
 
 /// 开播配置列表页（路由 /lives）：分段展示草稿 / 就绪·合成中·进行中 / 已结束。
 /// 草稿（idle）可编辑与删除；processing / ready / live 受删除保护
-/// （服务端 409，UI 同步禁用删除）；T11 仅出合成文件，开播 / 停止等推流能力留待 T12。
+/// （服务端 409，UI 同步禁用删除）；ready / live 统一经「进入监控」跳转
+/// 现场直播工作台（G6 收口），一键开播与结束都收在工作台内完成。
 class LiveListPage extends ConsumerStatefulWidget {
   const LiveListPage({super.key});
 
@@ -61,22 +62,8 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
     _showSnack('该状态的详情与推流能力将在后续版本接入');
   }
 
-  /// 一键开播：ready → live，成功后刷新列表。
-  Future<void> _startLive(Live live) async {
-    try {
-      await ref.read(apiClientProvider).startLive(live.id);
-      if (mounted) {
-        _showSnack('已开播，直播进行中');
-        await _reload();
-      }
-    } on ApiException catch (error) {
-      if (mounted) {
-        _showSnack('开播失败：${error.message}');
-      }
-    }
-  }
-
-  /// 进入监控页：live 状态跳 /lives/:id/monitor，返回后刷新列表。
+  /// 进入监控页：ready / live 状态跳 /lives/:id/monitor（工作台内开播 /
+  /// 结束），返回后刷新列表。
   Future<void> _goMonitor(Live live) async {
     await context.push('/lives/${live.id}/monitor');
     if (mounted) {
@@ -241,8 +228,9 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
               couponNames: state.couponNames,
               onEdit: live.isEditable ? () => _goEdit(live) : null,
               onView: _viewPlaceholder,
-              onStart: live.isReady ? () => _startLive(live) : null,
-              onMonitor: live.isLive ? () => _goMonitor(live) : null,
+              onMonitor: live.isReady || live.isLive
+                  ? () => _goMonitor(live)
+                  : null,
               onEnd: live.isLive ? () => _endLive(live) : null,
               onDelete:
                   live.isDeleteProtected ? null : () => _confirmDelete(live),
@@ -341,8 +329,8 @@ Color _statusColor(LiveStatus status) {
 }
 
 /// 单条开播配置卡片：标题 + 状态徽章 + 绑定摘要 + 操作按钮。
-/// 操作按钮随状态切换：idle 编辑；ready 开播；live 进入监控 + 结束；
-/// processing / ended / failed 查看占位。
+/// 操作按钮随状态切换：idle 编辑；ready / live 进入监控（开播 / 结束
+/// 收口在工作台内）；processing / ended / failed 查看占位。
 /// 删除保护：processing / ready / live 的删除按钮禁用（服务端同样 409 拦截）。
 class _LiveCard extends StatelessWidget {
   const _LiveCard({
@@ -352,7 +340,6 @@ class _LiveCard extends StatelessWidget {
     required this.couponNames,
     required this.onEdit,
     required this.onView,
-    required this.onStart,
     required this.onMonitor,
     required this.onEnd,
     required this.onDelete,
@@ -364,7 +351,6 @@ class _LiveCard extends StatelessWidget {
   final Map<String, String> couponNames;
   final VoidCallback? onEdit;
   final VoidCallback? onView;
-  final VoidCallback? onStart;
   final VoidCallback? onMonitor;
   final VoidCallback? onEnd;
   final VoidCallback? onDelete;
@@ -444,13 +430,8 @@ class _LiveCard extends StatelessWidget {
                     onPressed: onEdit,
                     child: const Text('编辑'),
                   )
-                else if (live.status == LiveStatus.ready)
-                  FilledButton(
-                    key: Key('liveStart_${live.id}'),
-                    onPressed: onStart,
-                    child: const Text('开播'),
-                  )
-                else if (live.status == LiveStatus.live)
+                else if (live.status == LiveStatus.ready ||
+                    live.status == LiveStatus.live)
                   TextButton(
                     key: Key('liveMonitor_${live.id}'),
                     onPressed: onMonitor,

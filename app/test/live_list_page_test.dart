@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:starvoice_app/features/lives/presentation/live_form_page.dart';
 import 'package:starvoice_app/features/lives/presentation/live_list_page.dart';
+import 'package:starvoice_app/features/lives/presentation/live_monitor_page.dart';
 import 'package:starvoice_app/providers.dart';
 
 import 'fake_backend.dart';
@@ -56,6 +57,12 @@ Future<void> _pumpListRouter(WidgetTester tester, FakeBackend backend) async {
       GoRoute(
         path: '/lives/:id',
         builder: (context, state) => LiveFormPage(
+          liveId: state.pathParameters['id'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: '/lives/:id/monitor',
+        builder: (context, state) => LiveMonitorPage(
           liveId: state.pathParameters['id'] ?? '',
         ),
       ),
@@ -139,10 +146,12 @@ void main() {
     expect(find.text('就绪'), findsOneWidget);
     expect(find.text('已结束'), findsOneWidget);
 
-    // 草稿可编辑（编辑按钮），非 idle 走「查看」占位
+    // 操作按钮：草稿可编辑；ready / live 统一「进入监控」（开播收口在工作台）；
+    // 已结束走「查看」占位，ready 不再有列表内「开播」按钮
     expect(find.byKey(const Key('liveEdit_live-001')), findsOneWidget);
-    expect(find.byKey(const Key('liveView_live-002')), findsOneWidget);
+    expect(find.byKey(const Key('liveMonitor_live-002')), findsOneWidget);
     expect(find.byKey(const Key('liveView_live-003')), findsOneWidget);
+    expect(find.byKey(const Key('liveStart_live-002')), findsNothing);
     expect(find.byKey(const Key('liveEdit_live-002')), findsNothing);
 
     // 摘要展示音色 / 话术 / 团购券名称
@@ -186,7 +195,7 @@ void main() {
     expect(deleteButton.onPressed, isNull);
   });
 
-  testWidgets('删除保护：就绪配置点查看展示占位提示，禁用删除不弹确认框', (WidgetTester tester) async {
+  testWidgets('就绪配置无列表内「开播」按钮：删除禁用不弹确认框', (WidgetTester tester) async {
     final backend = FakeBackend(
       lives: <Map<String, dynamic>>[
         _liveJson(id: 'live-002', title: '晚市就绪直播', status: 'ready'),
@@ -194,19 +203,14 @@ void main() {
     );
     await _pumpListPage(tester, backend);
 
-    // 查看占位（T10 无推流能力）
-    await tester.tap(find.byKey(const Key('liveView_live-002')));
-    await tester.pump();
-    expect(find.text('查看详情与开播 / 停止将在 T11/T12 推流能力接入后开放'), findsOneWidget);
+    // G6 收口：一键开播移入工作台，列表卡片只保留「进入监控」入口
+    expect(find.byKey(const Key('liveMonitor_live-002')), findsOneWidget);
+    expect(find.byKey(const Key('liveStart_live-002')), findsNothing);
 
     // 禁用删除：点击不弹确认框
     await tester.tap(find.byKey(const Key('liveDelete_live-002')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('liveDeleteDialog')), findsNothing);
-
-    // 等待 SnackBar 自动消失，避免遗留计时器
-    await tester.pump(const Duration(seconds: 5));
-    await tester.pumpAndSettle();
   });
 
   testWidgets('删除草稿：取消不删，确认后移除并回到空态', (WidgetTester tester) async {
@@ -252,5 +256,41 @@ void main() {
 
     expect(find.byKey(const Key('liveFormPage')), findsOneWidget);
     expect(find.text('新建开播配置'), findsOneWidget);
+  });
+
+  testWidgets('就绪卡片点「进入监控」跳转现场直播工作台：可一键开始并转直播中', (WidgetTester tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-002', title: '晚市就绪直播', status: 'ready'),
+      ],
+    );
+    await _pumpListRouter(tester, backend);
+
+    // G6 收口：列表不再有「开播」，就绪入口统一为「进入监控」
+    expect(find.byKey(const Key('liveMonitor_live-002')), findsOneWidget);
+    expect(find.byKey(const Key('liveStart_live-002')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('liveMonitor_live-002')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    // 工作台停在就绪态：出现「开始直播」主操作，未自动开播
+    expect(find.text('现场直播工作台'), findsOneWidget);
+    expect(find.byKey(const Key('liveMonitorStartButton')), findsOneWidget);
+    expect(find.byKey(const Key('liveEndButton')), findsNothing);
+    expect(backend.lives.first['status'], 'ready');
+
+    // 点击开始：后端转 live，工作台进入直播中监控
+    await tester.tap(find.byKey(const Key('liveMonitorStartButton')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(backend.lives.first['status'], 'live');
+    expect(find.byKey(const Key('liveEndButton')), findsOneWidget);
+    expect(find.byKey(const Key('liveMonitorStartButton')), findsNothing);
+
+    // 收尾：卸载整棵树，取消工作台轮询 / 秒表定时器
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 5));
   });
 }
