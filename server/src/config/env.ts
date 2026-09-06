@@ -59,6 +59,14 @@ export const env = {
     forceMock: optionalEnv('MOCK_COSYVOICE') === 'true',
   },
 
+  // G5 现场口播出口：临时用 Windows 本机语音出声（模式 B 现场互动），换商用/克隆音色只改这里
+  liveSpeaker: {
+    // 现场互动回复是否出声：默认开；非 Windows 平台自动不播（见 liveSpeaker.ts）
+    enabled: optionalEnv('LIVE_SPEAKER_ENABLED') !== 'false',
+    // Windows 本机音色名（可选）：不填用内置默认女声
+    localTtsVoice: optionalEnv('LOCAL_TTS_VOICE'),
+  },
+
   // 抖音开放平台：OAuth + 团购券 + 推流
   douyin: {
     clientKey: optionalEnv('DOUYIN_CLIENT_KEY'),

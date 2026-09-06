@@ -6,6 +6,7 @@ import { onDanmaku, type LiveDanmakuRecord } from './danmaku';
 import type { LiveStatus } from './live';
 import { replyProvider, type GenerateReplyInput } from './reply';
 import { scanSensitive } from './sensitive';
+import { liveSpeaker } from './liveSpeaker';
 
 // 实时互动引擎（G4）：订阅 G3 弹幕事件 → 加载商家上下文 → 决策（频控/是否回复）
 // → DeepSeek 生成 1~2 句口播 → 敏感词兜底 → 交给出口（G5 TTS/播放队列）。
@@ -270,4 +271,7 @@ export function createInteractionEngine(
 }
 
 // 全局单例：index.ts 启动时 subscribe() 即接入实时链路
-export const interactionEngine = createInteractionEngine();
+// G5：引擎出口接现场口播 —— 回复文字 → 本机语音合成 → 播放队列（失败由引擎吞掉，不影响直播主线）
+export const interactionEngine = createInteractionEngine({
+  onReply: (reply) => liveSpeaker.speak(reply.text).then(() => undefined),
+});
