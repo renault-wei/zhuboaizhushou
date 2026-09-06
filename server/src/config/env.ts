@@ -65,11 +65,13 @@ export const env = {
     enabled: optionalEnv('LIVE_SPEAKER_ENABLED') !== 'false',
     // Windows 本机音色名（可选）：不填用内置默认女声
     localTtsVoice: optionalEnv('LOCAL_TTS_VOICE'),
+    // TTS 通道：local = Windows 本机 SAPI（默认，保出声）；volc = 火山豆包语音（需账号已开通模型服务）
+    ttsProvider: optionalEnv('LIVE_TTS_PROVIDER') ?? 'local',
   },
 
   // 火山引擎（豆包语音）TTS：G5 商用音色旁路（CosyVoice 降为备选）
-  // 适配器骨架已落地（volcTTS.ts），key 到位仅需填 VOLC_TTS_API_KEY；
-  // 真连验证通过后由 liveSpeaker 注入切换，默认不接现出声链路。
+  // 适配器已落地（volcTTS.ts），key 已接线：liveSpeaker 在 LIVE_TTS_PROVIDER=volc 且 key 非空时切换，
+  // 其余情况回退本机 SAPI 保出声（火山模型服务开通前请保持默认 local）。
   volcTTS: {
     // 火山语音控制台 API Key（https://console.volcengine.com/speech/new/setting/apikeys）
     apiKey: optionalEnv('VOLC_TTS_API_KEY'),

@@ -11,8 +11,8 @@ import type { LocalWavSynth } from './liveSpeaker';
 // G5 商用音色旁路（火山引擎 · 豆包语音合成大模型 2.0）：
 // - 按官方「HTTP Chunked/SSE 单向流式-V3」接口实现（openspeech.bytedance.com/api/v3/tts/unidirectional/sse）；
 // - 鉴权用新版控制台 API Key（X-Api-Key），资源 ID 默认 seed-tts-2.0；
-// - 本轮只落地 provider 骨架 + 配置项：不接默认出声链路（liveSpeaker 仍用本机 SAPI 临时音色），
-//   用户填好 VOLC_TTS_API_KEY 并把本 provider 注入 liveSpeaker 即可换商用音色，链路无需改动；
+// - 接入方式：liveSpeaker 在 LIVE_TTS_PROVIDER=volc 且 VOLC_TTS_API_KEY 已配置时换用本 provider 出声；
+//   默认 local / 未配 key / 火山模型服务未开通时回退本机 SAPI 保出声，链路代码无需改动；
 // - 播放器（System.Media.SoundPlayer）只认 PCM wav：请求官方默认 mp3 → ffmpeg 转 16bit 单声道 wav。
 
 // ---------- 常量 ----------
@@ -356,5 +356,5 @@ export function createVolcTtsSynth(options: VolcTtsSynthOptions = {}): VolcTtsSy
   return new VolcTtsSynth(options);
 }
 
-// 全局单例：配置 VOLC_TTS_API_KEY 并真连验证通过后，作为 liveSpeaker 的音色 provider 注入
+// 全局单例：liveSpeaker 在配置了 VOLC_TTS_API_KEY 时自动用它作为出声音色
 export const volcTtsSynth = createVolcTtsSynth();

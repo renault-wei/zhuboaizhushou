@@ -5,12 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { env } from '../config/env';
 import { createVoicePlayer, type VoicePlayer } from './voicePlayer';
+import { volcTtsSynth } from './volcTTS';
 
-// G5 现场口播出口（临时接线：Windows 本机语音合成 → 播放队列 → 默认播放设备）。
+// G5 现场口播出口：TTS 合成 → 播放队列 → 默认播放设备。
 // 本模块是 G4 `onReply` 的消费方：引擎产出的回复文字进来 → 合成本机女声 wav → 排队出声；
 // 系统默认播放设备指向 VB-Cable 虚拟声卡时，这段声音会像麦克风一样进入抖音直播伴侣。
-// 换商用 / 克隆音色（CosyVoice 等）时只替换「合成实现 + 默认音色配置」，
-// 播放队列与引擎接线保持不变。
+// 音色策略：LIVE_TTS_PROVIDER=volc 且已配置 VOLC_TTS_API_KEY（火山豆包语音，商用音色）时走火山 provider；
+// 默认 local = Windows 本机 SAPI（火山账号开通模型服务前先保住出声，避免直播演示无声）；
+// 火山真连验证通过后，把 .env 的 LIVE_TTS_PROVIDER 改为 volc 即可整体切换，播放队列与引擎接线不变。
 
 // ---------- 常量 ----------
 
@@ -193,5 +195,12 @@ export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveS
   };
 }
 
-// 全局单例：交互引擎 onReply 出口共用
-export const liveSpeaker = createLiveSpeaker();
+// 全局单例：交互引擎 onReply 出口共用。
+// LIVE_TTS_PROVIDER=volc 且火山 key 已配置时整体切到 volcTtsSynth（volcTTS.ts 内部自己读环境变量）；
+// 其余情况（默认 local / 未配 key）回退本机 SAPI 音色。
+export const liveSpeaker = createLiveSpeaker({
+  synth:
+    env.liveSpeaker.ttsProvider === 'volc' && env.volcTTS.apiKey
+      ? volcTtsSynth
+      : undefined,
+});
