@@ -1,5 +1,7 @@
-/// 直播中监控页：/lives/:id/monitor。
-/// 展示实时状态 + 已播时长（每秒刷新，hh:mm:ss）+ 弹幕日志（只读滚动）。
+/// 现场直播工作台：/lives/:id/monitor（现场线 G6 前端）。
+/// 画面真人出镜，后台由「AI 语音主播」实时朗读弹幕、介绍产品并回复提问；
+/// 本页展示直播状态 + 已播时长（每秒刷新，hh:mm:ss）+ AI 播报状态 +
+/// 测试弹幕注入（模拟观众提问，触发 G3→G4→G5 真实语音链路）+ 弹幕日志。
 /// 进入页面启动轮询（monitor 每 3s、danmaku 每 3s），退出停止。
 /// 「AI 智能直播」角标恒为 true，本页强制展示角标提示、无关闭入口。
 library;
@@ -14,7 +16,8 @@ import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/providers.dart';
 
-/// 直播监控页：只读展示直播中状态 / 已播时长 / 弹幕，支持一键结束直播。
+/// 现场直播工作台：真人出镜 + 后台 AI 语音主播的直播间控制台，
+/// 展示直播状态 / AI 播报状态 / 弹幕日志，支持测试弹幕注入与一键结束直播。
 class LiveMonitorPage extends ConsumerStatefulWidget {
   const LiveMonitorPage({super.key, required this.liveId});
 
@@ -50,6 +53,12 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   int _localSeconds = 0;
   Timer? _ticker;
 
+  /// 测试弹幕输入框（直播中可用，模拟观众提问触发 AI 语音回复）
+  final TextEditingController _testController = TextEditingController();
+
+  /// 测试弹幕发送中（防重复点击）
+  bool _sendingDanmaku = false;
+
   @override
   void initState() {
     super.initState();
@@ -75,6 +84,7 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     _monitorTimer?.cancel();
     _danmakuTimer?.cancel();
     _ticker?.cancel();
+    _testController.dispose();
     super.dispose();
   }
 
@@ -182,11 +192,51 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     }
   }
 
+  /// 发送测试弹幕：写入弹幕网关（G3）→ 实时互动引擎（G4）生成回复 →
+  /// 本机语音出口播报（G5）。仅直播中可发；成功后清空输入并立即对齐日志。
+  Future<void> _sendTestDanmaku() async {
+    final content = _testController.text.trim();
+    if (content.isEmpty || _sendingDanmaku) {
+      return;
+    }
+    final monitor = _monitor;
+    if (monitor == null || monitor.status != LiveStatus.live) {
+      return;
+    }
+    setState(() {
+      _sendingDanmaku = true;
+    });
+    try {
+      await ref
+          .read(apiClientProvider)
+          .postDanmaku(widget.liveId, content: content);
+      if (!mounted) {
+        return;
+      }
+      _testController.clear();
+      setState(() {
+        _sendingDanmaku = false;
+      });
+      _showSnack('测试弹幕已发送，AI 语音主播开始回复');
+      // 立即与后端对齐（弹幕日志 + 计数），不等下一次轮询
+      _loadDanmaku();
+      _loadMonitor();
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _sendingDanmaku = false;
+      });
+      _showSnack('发送失败：${error.message}');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       key: const Key('liveMonitorPage'),
-      appBar: AppBar(title: const Text('直播监控')),
+      appBar: AppBar(title: const Text('现场直播工作台')),
       body: _buildBody(),
       bottomNavigationBar: _ending
           ? null
@@ -265,7 +315,11 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
         padding: const EdgeInsets.all(16),
         children: [
           _buildStatusCard(monitor, durationSeconds),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
+          _buildAiHostCard(monitor),
+          const SizedBox(height: 12),
+          _buildTestDanmakuSection(monitor),
+          const SizedBox(height: 12),
           _buildComplianceBadge(monitor),
           const SizedBox(height: 16),
           _buildDanmakuSection(),
@@ -339,6 +393,171 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// AI 语音主播运行卡：真人出镜画面，AI 负责后台语音播报。
+  Widget _buildAiHostCard(LiveMonitor monitor) {
+    final live = monitor.status == LiveStatus.live;
+    return Card(
+      key: const Key('liveMonitorAiHostCard'),
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                Icons.record_voice_over,
+                color: Colors.orange.shade700,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'AI 语音主播',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: (live ? Colors.teal : Colors.grey)
+                              .withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          live ? '播报中' : '已停止',
+                          key: const Key('liveMonitorAiHostState'),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: live ? Colors.teal.shade700 : Colors.grey,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    live
+                        ? '真人出镜现场，AI 语音主播在后台实时朗读弹幕、介绍产品并回复提问。'
+                        : '直播已结束，AI 语音播报已停止。',
+                    key: const Key('liveMonitorAiHostNote'),
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey.shade600,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 测试弹幕注入区：模拟一条观众提问，跑通「弹幕 → AI 回复 → 语音播报」
+  /// 全链路联调；仅直播中可用（服务端非 live 返回 409）。
+  Widget _buildTestDanmakuSection(LiveMonitor monitor) {
+    final live = monitor.status == LiveStatus.live;
+    final canSend = live &&
+        !_sendingDanmaku &&
+        _testController.text.trim().isNotEmpty;
+    return Container(
+      key: const Key('liveMonitorTestSection'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.blueGrey.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.science_outlined,
+                  size: 16, color: Colors.blueGrey.shade600),
+              const SizedBox(width: 6),
+              const Text(
+                '发送测试弹幕',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            live
+                ? '模拟一条观众提问（如问价格），AI 会立即生成回复并开口播报，用于联调与演示。'
+                : '直播已结束，无法再发送测试弹幕。',
+            key: const Key('liveMonitorTestHint'),
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: TextField(
+                  key: const Key('liveMonitorTestInput'),
+                  controller: _testController,
+                  enabled: live && !_sendingDanmaku,
+                  maxLength: 200,
+                  textInputAction: TextInputAction.send,
+                  onChanged: (_) => setState(() {}),
+                  onSubmitted: canSend ? (_) => _sendTestDanmaku() : null,
+                  decoration: InputDecoration(
+                    hintText: '如：今天双人套餐多少钱？',
+                    counterText: '',
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.tonal(
+                key: const Key('liveMonitorTestSend'),
+                onPressed: canSend ? _sendTestDanmaku : null,
+                child: _sendingDanmaku
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('发送'),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

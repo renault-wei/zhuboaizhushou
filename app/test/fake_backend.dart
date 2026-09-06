@@ -77,9 +77,11 @@ class FakeBackend implements HttpClientAdapter {
   final List<Map<String, dynamic>> coupons;
   /// 我的开播配置（内存）：结构与服务端 /api/lives 返回保持一致。
   final List<Map<String, dynamic>> lives;
-  /// 我的直播弹幕日志（内存）：结构与服务端 /api/lives/:id/danmaku 返回保持一致。
+  /// 我的直播弹幕日志（内存）：结构与服务端 /api/lives/:id/danmaku 返回保持一致；
+  /// 弹幕网关写入（G3）后条目带 liveId，供按场次过滤与计数。
   final List<Map<String, dynamic>> danmaku;
   int _liveSeq = 0;
+  int _danmakuSeq = 0;
 
   /// 模拟 DeepSeek 返回的话术全文：生成接口使用，测试可自行配置。
   final String generatedScriptContent;
@@ -206,23 +208,35 @@ class FakeBackend implements HttpClientAdapter {
     if (voiceItem != null && options.method == 'DELETE') {
       return _deleteVoice(voiceItem.group(1)!);
     }
-    // T11 推流引擎 v1：/api/lives/:id 下的子路径（video / prepare / stream-status），
-    // 需先于单段正则匹配，避免被 /api/lives/:id 的 GET/PATCH/DELETE 规则吞掉。
-    final liveAction =
-        RegExp(r'^/api/lives/([^/]+)/(video|prepare|stream-status)$')
-            .firstMatch(path);
+    // T11 推流 / 会话子路径：/api/lives/:id 下的子路径（video / prepare /
+    // stream-status / start / end / monitor / danmaku）需先于单段正则匹配，
+    // 避免被 /api/lives/:id 的 GET/PATCH/DELETE 规则吞掉。
+    final liveAction = RegExp(
+            r'^/api/lives/([^/]+)/(video|prepare|stream-status|start|end|monitor|danmaku)$')
+        .firstMatch(path);
     if (liveAction != null && options.method == 'POST') {
       switch (liveAction.group(2)) {
         case 'video':
           return _uploadLiveVideo(liveAction.group(1)!, options);
         case 'prepare':
           return _prepareLive(liveAction.group(1)!);
+        case 'start':
+          return _startLive(liveAction.group(1)!);
+        case 'end':
+          return _endLive(liveAction.group(1)!);
+        case 'danmaku':
+          return _postDanmaku(liveAction.group(1)!, options);
       }
     }
-    if (liveAction != null &&
-        options.method == 'GET' &&
-        liveAction.group(2) == 'stream-status') {
-      return _streamStatus(liveAction.group(1)!);
+    if (liveAction != null && options.method == 'GET') {
+      switch (liveAction.group(2)) {
+        case 'stream-status':
+          return _streamStatus(liveAction.group(1)!);
+        case 'monitor':
+          return _liveMonitor(liveAction.group(1)!);
+        case 'danmaku':
+          return _listDanmaku(liveAction.group(1)!, options);
+      }
     }
     final liveItem = RegExp(r'^/api/lives/([^/]+)$').firstMatch(path);
     if (liveItem != null && options.method == 'GET') {
@@ -463,6 +477,164 @@ class FakeBackend implements HttpClientAdapter {
       'videoSourceUrl': live['videoSourceUrl'],
       'aiBadgeShown': live['aiBadgeShown'],
     });
+  }
+
+  /// 一键开播（镜像服务端 startLive）：ready → live，记录 startedAt 并清空
+  /// endedAt；未就绪返回 400 LIVE_NOT_READY。
+  ResponseBody _startLive(String id) {
+    final index = lives.indexWhere((live) => live['id'] == id);
+    if (index < 0) {
+      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+    }
+    if (lives[index]['status'] != 'ready') {
+      return _jsonResponse(
+        {'error': 'LIVE_NOT_READY', 'message': '只有合成完成（就绪）的直播才能开播'},
+        400,
+      );
+    }
+    final now = DateTime.now().toUtc().toIso8601String();
+    final updated = <String, dynamic>{
+      ...lives[index],
+      'status': 'live',
+      'startedAt': now,
+      'endedAt': null,
+      'updatedAt': now,
+    };
+    lives[index] = updated;
+    return _jsonResponse({'live': updated});
+  }
+
+  /// 结束直播（镜像服务端 endLive）：live → ended，记录 endedAt；
+  /// 非直播中返回 400 LIVE_NOT_LIVE。
+  ResponseBody _endLive(String id) {
+    final index = lives.indexWhere((live) => live['id'] == id);
+    if (index < 0) {
+      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+    }
+    if (lives[index]['status'] != 'live') {
+      return _jsonResponse(
+        {'error': 'LIVE_NOT_LIVE', 'message': '只有直播中的场次才能结束'},
+        400,
+      );
+    }
+    final now = DateTime.now().toUtc().toIso8601String();
+    final updated = <String, dynamic>{
+      ...lives[index],
+      'status': 'ended',
+      'endedAt': now,
+      'updatedAt': now,
+    };
+    lives[index] = updated;
+    return _jsonResponse({'live': updated});
+  }
+
+  /// 直播中监控快照（镜像服务端 getLiveMonitor）：状态 + 已播时长 + 弹幕计数。
+  ResponseBody _liveMonitor(String id) {
+    final live = _findLive(id);
+    if (live == null) {
+      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+    }
+    var durationSeconds = 0;
+    final startedAt = DateTime.tryParse(live['startedAt']?.toString() ?? '');
+    final endedAt = DateTime.tryParse(live['endedAt']?.toString() ?? '');
+    if (live['status'] == 'live' && startedAt != null) {
+      durationSeconds = (DateTime.now().millisecondsSinceEpoch -
+              startedAt.millisecondsSinceEpoch) ~/
+          1000;
+    } else if (live['status'] == 'ended' && startedAt != null && endedAt != null) {
+      durationSeconds =
+          (endedAt.millisecondsSinceEpoch - startedAt.millisecondsSinceEpoch) ~/ 1000;
+    }
+    if (durationSeconds < 0) {
+      durationSeconds = 0;
+    }
+    return _jsonResponse(<String, dynamic>{
+      'status': live['status'],
+      'videoSourceUrl': live['videoSourceUrl'],
+      'aiBadgeShown': live['aiBadgeShown'],
+      'startedAt': live['startedAt'],
+      'endedAt': live['endedAt'],
+      'durationSeconds': durationSeconds,
+      'danmakuCount': _danmakuFor(id).length,
+    });
+  }
+
+  /// 弹幕日志（只读）：按 sentAt 倒序取最近 N 条（缺省 50，镜像服务端）。
+  ResponseBody _listDanmaku(String id, RequestOptions options) {
+    final live = _findLive(id);
+    if (live == null) {
+      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+    }
+    var limit = 50;
+    final rawLimit = options.queryParameters['limit'];
+    if (rawLimit != null) {
+      final parsed = int.tryParse(rawLimit.toString());
+      if (parsed == null || parsed < 1) {
+        return _jsonResponse(
+          {'error': 'LIMIT_INVALID', 'message': 'limit 必须为正整数'},
+          400,
+        );
+      }
+      limit = parsed;
+    }
+    final items = List<Map<String, dynamic>>.of(_danmakuFor(id))
+      ..sort((a, b) {
+        final aAt = DateTime.tryParse(a['sentAt']?.toString() ?? '');
+        final bAt = DateTime.tryParse(b['sentAt']?.toString() ?? '');
+        return (bAt ?? DateTime.fromMillisecondsSinceEpoch(0))
+            .compareTo(aAt ?? DateTime.fromMillisecondsSinceEpoch(0));
+      });
+    return _jsonResponse(items.take(limit).toList());
+  }
+
+  /// 弹幕写入（G3 弹幕网关写入侧模拟）：仅直播中的场次可写，镜像服务端
+  /// 校验与错误码（内容非法 400 / 非直播中 409 / 不存在 404），成功 201。
+  ResponseBody _postDanmaku(String id, RequestOptions options) {
+    final live = _findLive(id);
+    if (live == null) {
+      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+    }
+    final body = _readBody(options);
+    final content = body['content']?.toString().trim() ?? '';
+    if (content.isEmpty || content.length > 200) {
+      return _jsonResponse(
+        {'error': 'CONTENT_INVALID', 'message': '弹幕内容不能为空且不超过 200 字'},
+        400,
+      );
+    }
+    if (live['status'] != 'live') {
+      return _jsonResponse(
+        {
+          'error': 'LIVE_NOT_LIVE',
+          'message': '只有直播中的场次才能接收弹幕（当前：${live['status']}）',
+        },
+        409,
+      );
+    }
+    final rawNickname = body['senderNickname']?.toString().trim() ?? '';
+    final senderNickname = rawNickname.isEmpty
+        ? null
+        : (rawNickname.length <= 50
+            ? rawNickname
+            : rawNickname.substring(0, 50));
+    _danmakuSeq += 1;
+    final record = <String, dynamic>{
+      'id': 'dm-${_danmakuSeq.toString().padLeft(4, '0')}',
+      'liveId': id,
+      'content': content,
+      'senderNickname': senderNickname,
+      'sentAt': DateTime.now().toUtc().toIso8601String(),
+    };
+    danmaku.insert(0, record);
+    return _jsonResponse({'danmaku': record}, 201);
+  }
+
+  /// 某场次下的弹幕条目（按 liveId 过滤；预置条目必须带 liveId）。
+  List<Map<String, dynamic>> _danmakuFor(String liveId) {
+    return <Map<String, dynamic>>[
+      for (final item in danmaku)
+        if (item['liveId']?.toString() == liveId) item,
+    ];
   }
 
   Map<String, dynamic>? _findLive(String id) {

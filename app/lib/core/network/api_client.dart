@@ -518,6 +518,24 @@ class ApiClient {
     }
   }
 
+  /// 注入一条弹幕（模拟观众提问 / 联调用）：写入弹幕网关（G3）后会触发
+  /// 实时互动引擎（G4）生成回复并由本机语音出口播报（G5）。
+  /// 仅直播中的场次可写入（非 live 服务端返回 409 LIVE_NOT_LIVE）。
+  Future<LiveDanmaku> postDanmaku(String id, {required String content}) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/lives/$id/danmaku',
+        data: <String, dynamic>{'content': content},
+      );
+      final raw = response.data?['danmaku'];
+      return LiveDanmaku.fromJson(
+        raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{},
+      );
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
   /// 从响应体解析 Live：POST/PATCH 形如 { live: {...} }，GET :id 直接返回对象本身。
   Live _parseLive(Map<String, dynamic>? data) {
     final raw = data?['live'];
