@@ -60,7 +60,9 @@ export type LiveErrorCode =
   | 'SCRIPT_NOT_OWNED'
   | 'LIVE_NOT_FOUND'
   | 'LIVE_IN_PROGRESS'
-  | 'LIVE_NO_FIELDS_TO_UPDATE';
+  | 'LIVE_NO_FIELDS_TO_UPDATE'
+  | 'LIVE_NOT_READY'
+  | 'LIVE_NOT_LIVE';
 
 /** 直播配置业务错误：携带机器可读错误码，由路由层翻译成 HTTP 状态 */
 export class LiveError extends Error {
@@ -76,10 +78,10 @@ export class LiveError extends Error {
 // ---------- 行转换 ----------
 
 /** drizzle 查询返回的行类型（时间字段为 Date） */
-type LiveRow = typeof livesTable.$inferSelect;
+export type LiveRow = typeof livesTable.$inferSelect;
 
 /** 数据库行 → 对外 Live：时间统一转 ISO8601 字符串 */
-function toLive(row: LiveRow): Live {
+export function toLive(row: LiveRow): Live {
   return {
     id: row.id,
     title: row.title ?? '',

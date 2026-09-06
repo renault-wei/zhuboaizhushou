@@ -14,6 +14,7 @@ import { createWriteStream, mkdirSync, rmSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { streamingService } from '../services/streaming';
+import { endLive, getLiveMonitor, listDanmaku, startLive } from '../services/liveSession';
 
 // 直播状态全集：用于列表 ?status= 过滤校验（与服务端 live_status 枚举一致）
 const LIVE_STATUSES: LiveStatus[] = ['idle', 'processing', 'ready', 'live', 'ended', 'failed'];
@@ -328,5 +329,68 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       videoSourceUrl: live.videoSourceUrl,
       aiBadgeShown: live.aiBadgeShown,
     };
+  });
+
+  // 一键开播：ready → live（T13 状态机流转 + 记录 startedAt；不接 RTMP，推流留 T12）
+  app.post('/api/lives/:id/start', { preHandler: app.authenticate }, async (request, reply) => {
+    const { id } = request.params as LiveIdParams;
+    try {
+      const live = await startLive(request.user.userId, id);
+      if (!live) {
+        return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
+      }
+      return { live };
+    } catch (err) {
+      if (err instanceof LiveError) {
+        return reply.code(statusCodeOf(err.code)).send({ error: err.code, message: err.message });
+      }
+      throw err;
+    }
+  });
+
+  // 结束直播：live → ended（记录 endedAt）
+  app.post('/api/lives/:id/end', { preHandler: app.authenticate }, async (request, reply) => {
+    const { id } = request.params as LiveIdParams;
+    try {
+      const live = await endLive(request.user.userId, id);
+      if (!live) {
+        return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
+      }
+      return { live };
+    } catch (err) {
+      if (err instanceof LiveError) {
+        return reply.code(statusCodeOf(err.code)).send({ error: err.code, message: err.message });
+      }
+      throw err;
+    }
+  });
+
+  // 直播中监控快照：状态 + 已播时长 + 弹幕计数（客户端轮询）
+  app.get('/api/lives/:id/monitor', { preHandler: app.authenticate }, async (request, reply) => {
+    const { id } = request.params as LiveIdParams;
+    const monitor = await getLiveMonitor(request.user.userId, id);
+    if (!monitor) {
+      return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
+    }
+    return monitor;
+  });
+
+  // 弹幕日志（只读）：按 sentAt 倒序返回最近 N 条
+  app.get('/api/lives/:id/danmaku', { preHandler: app.authenticate }, async (request, reply) => {
+    const { id } = request.params as LiveIdParams;
+    const query = request.query as Record<string, unknown> | undefined;
+    let limit: number | undefined;
+    if (query && query.limit !== undefined && query.limit !== null) {
+      const rawLimit = Number(query.limit);
+      if (!Number.isInteger(rawLimit) || rawLimit < 1) {
+        return reply.code(400).send({ error: 'LIMIT_INVALID', message: 'limit 必须为正整数' });
+      }
+      limit = rawLimit;
+    }
+    const danmaku = await listDanmaku(request.user.userId, id, limit ?? 50);
+    if (danmaku === null) {
+      return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
+    }
+    return danmaku;
   });
 };

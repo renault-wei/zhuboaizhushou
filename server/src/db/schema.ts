@@ -193,6 +193,28 @@ export const lives = pgTable(
   (table) => [index('lives_user_id_idx').on(table.userId), index('lives_status_idx').on(table.status)],
 );
 
+// ---------- live_danmaku：直播弹幕日志（T13 只读，真实来源待抖音推流接入）----------
+export const liveDanmaku = pgTable(
+  'live_danmaku',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    liveId: uuid('live_id')
+      .notNull()
+      .references(() => lives.id, { onDelete: 'cascade' }),
+    // 弹幕内容
+    content: text('content').notNull(),
+    // 发送者昵称（抖音观众，可空）
+    senderNickname: varchar('sender_nickname', { length: 50 }),
+    // 弹幕到达时间
+    sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('live_danmaku_live_id_idx').on(table.liveId),
+    index('live_danmaku_sent_at_idx').on(table.sentAt),
+  ],
+);
+
 // ---------- orders：订单（微信支付单号 / 金额 / 状态）----------
 export const orders = pgTable(
   'orders',

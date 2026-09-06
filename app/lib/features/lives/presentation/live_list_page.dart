@@ -56,9 +56,69 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
     }
   }
 
-  /// 查看占位：T10 不做推流 / 开播，仅提示后续版本接入。
+  /// 查看占位：processing / ended / failed 暂无详情页，仅提示后续版本接入。
   void _viewPlaceholder() {
-    _showSnack('查看详情与开播 / 停止将在 T11/T12 推流能力接入后开放');
+    _showSnack('该状态的详情与推流能力将在后续版本接入');
+  }
+
+  /// 一键开播：ready → live，成功后刷新列表。
+  Future<void> _startLive(Live live) async {
+    try {
+      await ref.read(apiClientProvider).startLive(live.id);
+      if (mounted) {
+        _showSnack('已开播，直播进行中');
+        await _reload();
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        _showSnack('开播失败：${error.message}');
+      }
+    }
+  }
+
+  /// 进入监控页：live 状态跳 /lives/:id/monitor，返回后刷新列表。
+  Future<void> _goMonitor(Live live) async {
+    await context.push('/lives/${live.id}/monitor');
+    if (mounted) {
+      await _reload();
+    }
+  }
+
+  /// 结束直播：live → ended，二次确认后调用，成功后刷新列表。
+  Future<void> _endLive(Live live) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('liveEndDialog'),
+        title: const Text('结束直播'),
+        content: const Text('结束后直播将转为已结束，确定结束？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('liveEndConfirmButton'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('结束直播'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    try {
+      await ref.read(apiClientProvider).endLive(live.id);
+      if (mounted) {
+        _showSnack('直播已结束');
+        await _reload();
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        _showSnack('结束失败：${error.message}');
+      }
+    }
   }
 
   Future<void> _confirmDelete(Live live) async {
@@ -180,7 +240,10 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
               scriptTitles: state.scriptTitles,
               couponNames: state.couponNames,
               onEdit: live.isEditable ? () => _goEdit(live) : null,
-              onView: live.isEditable ? null : _viewPlaceholder,
+              onView: _viewPlaceholder,
+              onStart: live.isReady ? () => _startLive(live) : null,
+              onMonitor: live.isLive ? () => _goMonitor(live) : null,
+              onEnd: live.isLive ? () => _endLive(live) : null,
               onDelete:
                   live.isDeleteProtected ? null : () => _confirmDelete(live),
             ),
@@ -278,7 +341,9 @@ Color _statusColor(LiveStatus status) {
 }
 
 /// 单条开播配置卡片：标题 + 状态徽章 + 绑定摘要 + 操作按钮。
-/// 删除保护：ready / live 的删除按钮禁用（服务端同样 409 拦截）。
+/// 操作按钮随状态切换：idle 编辑；ready 开播；live 进入监控 + 结束；
+/// processing / ended / failed 查看占位。
+/// 删除保护：processing / ready / live 的删除按钮禁用（服务端同样 409 拦截）。
 class _LiveCard extends StatelessWidget {
   const _LiveCard({
     required this.live,
@@ -287,6 +352,9 @@ class _LiveCard extends StatelessWidget {
     required this.couponNames,
     required this.onEdit,
     required this.onView,
+    required this.onStart,
+    required this.onMonitor,
+    required this.onEnd,
     required this.onDelete,
   });
 
@@ -296,6 +364,9 @@ class _LiveCard extends StatelessWidget {
   final Map<String, String> couponNames;
   final VoidCallback? onEdit;
   final VoidCallback? onView;
+  final VoidCallback? onStart;
+  final VoidCallback? onMonitor;
+  final VoidCallback? onEnd;
   final VoidCallback? onDelete;
 
   /// 卡片摘要：优先展示引用资源名称，缺失时降级为原始 id。
@@ -367,11 +438,23 @@ class _LiveCard extends StatelessWidget {
             const SizedBox(height: 6),
             Row(
               children: [
-                if (onEdit != null)
+                if (live.status == LiveStatus.idle)
                   TextButton(
                     key: Key('liveEdit_${live.id}'),
                     onPressed: onEdit,
                     child: const Text('编辑'),
+                  )
+                else if (live.status == LiveStatus.ready)
+                  FilledButton(
+                    key: Key('liveStart_${live.id}'),
+                    onPressed: onStart,
+                    child: const Text('开播'),
+                  )
+                else if (live.status == LiveStatus.live)
+                  TextButton(
+                    key: Key('liveMonitor_${live.id}'),
+                    onPressed: onMonitor,
+                    child: const Text('进入监控'),
                   )
                 else
                   TextButton(
@@ -380,6 +463,15 @@ class _LiveCard extends StatelessWidget {
                     child: const Text('查看'),
                   ),
                 const Spacer(),
+                if (live.status == LiveStatus.live)
+                  TextButton(
+                    key: Key('liveEndAction_${live.id}'),
+                    onPressed: onEnd,
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.red,
+                    ),
+                    child: const Text('结束'),
+                  ),
                 IconButton(
                   key: Key('liveDelete_${live.id}'),
                   onPressed: onDelete,

@@ -45,10 +45,12 @@ class FakeBackend implements HttpClientAdapter {
     List<Map<String, dynamic>>? scripts,
     List<Map<String, dynamic>>? coupons,
     List<Map<String, dynamic>>? lives,
+    List<Map<String, dynamic>>? danmaku,
   })  : voices = voices ?? <Map<String, dynamic>>[],
         scripts = scripts ?? <Map<String, dynamic>>[],
         coupons = coupons ?? _defaultCoupons(),
-        lives = lives ?? <Map<String, dynamic>>[];
+        lives = lives ?? <Map<String, dynamic>>[],
+        danmaku = danmaku ?? <Map<String, dynamic>>[];
 
   final String userId;
   final String phone;
@@ -75,6 +77,8 @@ class FakeBackend implements HttpClientAdapter {
   final List<Map<String, dynamic>> coupons;
   /// 我的开播配置（内存）：结构与服务端 /api/lives 返回保持一致。
   final List<Map<String, dynamic>> lives;
+  /// 我的直播弹幕日志（内存）：结构与服务端 /api/lives/:id/danmaku 返回保持一致。
+  final List<Map<String, dynamic>> danmaku;
   int _liveSeq = 0;
 
   /// 模拟 DeepSeek 返回的话术全文：生成接口使用，测试可自行配置。

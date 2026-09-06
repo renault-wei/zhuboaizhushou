@@ -458,6 +458,66 @@ class ApiClient {
     }
   }
 
+  /// 一键开播：ready → live，记录 startedAt；成功返回最新开播配置。
+  /// 未就绪（status !== ready）服务端返回 400 LIVE_NOT_READY。
+  Future<Live> startLive(String id) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/lives/$id/start',
+        data: <String, dynamic>{},
+      );
+      return _parseLive(response.data);
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 结束直播：live → ended，记录 endedAt；成功返回最新开播配置。
+  /// 非直播中（status !== live）服务端返回 400 LIVE_NOT_LIVE。
+  Future<Live> endLive(String id) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/lives/$id/end',
+        data: <String, dynamic>{},
+      );
+      return _parseLive(response.data);
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 查询直播中监控快照（客户端轮询用）：状态 + 已播时长 + 弹幕计数。
+  Future<LiveMonitor> getLiveMonitor(String id) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/api/lives/$id/monitor',
+      );
+      return LiveMonitor.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 查询弹幕日志（只读）：按 sentAt 倒序返回最近 N 条。
+  Future<List<LiveDanmaku>> getLiveDanmaku(String id, {int? limit}) async {
+    try {
+      final response = await _dio.get<List<dynamic>>(
+        '/api/lives/$id/danmaku',
+        queryParameters: <String, dynamic>{'limit': ?limit},
+      );
+      final data = response.data;
+      if (data is List) {
+        return data
+            .whereType<Map>()
+            .map((item) => LiveDanmaku.fromJson(Map<String, dynamic>.from(item)))
+            .toList();
+      }
+      return <LiveDanmaku>[];
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
   /// 从响应体解析 Live：POST/PATCH 形如 { live: {...} }，GET :id 直接返回对象本身。
   Live _parseLive(Map<String, dynamic>? data) {
     final raw = data?['live'];
