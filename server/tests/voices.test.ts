@@ -151,7 +151,7 @@ dbIt('未签署《声音授权协议》直接克隆返回 403 AGREEMENT_REQUIRED
 
 // ---------- 时长校验 ----------
 
-dbIt('签署协议后录音时长不足 3 分钟返回 400 DURATION_TOO_SHORT', async () => {
+dbIt('签署协议后录音时长不足 1 分钟返回 400 DURATION_TOO_SHORT', async () => {
   const token = await registerAndGetToken(PHONE_SHORT);
   await resetUserData(PHONE_SHORT);
   await signAgreement(token);
@@ -160,12 +160,12 @@ dbIt('签署协议后录音时长不足 3 分钟返回 400 DURATION_TOO_SHORT', 
     method: 'POST',
     url: '/api/voices',
     headers: bearer(token),
-    payload: { name: '时长不足音色', sampleDurationSeconds: 60 },
+    payload: { name: '时长不足音色', sampleDurationSeconds: 30 },
   });
   expect(res.statusCode).toBe(400);
   expect(res.json()).toMatchObject({
     error: 'DURATION_TOO_SHORT',
-    message: '录音时长不足 3 分钟',
+    message: '录音时长不足 1 分钟',
   });
 });
 

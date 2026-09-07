@@ -30,8 +30,8 @@ void main() {
 
     // 进入：展示第 1 段念稿与总进度
     expect(find.byKey(const Key('recordingPage')), findsOneWidget);
-    expect(find.text('第 1/10 段'), findsOneWidget);
-    expect(find.text('已完成 0/10'), findsOneWidget);
+    expect(find.text('第 1/2 段'), findsOneWidget);
+    expect(find.text('已完成 0/2'), findsOneWidget);
     expect(find.byKey(const Key('passageText')), findsOneWidget);
 
     // 开始录音：按钮变「暂停」，出现计时与实时波形画布
@@ -46,11 +46,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('00:06'), findsOneWidget);
 
-    // 完成本段：进度刷新为 1/10，展示本段时长并允许重录
+    // 完成本段：进度刷新为 1/2，展示本段时长并允许重录
     await tester.tap(find.byKey(const Key('finishSegmentButton')));
     await tester.pumpAndSettle();
-    expect(find.text('第 2/10 段'), findsOneWidget);
-    expect(find.text('已完成 1/10'), findsOneWidget);
+    expect(find.text('第 2/2 段'), findsOneWidget);
+    expect(find.text('已完成 1/2'), findsOneWidget);
     expect(find.text('总时长 00:06'), findsOneWidget);
     expect(find.byKey(const Key('recentSegmentBanner')), findsOneWidget);
     expect(find.textContaining('第 1 段已录制 00:06'), findsOneWidget);

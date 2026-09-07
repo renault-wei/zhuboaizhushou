@@ -11,8 +11,8 @@ import { cosyVoiceService } from '../services/voice';
 const CLONE_PENDING_AFTER_MS = 3 * 1000;
 const CLONE_READY_AFTER_MS = 8 * 1000;
 
-// 录音样本最短时长（秒）：声音克隆前必须确认录音达到 3 分钟（合规/质量口径）
-const MIN_SAMPLE_DURATION_SECONDS = 180;
+// 录音样本最短时长（秒）：声音克隆前必须确认录音达到 1 分钟（MVP 口径：2 段念稿）
+const MIN_SAMPLE_DURATION_SECONDS = 60;
 // 音色名称长度上限（字），与 voices.name 的 varchar(50) 对齐
 const MAX_NAME_LENGTH = 50;
 
@@ -103,7 +103,7 @@ export const voicesRoutes: FastifyPluginAsync = async (app) => {
     if (sampleDurationSeconds === null || sampleDurationSeconds < MIN_SAMPLE_DURATION_SECONDS) {
       return reply.code(400).send({
         error: 'DURATION_TOO_SHORT',
-        message: '录音时长不足 3 分钟',
+        message: '录音时长不足 1 分钟',
       });
     }
     if (!name || name.length > MAX_NAME_LENGTH) {

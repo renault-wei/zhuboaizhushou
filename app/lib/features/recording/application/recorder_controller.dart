@@ -8,10 +8,10 @@ import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 念稿总段数。
-const int recordingSegmentCount = 10;
+const int recordingSegmentCount = 2;
 
-/// 提交克隆要求的最短总时长（秒）：10 段全完成且总时长 ≥ 3 分钟。
-const int minimumTotalSeconds = 180;
+/// 提交克隆要求的最短总时长（秒）：2 段全完成且总时长 ≥ 1 分钟。
+const int minimumTotalSeconds = 60;
 
 /// 实时波形保留的采样点数量。
 const int waveformSampleCount = 48;
@@ -114,7 +114,7 @@ class RecordingState {
   /// 各段录音结果（下标与念稿一一对应，未录为 null）。
   final List<SegmentRecord?> segments;
 
-  /// 当前聚焦的段（0-9）；为 10 表示 10 段全部完成。
+  /// 当前聚焦的段（0-1）；为 2 表示 2 段全部完成。
   final int currentIndex;
 
   final RecorderPhase phase;

@@ -144,8 +144,8 @@ void main() {
   test('从 shared_preferences 恢复上次进度（文件名+时长 JSON）', () async {
     SharedPreferences.setMockInitialValues({
       'recording_segments_v1': jsonEncode(<Map<String, dynamic>>[
-        {'index': 2, 'fileName': 'segment_03.m4a', 'durationSeconds': 42},
-        {'index': 7, 'fileName': 'segment_08.m4a', 'durationSeconds': 31},
+        {'index': 0, 'fileName': 'segment_01.m4a', 'durationSeconds': 42},
+        {'index': 1, 'fileName': 'segment_02.m4a', 'durationSeconds': 31},
       ]),
     });
     final c = buildController();
@@ -154,10 +154,10 @@ void main() {
     await c.init();
     expect(c.state.restoring, isFalse);
     expect(c.state.completedCount, 2);
-    expect(c.state.currentIndex, 0);
+    expect(c.state.currentIndex, recordingSegmentCount);
     expect(c.state.totalSeconds, 73);
-    expect(c.state.segments[2]!.fileName, 'segment_03.m4a');
-    expect(c.state.segments[7]!.durationSeconds, 31);
+    expect(c.state.segments[0]!.fileName, 'segment_01.m4a');
+    expect(c.state.segments[1]!.durationSeconds, 31);
   });
 
   test('麦克风权限被拒：提示错误且不启动录音', () async {

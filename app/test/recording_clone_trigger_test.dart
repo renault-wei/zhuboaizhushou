@@ -14,14 +14,14 @@ import 'package:starvoice_app/providers.dart';
 import 'fake_backend.dart';
 import 'support/fake_recorder.dart';
 
-/// 预置 10 段全完成且总时长 200 秒的本地进度，页面恢复后即可点「开始克隆」。
+/// 预置 2 段全完成且总时长 80 秒的本地进度，页面恢复后即可点「开始克隆」。
 Future<void> _seedAllSegmentsComplete() async {
   final entries = <Map<String, dynamic>>[];
   for (var i = 0; i < recordingSegmentCount; i++) {
     entries.add(<String, dynamic>{
       'index': i,
       'fileName': 'segment_${(i + 1).toString().padLeft(2, '0')}.m4a',
-      'durationSeconds': 20,
+      'durationSeconds': 40,
     });
   }
   SharedPreferences.setMockInitialValues(<String, Object>{
@@ -68,10 +68,10 @@ void main() {
     final backend = FakeBackend(agreementSigned: true);
     await _pumpRecordingPage(tester, backend);
 
-    // 10 段已恢复完成：展示完成面板，按钮文案为「开始克隆」
+    // 2 段已恢复完成：展示完成面板，按钮文案为「开始克隆」
     expect(find.byKey(const Key('recordingPage')), findsOneWidget);
-    expect(find.text('10 段已全部录完'), findsOneWidget);
-    expect(find.text('总时长 03:20'), findsOneWidget);
+    expect(find.text('2 段已全部录完'), findsOneWidget);
+    expect(find.text('总时长 01:20'), findsOneWidget);
     final submit = tester.widget<FilledButton>(
       find.byKey(const Key('submitCloneButton')),
     );

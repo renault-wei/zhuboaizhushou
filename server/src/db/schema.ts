@@ -103,7 +103,7 @@ export const voices = pgTable(
     // 《声音授权协议》存档（合规红线：克隆前必须先签署并存档）
     agreementPdfPath: text('agreement_pdf_path'),
     agreementSignedAt: timestamp('agreement_signed_at', { withTimezone: true }),
-    // 录音样本：原始文件、时长（应 >= 3 分钟）、内容指纹（用于去重与审计）
+    // 录音样本：原始文件、时长（应 >= 1 分钟）、内容指纹（用于去重与审计）
     sampleUrl: text('sample_url'),
     sampleDurationSeconds: integer('sample_duration_seconds'),
     sampleFingerprint: text('sample_fingerprint'),

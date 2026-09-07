@@ -7,7 +7,7 @@ import 'package:starvoice_app/features/recording/application/recorder_controller
 import 'package:starvoice_app/features/recording/data/reading_passages.dart';
 import 'package:starvoice_app/providers.dart';
 
-/// 录音页（路由 /recording）：10 段念稿跟读采集。
+/// 录音页（路由 /recording）：2 段念稿跟读采集。
 /// 桌面版 Windows 可真实录音（使用电脑麦克风，record 插件原生支持，无需额外配置）。
 class RecordingPage extends ConsumerStatefulWidget {
   const RecordingPage({super.key});
@@ -111,12 +111,12 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
     );
   }
 
-  /// 顶部：横向进度（第 x/10 段）+ 已完成计数。
+  /// 顶部：横向进度（第 x/2 段）+ 已完成计数。
   Widget _buildProgressHeader(RecordingState state) {
     final current = state.currentIndex;
     final label = current < recordingSegmentCount
-        ? '第 ${current + 1}/10 段'
-        : '已完成全部 10 段';
+        ? '第 ${current + 1}/2 段'
+        : '已完成全部 2 段';
     return Row(
       children: [
         Text(
@@ -126,7 +126,7 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
         ),
         const Spacer(),
         Text(
-          '已完成 ${state.completedCount}/10',
+          '已完成 ${state.completedCount}/2',
           style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
         ),
       ],
@@ -178,13 +178,13 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
           const Icon(Icons.task_alt, color: Colors.green, size: 40),
           const SizedBox(height: 8),
           const Text(
-            '10 段已全部录完',
+            '2 段已全部录完',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 4),
           Text(
             '累计 ${formatRecordingDuration(state.totalSeconds)}，'
-            '达到 3 分钟即可开始克隆',
+            '达到 1 分钟即可开始克隆',
             style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
           ),
         ],
@@ -411,7 +411,7 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
         if (!canSubmit) ...[
           const SizedBox(height: 4),
           Text(
-            '录满 10 段且总时长 ≥ 3 分钟（当前 ${state.completedCount}/10 段）方可开始克隆',
+            '录满 2 段且总时长 ≥ 1 分钟（当前 ${state.completedCount}/2 段）方可开始克隆',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
           ),
@@ -502,7 +502,7 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
       messenger
         ..clearSnackBars()
         ..showSnackBar(
-          const SnackBar(content: Text('录音时长不足 3 分钟，无法开始克隆')),
+          const SnackBar(content: Text('录音时长不足 1 分钟，无法开始克隆')),
         );
       return;
     }
@@ -546,7 +546,7 @@ class _ErrorHint extends StatelessWidget {
   }
 }
 
-/// 顶部横向分段进度条：共 10 个小格，可点选历史段查看/重录。
+/// 顶部横向分段进度条：共 2 个小格，可点选历史段查看/重录。
 class _SegmentChips extends StatelessWidget {
   const _SegmentChips({
     required this.segments,

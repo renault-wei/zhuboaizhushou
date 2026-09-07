@@ -829,10 +829,10 @@ class FakeBackend implements HttpClientAdapter {
     final name = rawName is String ? rawName.trim() : '';
     final rawDuration = body['sampleDurationSeconds'];
     final duration = rawDuration is num ? rawDuration.toInt() : 0;
-    if (duration < 180) {
+    if (duration < 60) {
       return _jsonResponse({
         'error': 'DURATION_TOO_SHORT',
-        'message': '录音时长不足 3 分钟',
+        'message': '录音时长不足 1 分钟',
       }, 400);
     }
     if (name.isEmpty || name.length > 50) {
