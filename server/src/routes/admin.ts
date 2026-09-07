@@ -4,6 +4,7 @@ import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { adminUsers } from '../db/schema';
 import { JWT_TOKEN_TTL_SECONDS } from '../plugins/auth';
+import { QUOTA_TIERS, SUBSCRIPTION_PLAN } from '../services/quotaTiers';
 
 // 内部运营工具只读口径：分页上限与默认值
 const MAX_PAGE_SIZE = 100;
@@ -41,6 +42,76 @@ function readLoginBody(body: unknown): { username: string; password: string } {
   const username = typeof record.username === 'string' ? record.username.trim() : '';
   const password = typeof record.password === 'string' ? record.password : '';
   return { username, password };
+}
+
+/** 月度周期（period=YYYY-MM）当前值：以数据库时间为准，避免应用/DB 时区漂移 */
+async function readCurrentPeriod(): Promise<string> {
+  const rows = await db.execute(sql`SELECT to_char(now(), 'YYYY-MM') AS period`);
+  return (rows.rows[0]?.period as string) ?? new Date().toISOString().slice(0, 7);
+}
+
+/** 校验 period：YYYY-MM，缺省回退当前月；非法抛出业务提示（由路由转 400） */
+function readPeriodValue(value: unknown, current: string): string {
+  if (value === undefined || value === null || value === '') {
+    return current;
+  }
+  if (typeof value !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) {
+    throw new Error('BODY_INVALID:周期格式应为 YYYY-MM');
+  }
+  return value;
+}
+
+/** 额度列白名单（安全拼接动态 SQL 用）：键 = 请求字段，值 = 数据库列名 */
+const QUOTA_COLUMNS: Record<
+  string,
+  'tts_chars_quota' | 'script_generations_quota' | 'live_minutes_quota'
+> = {
+  ttsCharsQuota: 'tts_chars_quota',
+  scriptGenerationsQuota: 'script_generations_quota',
+  liveMinutesQuota: 'live_minutes_quota',
+};
+
+/** 读取并校验额度调整体：至少提供一档非负整数额度；返回 { period, provided } */
+function readQuotaAdjustBody(
+  body: unknown,
+  current: string,
+): { period: string; provided: Map<string, number> } {
+  const record = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>;
+  const period = readPeriodValue(record.period, current);
+  const provided = new Map<string, number>();
+  for (const [key, column] of Object.entries(QUOTA_COLUMNS)) {
+    const raw = record[key];
+    if (raw === undefined || raw === null || raw === '') {
+      continue;
+    }
+    if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0) {
+      throw new Error('BODY_INVALID:额度必须是不小于 0 的整数');
+    }
+    provided.set(column, raw);
+  }
+  if (provided.size === 0) {
+    throw new Error(
+      'BODY_INVALID:至少提供一档额度（ttsCharsQuota/scriptGenerationsQuota/liveMinutesQuota）',
+    );
+  }
+  return { period, provided };
+}
+
+/** 运营写操作审计留痕（写失败抛错：合规红线，宁可让操作失败也不静默丢日志） */
+async function writeAuditLog(input: {
+  adminUserId: string;
+  userId?: string | null;
+  action: string;
+  resourceType: string;
+  resourceId: string;
+  detail: Record<string, unknown>;
+  ip: string;
+}): Promise<void> {
+  await db.execute(sql`
+    INSERT INTO audit_logs (admin_user_id, user_id, action, resource_type, resource_id, detail, ip)
+    VALUES (${input.adminUserId}, ${input.userId ?? null}, ${input.action}, ${input.resourceType},
+      ${input.resourceId}, ${sql`${JSON.stringify(input.detail)}::jsonb`}, ${input.ip})
+  `);
 }
 
 /**
@@ -314,4 +385,203 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     `);
     return { items: logRows.rows, total: totals.rows[0]?.total ?? 0, page, pageSize };
   });
+
+  // 额度调整（运营写操作）：按 (user_id, period) 幂等 upsert，只改 quota 不碰 used；审计留痕
+  app.put(
+    '/api/admin/quotas/:userId',
+    { preHandler: app.adminAuthenticate },
+    async (request, reply) => {
+      const admin = request.admin;
+      if (!admin) {
+        return reply.code(401).send({ error: 'UNAUTHORIZED', message: '未登录或登录已过期' });
+      }
+      const params = request.params as Record<string, unknown>;
+      const userId = typeof params.userId === 'string' ? params.userId : '';
+      if (!UUID_PATTERN.test(userId)) {
+        return reply.code(400).send({ error: 'USER_ID_INVALID', message: '用户 ID 格式不正确' });
+      }
+      let period: string;
+      let provided: Map<string, number>;
+      try {
+        const current = await readCurrentPeriod();
+        ({ period, provided } = readQuotaAdjustBody(request.body, current));
+      } catch (err) {
+        const message = (err as Error).message || 'BODY_INVALID:请求参数不正确';
+        const [code, ...rest] = message.split(':');
+        return reply.code(400).send({ error: code || 'BODY_INVALID', message: rest.join(':') || message });
+      }
+      const outcome = await db.transaction(async (tx) => {
+        const existingRows = await tx.execute(sql`
+          SELECT * FROM quotas WHERE user_id = ${userId} AND period = ${period} FOR UPDATE
+        `);
+        const existing = existingRows.rows[0] as Record<string, unknown> | undefined;
+        if (!existing) {
+          const userRows = await tx.execute(sql`SELECT id FROM users WHERE id = ${userId}`);
+          if (userRows.rowCount === 0) {
+            return { notFound: true };
+          }
+        }
+        const columnNames = [...provided.keys()];
+        const valueParts = [...provided.values()].map((value) => sql`${value}`);
+        const sets = [
+          ...[...provided.entries()].map(([column, value]) => sql`${sql.raw(column)} = ${value}`),
+          sql`updated_at = now()`,
+        ];
+        const upserted = await tx.execute(sql`
+          INSERT INTO quotas (user_id, period, ${sql.raw(columnNames.join(', '))})
+          VALUES (${userId}, ${period}, ${sql.join(valueParts, sql`, `)})
+          ON CONFLICT (user_id, period) DO UPDATE SET ${sql.join(sets, sql`, `)}
+          RETURNING *
+        `);
+        return { notFound: false, before: existing, after: upserted.rows[0] };
+      });
+      if (outcome.notFound) {
+        return reply.code(404).send({ error: 'USER_NOT_FOUND', message: '商家用户不存在' });
+      }
+      const before = (outcome.before ?? {}) as Record<string, unknown>;
+      const after = outcome.after as Record<string, unknown>;
+      await writeAuditLog({
+        adminUserId: admin.id,
+        userId,
+        action: 'quota.adjust',
+        resourceType: 'quota',
+        resourceId: after.id as string,
+        detail: {
+          period,
+          before: {
+            ttsCharsQuota: before.tts_chars_quota ?? null,
+            scriptGenerationsQuota: before.script_generations_quota ?? null,
+            liveMinutesQuota: before.live_minutes_quota ?? null,
+          },
+          after: {
+            ttsCharsQuota: after.tts_chars_quota,
+            scriptGenerationsQuota: after.script_generations_quota,
+            liveMinutesQuota: after.live_minutes_quota,
+          },
+        },
+        ip: request.ip,
+      });
+      return {
+        quota: {
+          userId,
+          period: after.period,
+          ttsCharsQuota: after.tts_chars_quota,
+          ttsCharsUsed: after.tts_chars_used,
+          scriptGenerationsQuota: after.script_generations_quota,
+          scriptGenerationsUsed: after.script_generations_used,
+          liveMinutesQuota: after.live_minutes_quota,
+          liveMinutesUsed: after.live_minutes_used,
+          updatedAt: after.updated_at,
+        },
+      };
+    },
+  );
+
+  // 订单人工确权（模拟支付回调）：pending → paid + 订阅顺延 + 当月额度按付费档刷新；重复确权 409
+  app.post(
+    '/api/admin/orders/:id/confirm',
+    { preHandler: app.adminAuthenticate },
+    async (request, reply) => {
+      const admin = request.admin;
+      if (!admin) {
+        return reply.code(401).send({ error: 'UNAUTHORIZED', message: '未登录或登录已过期' });
+      }
+      const params = request.params as Record<string, unknown>;
+      const orderId = typeof params.id === 'string' ? params.id : '';
+      if (!UUID_PATTERN.test(orderId)) {
+        return reply.code(400).send({ error: 'ORDER_ID_INVALID', message: '订单 ID 格式不正确' });
+      }
+      const period = await readCurrentPeriod();
+      const paid = QUOTA_TIERS.paid;
+      const outcome = await db.transaction(async (tx) => {
+        const locked = await tx.execute(sql`
+          SELECT * FROM orders WHERE id = ${orderId} FOR UPDATE
+        `);
+        const order = locked.rows[0] as Record<string, unknown> | undefined;
+        if (!order) {
+          return { notFound: true };
+        }
+        if (order.status === 'paid') {
+          return { conflict: 'ALREADY_CONFIRMED' };
+        }
+        if (order.status !== 'pending') {
+          return { conflict: 'CANNOT_CONFIRM' };
+        }
+        await tx.execute(sql`
+          UPDATE orders SET status = 'paid', paid_at = now(), updated_at = now() WHERE id = ${orderId}
+        `);
+        const userRows = await tx.execute(sql`
+          UPDATE users
+          SET subscription_status = 'paid',
+              subscription_expires_at = GREATEST(coalesce(subscription_expires_at, now()), now())
+                + (${SUBSCRIPTION_PLAN.renewDays}) * interval '1 day',
+              updated_at = now()
+          WHERE id = ${order.user_id}
+          RETURNING id, phone, subscription_expires_at AS "subscriptionExpiresAt"
+        `);
+        const quotaRows = await tx.execute(sql`
+          INSERT INTO quotas (user_id, period, tts_chars_quota, script_generations_quota, live_minutes_quota)
+          VALUES (${order.user_id}, ${period}, ${paid.ttsCharsQuota}, ${paid.scriptGenerationsQuota}, ${paid.liveMinutesQuota})
+          ON CONFLICT (user_id, period) DO UPDATE SET
+            tts_chars_quota = ${paid.ttsCharsQuota},
+            script_generations_quota = ${paid.scriptGenerationsQuota},
+            live_minutes_quota = ${paid.liveMinutesQuota},
+            updated_at = now()
+          RETURNING *
+        `);
+        return { notFound: false, order, user: userRows.rows[0], quota: quotaRows.rows[0] };
+      });
+      if (outcome.notFound) {
+        return reply.code(404).send({ error: 'ORDER_NOT_FOUND', message: '订单不存在' });
+      }
+      if (outcome.conflict) {
+        const alreadyPaid = outcome.conflict === 'ALREADY_CONFIRMED';
+        return reply.code(409).send({
+          error: outcome.conflict,
+          message: alreadyPaid ? '订单已确权，请勿重复操作' : '当前订单状态不可确权',
+        });
+      }
+      const order = outcome.order as Record<string, unknown>;
+      const user = outcome.user as Record<string, unknown>;
+      const quota = outcome.quota as Record<string, unknown>;
+      await writeAuditLog({
+        adminUserId: admin.id,
+        userId: order.user_id as string,
+        action: 'order.confirm',
+        resourceType: 'order',
+        resourceId: orderId,
+        detail: {
+          orderNo: order.order_no,
+          plan: order.plan,
+          amountCents: order.amount_cents,
+          renewDays: SUBSCRIPTION_PLAN.renewDays,
+          subscriptionExpiresAt: user.subscriptionExpiresAt,
+        },
+        ip: request.ip,
+      });
+      return {
+        order: {
+          id: orderId,
+          orderNo: order.order_no,
+          plan: order.plan,
+          amountCents: order.amount_cents,
+          status: 'paid',
+          paidAt: order.paid_at,
+        },
+        subscription: {
+          status: 'paid',
+          expiresAt: user.subscriptionExpiresAt,
+        },
+        quota: {
+          period: quota.period,
+          ttsCharsQuota: quota.tts_chars_quota,
+          ttsCharsUsed: quota.tts_chars_used,
+          scriptGenerationsQuota: quota.script_generations_quota,
+          scriptGenerationsUsed: quota.script_generations_used,
+          liveMinutesQuota: quota.live_minutes_quota,
+          liveMinutesUsed: quota.live_minutes_used,
+        },
+      };
+    },
+  );
 };
