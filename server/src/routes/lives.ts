@@ -29,22 +29,24 @@ function readCreateBody(body: unknown): {
   title: string;
   voiceId: string | null;
   scriptId: string | null;
+  loopScriptId: string | null;
   couponId: string | null;
   videoSourceUrl?: string;
 } {
   if (typeof body !== 'object' || body === null) {
-    return { title: '', voiceId: null, scriptId: null, couponId: null };
+    return { title: '', voiceId: null, scriptId: null, loopScriptId: null, couponId: null };
   }
   const record = body as Record<string, unknown>;
   const rawTitle = record.title;
   const title = typeof rawTitle === 'string' ? rawTitle : '';
   const voiceId = readOptionalId(record.voiceId);
   const scriptId = readOptionalId(record.scriptId);
+  const loopScriptId = readOptionalId(record.loopScriptId);
   const couponId = readOptionalText(record.couponId);
   const rawVideo = record.videoSourceUrl;
   // videoSourceUrl 非字符串一律回退空串，避免脏数据入库
   const videoSourceUrl = typeof rawVideo === 'string' ? rawVideo : '';
-  return { title, voiceId, scriptId, couponId, videoSourceUrl };
+  return { title, voiceId, scriptId, loopScriptId, couponId, videoSourceUrl };
 }
 
 /** 读取 PATCH 更新请求体：字段缺省为 undefined（保留原值）；status/aiBadgeShown 字段一律忽略 */
@@ -52,6 +54,7 @@ function readUpdateBody(body: unknown): {
   title: string | undefined;
   voiceId: string | null | undefined;
   scriptId: string | null | undefined;
+  loopScriptId: string | null | undefined;
   couponId: string | null | undefined;
   videoSourceUrl: string | undefined;
 } {
@@ -60,6 +63,7 @@ function readUpdateBody(body: unknown): {
       title: undefined,
       voiceId: undefined,
       scriptId: undefined,
+      loopScriptId: undefined,
       couponId: undefined,
       videoSourceUrl: undefined,
     };
@@ -77,6 +81,10 @@ function readUpdateBody(body: unknown): {
   if (Object.prototype.hasOwnProperty.call(record, 'scriptId')) {
     scriptId = readOptionalId(record.scriptId);
   }
+  let loopScriptId: string | null | undefined;
+  if (Object.prototype.hasOwnProperty.call(record, 'loopScriptId')) {
+    loopScriptId = readOptionalId(record.loopScriptId);
+  }
   let couponId: string | null | undefined;
   if (Object.prototype.hasOwnProperty.call(record, 'couponId')) {
     couponId = readOptionalText(record.couponId);
@@ -85,7 +93,7 @@ function readUpdateBody(body: unknown): {
   if (Object.prototype.hasOwnProperty.call(record, 'videoSourceUrl')) {
     videoSourceUrl = typeof record.videoSourceUrl === 'string' ? record.videoSourceUrl : '';
   }
-  return { title, voiceId, scriptId, couponId, videoSourceUrl };
+  return { title, voiceId, scriptId, loopScriptId, couponId, videoSourceUrl };
 }
 
 /** 可选 uuid 字段：非空字符串才接收，其余一律视为 null */

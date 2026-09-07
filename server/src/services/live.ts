@@ -1,6 +1,11 @@
 ﻿import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client';
-import { lives as livesTable, scripts as scriptsTable, voices as voicesTable } from '../db/schema';
+import {
+  lives as livesTable,
+  loopScripts as loopScriptsTable,
+  scripts as scriptsTable,
+  voices as voicesTable,
+} from '../db/schema';
 
 // ---------- 常量 ----------
 
@@ -24,6 +29,7 @@ export interface Live {
   rtmpUrl: string | null;
   voiceId: string | null;
   scriptId: string | null;
+  loopScriptId: string | null;
   status: LiveStatus;
   /** 合规角标：一律 true，禁止篡改（AI 智能直播角标强制叠加，不提供关闭入口） */
   aiBadgeShown: boolean;
@@ -41,6 +47,8 @@ export interface CreateLiveInput {
   voiceId: string | null;
   /** 话术 id：可空（暂未选） */
   scriptId: string | null;
+  /** 循环台本 id：可空（暂未绑定）。开播时读取快照，中途改台本不影响进行中场次 */
+  loopScriptId: string | null;
   /** 团购券 id：T10 直接存档，不校验 openId 持有关系 */
   couponId: string | null;
   /** 实景视频源：T10 默认 ''，T11 上传视频后回填 */
@@ -49,7 +57,10 @@ export interface CreateLiveInput {
 
 /** 更新入参：字段缺省表示保留原值 */
 export type UpdateLiveInput = Partial<
-  Pick<CreateLiveInput, 'title' | 'voiceId' | 'scriptId' | 'couponId' | 'videoSourceUrl'>
+  Pick<
+    CreateLiveInput,
+    'title' | 'voiceId' | 'scriptId' | 'loopScriptId' | 'couponId' | 'videoSourceUrl'
+  >
 >;
 
 // ---------- 错误类型 ----------
@@ -58,6 +69,7 @@ export type LiveErrorCode =
   | 'LIVE_TITLE_INVALID'
   | 'VOICE_NOT_OWNED'
   | 'SCRIPT_NOT_OWNED'
+  | 'LOOP_SCRIPT_NOT_OWNED'
   | 'LIVE_NOT_FOUND'
   | 'LIVE_IN_PROGRESS'
   | 'LIVE_NO_FIELDS_TO_UPDATE'
@@ -90,6 +102,7 @@ export function toLive(row: LiveRow): Live {
     rtmpUrl: row.rtmpUrl,
     voiceId: row.voiceId,
     scriptId: row.scriptId,
+    loopScriptId: row.loopScriptId,
     status: row.status,
     aiBadgeShown: row.aiBadgeShown,
     startedAt: row.startedAt ? row.startedAt.toISOString() : null,
@@ -129,6 +142,16 @@ async function isOwnedScript(scriptId: string, userId: string): Promise<boolean>
   return rows.length > 0;
 }
 
+/** 校验循环台本存在且归属当前用户 */
+async function isOwnedLoopScript(loopScriptId: string, userId: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: loopScriptsTable.id })
+    .from(loopScriptsTable)
+    .where(and(eq(loopScriptsTable.id, loopScriptId), eq(loopScriptsTable.userId, userId)))
+    .limit(1);
+  return rows.length > 0;
+}
+
 /** 标题校验：trim 后 1-100 字，失败抛 LIVE_TITLE_INVALID */
 function assertValidTitle(title: string): string {
   const trimmed = title.trim();
@@ -141,13 +164,16 @@ function assertValidTitle(title: string): string {
 /** 校验可空的音色/话术归属（提供时非空才校验） */
 async function assertOwnedReferences(
   userId: string,
-  input: { voiceId: string | null; scriptId: string | null },
+  input: { voiceId: string | null; scriptId: string | null; loopScriptId: string | null },
 ): Promise<void> {
   if (input.voiceId && !(await isOwnedVoice(input.voiceId, userId))) {
     throw new LiveError('VOICE_NOT_OWNED', '音色不存在或不属于当前用户');
   }
   if (input.scriptId && !(await isOwnedScript(input.scriptId, userId))) {
     throw new LiveError('SCRIPT_NOT_OWNED', '话术不存在或不属于当前用户');
+  }
+  if (input.loopScriptId && !(await isOwnedLoopScript(input.loopScriptId, userId))) {
+    throw new LiveError('LOOP_SCRIPT_NOT_OWNED', '循环台本不存在或不属于当前用户');
   }
 }
 
@@ -193,6 +219,7 @@ export async function createLive(userId: string, input: CreateLiveInput): Promis
       couponId: input.couponId,
       voiceId: input.voiceId,
       scriptId: input.scriptId,
+      loopScriptId: input.loopScriptId,
       status: 'idle',
       // 合规红线：'AI 智能直播'角标强制叠加、不可关闭；即使请求传 false 也被忽略
       aiBadgeShown: true,
@@ -223,6 +250,7 @@ export async function updateLive(
     couponId?: string | null;
     voiceId?: string | null;
     scriptId?: string | null;
+    loopScriptId?: string | null;
   } = {};
   if (patch.title !== undefined) {
     changes.title = assertValidTitle(patch.title);
@@ -244,6 +272,12 @@ export async function updateLive(
       throw new LiveError('SCRIPT_NOT_OWNED', '话术不存在或不属于当前用户');
     }
     changes.scriptId = patch.scriptId;
+  }
+  if (patch.loopScriptId !== undefined) {
+    if (patch.loopScriptId && !(await isOwnedLoopScript(patch.loopScriptId, userId))) {
+      throw new LiveError('LOOP_SCRIPT_NOT_OWNED', '循环台本不存在或不属于当前用户');
+    }
+    changes.loopScriptId = patch.loopScriptId;
   }
 
   // 边界保护：body 只含非法字段（如仅 aiBadgeShown / status）时，changes 为空，

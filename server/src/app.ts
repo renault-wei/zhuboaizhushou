@@ -7,6 +7,7 @@ import { authRoutes } from './routes/auth';
 import { douyinRoutes } from './routes/douyin';
 import { healthRoutes } from './routes/health';
 import { livesRoutes } from './routes/lives';
+import { loopScriptsRoutes } from './routes/loopScripts';
 import { scriptsRoutes } from './routes/scripts';
 import { speechOutRoutes } from './routes/speechOut';
 import { voicesRoutes } from './routes/voices';
@@ -44,6 +45,7 @@ export function buildApp() {
   // 视频上传（multipart）：单文件上限 200MB，超出返回 413
   app.register(multipart, { limits: { fileSize: 200 * 1024 * 1024 } });
   app.register(livesRoutes);
+  app.register(loopScriptsRoutes);
   app.register(speechOutRoutes);
 
   return app;

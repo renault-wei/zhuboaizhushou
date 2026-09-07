@@ -33,6 +33,10 @@ const PHONE_DELETE_LIVE = '13920000008';
 const PHONE_FILTER = '13920000009';
 const PHONE_TITLE = '13920000010';
 const PHONE_NO_FIELDS = '13920000011';
+const PHONE_LOOP_BIND = '13920000012';
+const PHONE_LOOP_OWNER = '13920000013';
+const PHONE_LOOP_CROSS = '13920000014';
+const PHONE_LOOP_PATCH = '13920000015';
 
 async function registerAndGetToken(phone: string): Promise<string> {
   const send = await app.inject({
@@ -65,6 +69,7 @@ async function userIdOf(phone: string): Promise<string> {
 async function resetUserData(phone: string): Promise<void> {
   const userId = await userIdOf(phone);
   await pool.query('DELETE FROM lives WHERE user_id = $1', [userId]);
+  await pool.query('DELETE FROM loop_scripts WHERE user_id = $1', [userId]);
   await pool.query('DELETE FROM scripts WHERE user_id = $1', [userId]);
   await pool.query('DELETE FROM voices WHERE user_id = $1', [userId]);
   await pool.query('DELETE FROM voice_agreements WHERE user_id = $1', [userId]);
@@ -97,6 +102,22 @@ async function seedOwnedScript(phone: string, title = '火锅店话术'): Promis
      VALUES ($1, $2, 'restaurant', $3, '{"name":"测试商品"}'::jsonb, $4, 'ready', 'pass',
         '[]'::jsonb, now())`,
     [id, userId, title, '干净的话术内容。'],
+  );
+  return id;
+}
+
+/** 直接给某用户种一条归属其名下的循环台本（绕过生成链路，仅作 lives 引用校验用） */
+async function seedOwnedLoopScript(phone: string, title = '循环台本'): Promise<string> {
+  const userId = await userIdOf(phone);
+  const id = randomUUID();
+  await pool.query(`INSERT INTO loop_scripts (id, user_id, title) VALUES ($1, $2, $3)`, [
+    id,
+    userId,
+    title,
+  ]);
+  await pool.query(
+    `INSERT INTO loop_script_items (loop_script_id, seq, kind, text) VALUES ($1, 1, 'opening', $2)`,
+    [id, '干净的循环开场台词。'],
   );
   return id;
 }
@@ -249,6 +270,95 @@ dbIt('更新时引用他人音色返回 400 VOICE_NOT_OWNED', async () => {
   });
   expect(res.statusCode).toBe(400);
   expect(res.json()).toMatchObject({ error: 'VOICE_NOT_OWNED' });
+});
+
+// ---------- 循环台本绑定（loopScriptId）----------
+
+dbIt('创建 live 引用本人循环台本成功且透出 loopScriptId', async () => {
+  const token = await registerAndGetToken(PHONE_LOOP_BIND);
+  await resetUserData(PHONE_LOOP_BIND);
+  const loopScriptId = await seedOwnedLoopScript(PHONE_LOOP_BIND, '午市循环台本');
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/lives',
+    headers: bearer(token),
+    payload: { title: '绑定循环台本的直播', loopScriptId },
+  });
+  expect(res.statusCode).toBe(201);
+  const live = res.json().live as { id: string; loopScriptId: string | null };
+  expect(live.loopScriptId).toBe(loopScriptId);
+
+  // 单查同样透出绑定
+  const got = await app.inject({
+    method: 'GET',
+    url: `/api/lives/${live.id}`,
+    headers: bearer(token),
+  });
+  expect(got.statusCode).toBe(200);
+  expect(got.json().loopScriptId).toBe(loopScriptId);
+});
+
+dbIt('引用他人循环台本创建 live 返回 400 LOOP_SCRIPT_NOT_OWNED', async () => {
+  await registerAndGetToken(PHONE_LOOP_OWNER);
+  await resetUserData(PHONE_LOOP_OWNER);
+  const loopScriptId = await seedOwnedLoopScript(PHONE_LOOP_OWNER, '他人循环台本');
+
+  const tokenOther = await registerAndGetToken(PHONE_LOOP_CROSS);
+  await resetUserData(PHONE_LOOP_CROSS);
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/lives',
+    headers: bearer(tokenOther),
+    payload: { title: '借用循环台本', loopScriptId },
+  });
+  expect(res.statusCode).toBe(400);
+  expect(res.json()).toMatchObject({ error: 'LOOP_SCRIPT_NOT_OWNED' });
+});
+
+dbIt('PATCH 绑定 / 解绑循环台本，非法绑定返回 400', async () => {
+  const token = await registerAndGetToken(PHONE_LOOP_PATCH);
+  await resetUserData(PHONE_LOOP_PATCH);
+  const loopScriptId = await seedOwnedLoopScript(PHONE_LOOP_PATCH, '换绑台本');
+  const liveId = await createLiveDraft(token, { title: '待绑定直播' });
+
+  // 绑定
+  const bound = await app.inject({
+    method: 'PATCH',
+    url: `/api/lives/${liveId}`,
+    headers: bearer(token),
+    payload: { loopScriptId },
+  });
+  expect(bound.statusCode).toBe(200);
+  expect(bound.json().live.loopScriptId).toBe(loopScriptId);
+
+  // 解绑：显式置空
+  const unbound = await app.inject({
+    method: 'PATCH',
+    url: `/api/lives/${liveId}`,
+    headers: bearer(token),
+    payload: { loopScriptId: null },
+  });
+  expect(unbound.statusCode).toBe(200);
+  expect(unbound.json().live.loopScriptId).toBeNull();
+});
+
+dbIt('PATCH 引用他人循环台本返回 400 LOOP_SCRIPT_NOT_OWNED', async () => {
+  await registerAndGetToken(PHONE_LOOP_OWNER);
+  await resetUserData(PHONE_LOOP_OWNER);
+  const loopScriptId = await seedOwnedLoopScript(PHONE_LOOP_OWNER);
+
+  const tokenOther = await registerAndGetToken(PHONE_LOOP_CROSS);
+  await resetUserData(PHONE_LOOP_CROSS);
+  const liveId = await createLiveDraft(tokenOther, { title: '本人草稿' });
+  const res = await app.inject({
+    method: 'PATCH',
+    url: `/api/lives/${liveId}`,
+    headers: bearer(tokenOther),
+    payload: { loopScriptId },
+  });
+  expect(res.statusCode).toBe(400);
+  expect(res.json()).toMatchObject({ error: 'LOOP_SCRIPT_NOT_OWNED' });
 });
 
 // ---------- CRUD 完整流程 ----------

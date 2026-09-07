@@ -183,6 +183,8 @@ export const lives = pgTable(
     rtmpUrl: text('rtmp_url'),
     voiceId: uuid('voice_id').references(() => voices.id, { onDelete: 'set null' }),
     scriptId: uuid('script_id').references(() => scripts.id, { onDelete: 'set null' }),
+    // 绑定的循环台本（M1 起）：开播时读取一次快照驻内存，中途改台本库不影响进行中场次
+    loopScriptId: uuid('loop_script_id').references(() => loopScripts.id, { onDelete: 'set null' }),
     status: liveStatusEnum('status').notNull().default('idle'),
     // “AI 智能直播”角标已叠加记录（合规要求：强制叠加，不提供关闭入口，逻辑层禁止篡改）
     aiBadgeShown: boolean('ai_badge_shown').notNull().default(true),
@@ -191,6 +193,45 @@ export const lives = pgTable(
     ...timestamps(),
   },
   (table) => [index('lives_user_id_idx').on(table.userId), index('lives_status_idx').on(table.status)],
+);
+
+// ---------- loop_scripts：循环台本库（商家可复用；场次通过 lives.loopScriptId 引用）----------
+export const loopScripts = pgTable(
+  'loop_scripts',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    title: varchar('title', { length: 100 }).notNull(),
+    // 生成来源话术（可选）：保留溯源；台本内容快照在 items，来源话术后续修改不影响台本
+    sourceScriptId: uuid('source_script_id').references(() => scripts.id, { onDelete: 'set null' }),
+    ...timestamps(),
+  },
+  (table) => [index('loop_scripts_user_id_idx').on(table.userId)],
+);
+
+// ---------- loop_script_items：台本条目（有序短台词，随台本级联删除）----------
+export const loopScriptItems = pgTable(
+  'loop_script_items',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    loopScriptId: uuid('loop_script_id')
+      .notNull()
+      .references(() => loopScripts.id, { onDelete: 'cascade' }),
+    // 从 1 起的播放顺序（整体替换时按下标重建）
+    seq: integer('seq').notNull(),
+    // 段落类型：opening/product/coupon/warmup/closing/custom（宽松存储，未知一律存 null）
+    kind: varchar('kind', { length: 20 }),
+    text: text('text').notNull(),
+    // 本条播完后的间隔秒数：null = 用全局默认（6s）
+    gapAfterSeconds: integer('gap_after_seconds'),
+    ...timestamps(),
+  },
+  (table) => [
+    uniqueIndex('loop_script_items_script_seq_unique').on(table.loopScriptId, table.seq),
+    index('loop_script_items_loop_script_idx').on(table.loopScriptId),
+  ],
 );
 
 // ---------- live_danmaku：直播弹幕日志（T13 只读 + G3 弹幕网关写入）----------
