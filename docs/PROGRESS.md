@@ -12,17 +12,19 @@
 > - 更新时间：2026-09-07（P1 UI 批次：应用级设计令牌与主题工厂接入 + 现场工作台暗色重排，新增 docs/UI-DESIGN-SPEC.md；flutter analyze 0 issue、App 测试 95/95 通过）
 > - 更新时间：2026-09-07（doc-only：内录盒 = AI 主播「声音替身」结论定稿 — 三种接法 + 单机回环待实测，见 docs/PHONE-LIVE-PLAN.md §9；决策见 §3 第 15 条）
 > - 更新时间：2026-09-07（doc-only：P-循环台本/P-播出 里程碑方案 v1.1 定稿 — 台本=可复用台本库、场次引用、开播时读快照；正常流程无空台本兜底；默认 6 条/15-80 字/上限 12 条；条间 6s、每轮休 20s；弹幕回复只在空档插入不打断、频控按实际插入时点重算；直播中改台本=手动结束重开生效；新增 docs/LOOP-BROADCAST-PLAN.md；下一步 = 服务端批 A（M1 台本库 CRUD + M2 生成链路））
+> - 更新时间：2026-09-07（批量追记：P-话术v1 代码提交（d05f094）、P-循环台本代码两批（M1 台本库 CRUD + M2 一次过审链路 139a4ca、M3 台本库+开播配置绑定 UI a891f40）、克隆录音收敛 2 段念稿（f37e946）、常规页 UI-2 裸色收尾（4facf2e，App 测试 101/101）、公司端任务台控制台 M1~M4 全落地（b9f9cde / c2e2b91 / aa88983 / 69b3924）；服务端测试 171/171、admin build/lint 0 issue。详见 §6 第 18~27 条）
 
 ## 0. 当前大局
 
 | 指标 | 现状 |
 |---|---|
 | 仓库 | `github.com/renault-wei/zhuboaizhushou`（main，工作区干净） |
-| 服务端测试 | ✅ 126 / 126（15 个测试文件；全量并行本机偶发 PG 文件锁，用 `npx vitest run --no-file-parallelism` 复跑稳定） |
+| 服务端测试 | ✅ 171 / 171（17 个测试文件；全量并行本机偶发 PG 文件锁，用 `npx vitest run --no-file-parallelism` 复跑稳定） |
 | 前端静态检查 | ✅ `flutter analyze` No issues found（Flutter 3.47.2 @ `E:\dev\flutter`） |
-| 最近提交 | P1 UI 批次：设计令牌 + 现场工作台暗色重排 + UI 设计规范（见 §6 第 15 条） |
+| 管理后台 | ✅ `npm run build` / `npm run lint` 0 issue（React + AntD，公司端任务台 M1~M4 页面全接通） |
+| 最近提交 | M4 商业化配额接线：话术生成预检 + 成功后扣减并落 usage_logs（见 §6 第 26 条） |
 | 主推进路线 | v0.2 G 清单（形态已定 = 画面真人出镜 + 后台 AI 语音主播，取消双模式 A/B；托管线 G1→G2 暂停待抖音 key） |
-| 当前推进 | P-话术v1 违禁词一次过生成完成（提示词防误拦 + 自动改写 + 安全模板兜底，服务端 126/126、App 95/95，代码待提交）；下一步 = 验收提交后进入规划中的 P-循环台本（多集轮播）/ P-播出里程碑；手机线真机出声联调仍待音频转接线实物；App 常规页 UI-1→UI-3 逐页统一在队列 |
+| 当前推进 | 公司端任务台控制台 M1~M4 代码全部落地（后台五页 + 运营写操作 + DeepSeek 配额账本），商业闭环待真实支付 / 收银台 / 云 SaaS；手机线真机出声联调仍待内录转换器实物；常规页 UI 收尾（UI-1/UI-2）已完成，UI-3 真机视觉走查待手机线批次 |
 
 ## 1. 能力基线（✅ 已完成，含旧仓库导入部分）
 
@@ -125,10 +127,11 @@
 
 ## 5. 质量基线（每次提交前必过）
 
-- [x] `npm test` → 126/126（15 个测试文件；本机并行偶发 PG 文件锁导致跳过时，`npx vitest run --no-file-parallelism` 复跑即稳定）
+- [x] `npm test` → 171/171（17 个测试文件；本机并行偶发 PG 文件锁导致跳过时，`npx vitest run --no-file-parallelism` 复跑即稳定）
 - [x] lint / typecheck 0 error
 - [x] `flutter analyze` → No issues found
-- [ ] 新功能包对应测试补齐后勾选（随 G5 / G6 走）
+- [x] admin 后台：`npm run build` / `npm run lint` → 0 issue
+- [x] 新功能包对应测试补齐后勾选（随 M1~M4 / UI 批次走，App 测试 101/101）
 
 ## 6. 下一步建议
 
@@ -149,3 +152,13 @@
 15. ✅ P1 UI 批次（2026-09-07）：app/lib/core/theme/ 设计令牌（星橙 + 现场暗色）+ 主题工厂接入 app.dart（亮/暗跟随系统，workbench 固定深色）；现场工作台重排为暗色操作面板 — 主视觉状态卡（渐变 + 大字时长 + 弹幕胶囊）、AI 语音主播 / 助播机出声 / 开播前自检 / 测试弹幕卡化、弹幕日志圆头像 + 「共 n 条」；flutter analyze 0 issue、App 测试 95/95 通过（UI 视觉规范 = docs/UI-DESIGN-SPEC.md）。留待：常规页 UI-1~UI-3 逐页统一 + 真机视觉走查。
 16. ⏳ 手机线硬件定稿（doc-only 2026-09-07）：确认采购 / 申领「内录转换器」实物，按 `docs/PHONE-LIVE-PLAN.md` §3 验证三步 + §9 三种接法实测（重点 = 单手机自回环是否成立）；通过后再回到手机线真机出声联调。
 17. ✅ P-话术v1 违禁词一次过生成（2026-09-07，代码已落地待提交）：生成链路升级为「提示词注入禁用语清单（由扫描词表动态生成防漂移）→ 命中自动整段改写（≤2 次，把命中词回传给模型）→ 仍不过退回服务端安全模板（优先带商品字面量，商品本身含极限词时再回退纯通用文案）」；`POST /api/scripts/generate` 成品必然 `ready+pass` 可直接开播，合规红线不变（入库前仍逐字过拦截扫描，编辑保存拦截行为不变）；自动改写 / 兜底时随 201 响应下发一次性 `generationNote`，App 生成页 SnackBar 提示（不入库）；服务端测试 126/126、`flutter analyze` 0 issue、App 测试 95/95。留待：真实 DeepSeek 复测一次生成通过率；下一里程碑规划 = P-循环台本（多集轮播）与 P-播出（ticker 轮询）。
+18. ✅ P-话术v1 提交追记（2026-09-07，d05f094）：口径见第 17 条；真实 DeepSeek 通过率复测放话术 UI 联调批次。
+19. ✅ P-循环台本 服务端批 A（2026-09-07，139a4ca）：M1 循环台本库 CRUD（归属 / 校验 / 幂等）+ M2 生成链路（复用话术「一次过审」链路，成品必然 pass 可开播）。
+20. ✅ P-循环台本 批 B（2026-09-07，a891f40）：M3 循环台本库 + 开播配置绑定 UI（台本列表 / 新建 / 编辑 / 开播表单引用）。
+21. ✅ 克隆录音收敛（2026-09-07，f37e946）：录音收敛为 2 段念稿（≥1min 校验保持）+ Windows gradle 兼容修正。
+22. ✅ 常规页 UI-2 裸色收尾（2026-09-07，4facf2e）：登录 / 首页 / 音色库 / 券列表 / 录音 / 话术生成与编辑 / 开播列表与表单 / 循环台本 / 抖音绑定共 14 页全部收敛主题令牌与语义色，深浅双模式成立；`flutter analyze` 0 issue、App 测试 101/101。视觉规范状态同步见 docs/UI-DESIGN-SPEC.md §6（UI-1/UI-2 ✅；UI-3 真机视觉走查待手机线批次）。
+23. ✅ 公司端任务台控制台（2026-09-07）：里程碑方案 v0.1 建档（07eb7d0，doc-only）+ M1 服务端账号与只读运营接口（b9f9cde，admin JWT 隔离 / bcrypt 登录 / dashboard-merchants-quotas-usage-orders-audit 只读 + seed 脚本，admin 套件 11 例）。
+24. ✅ M2 运营写操作（2026-09-07，c2e2b91）：`PUT /api/admin/quotas/:userId` 额度幂等调整 + `POST /api/admin/orders/:id/confirm` 人工确权（订阅顺延 30 天 / 当月付费档刷新），均落 audit_logs 留痕；档位常量独立 `quotaTiers.ts` 供 M4 复用；admin 套件扩至 24 例、全仓 169 例。
+25. ✅ M3 管理后台真实接口页面（2026-09-07，aa88983）：React（Vite + AntD）登录页接 `/api/admin/login` + 登录守卫；数据看板 / 商家管理（额度调整抽屉，used 只读保底）/ 算力用量 / 订单订阅（人工确权 Popconfirm）/ 内容审核（三档案 Tab）五页接通真实接口；api.ts 统一 Bearer + 401 登出、adjustQuota 对齐后端局部可空；build / lint 0 issue。
+26. ✅ M4 商业化配额接线（2026-09-07，69b3924）：话术生成前按「免费试用档」自动建档 + 预检，额度耗尽 402 `QUOTA_EXCEEDED` 不触发 AI；生成成功才把 `script_generations_used` +1（原子守门）并落一条 usage_logs（category=script_generation / deepseek-chat / costCents=0），失败 502 不扣不记；`server/src/services/quota.ts` 月度账本供后续 TTS / 直播分钟复用；服务端 171/171。
+27. ⏳ 公司端后续队列：真实支付（微信证书 / 收银台 UI）、TTS / 直播分钟扣减接线（依赖手机线稳定 user 上下文）、云部署 / SaaS 谈单 — 见 docs/console-roadmap.md §5；UI-3 全 App 真机视觉走查随手机线内录转换器批次执行。
