@@ -18,6 +18,8 @@ import 'package:go_router/go_router.dart';
 
 import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/core/theme/app_colors.dart';
+import 'package:starvoice_app/core/theme/app_theme.dart';
 import 'package:starvoice_app/features/assistant_speaker/application/assistant_speaker_controller.dart';
 import 'package:starvoice_app/providers.dart';
 
@@ -292,12 +294,17 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   }
 
   @override
+  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      key: const Key('liveMonitorPage'),
-      appBar: AppBar(title: const Text('现场直播工作台')),
-      body: _buildBody(),
-      bottomNavigationBar: _buildBottomBar(),
+    // 现场工作台恒为深色：直播中长时间注视的操作面板，固定 workbench 主题。
+    return Theme(
+      data: AppTheme.workbench(),
+      child: Scaffold(
+        key: const Key('liveMonitorPage'),
+        appBar: AppBar(title: const Text('现场直播工作台')),
+        body: _buildBody(),
+        bottomNavigationBar: _buildBottomBar(),
+      ),
     );
   }
 
@@ -311,14 +318,17 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     if (monitor.status == LiveStatus.ready) {
       return SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           child: SizedBox(
             width: double.infinity,
             child: FilledButton(
               key: const Key('liveMonitorStartButton'),
               onPressed: _starting ? null : _startLive,
               style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
+                minimumSize: const Size.fromHeight(52),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
               ),
               child: _starting ? const Text('正在开播…') : const Text('开始直播'),
             ),
@@ -329,15 +339,18 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     if (monitor.status == LiveStatus.live) {
       return SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           child: SizedBox(
             width: double.infinity,
             child: FilledButton(
               key: const Key('liveEndButton'),
               onPressed: _ending ? null : _endLive,
               style: FilledButton.styleFrom(
-                backgroundColor: Colors.red.shade600,
-                minimumSize: const Size.fromHeight(48),
+                backgroundColor: AppColors.danger,
+                minimumSize: const Size.fromHeight(52),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
               ),
               child: const Text('结束直播'),
             ),
@@ -431,85 +444,120 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     final speaker = ref.watch(assistantSpeakerControllerProvider);
     _speakerNotifier ??= ref.read(assistantSpeakerControllerProvider.notifier);
     final enabled = speaker.enabled;
-    return Card(
+    final accent = enabled ? AppColors.live : AppColors.nightTextFaint;
+    return Container(
       key: const Key('liveMonitorSpeakerCard'),
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.speaker_phone_outlined,
-                  size: 18,
-                  color: enabled ? Colors.teal.shade700 : Colors.grey.shade500,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+      decoration: BoxDecoration(
+        color: AppColors.nightCard,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.nightStroke),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: enabled
+                      ? AppColors.live.withValues(alpha: 0.16)
+                      : AppColors.nightCardHi,
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                const SizedBox(width: 8),
-                const Expanded(
-                  child: Text(
-                    '助播机出声（手机线）',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                child: Icon(
+                  Icons.speaker_phone_outlined,
+                  size: 20,
+                  color: accent,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  '助播机出声（手机线）',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.nightText,
                   ),
                 ),
-                Text(
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
                   _speakerStatusLabel(speaker),
                   key: const Key('liveMonitorSpeakerState'),
                   style: TextStyle(
                     fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: enabled
-                        ? Colors.teal.shade700
-                        : Colors.grey.shade500,
+                    color: accent,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '启用后本机轮询播报队列并出声，经音频转接线送入开播手机；'
-              '需服务端 LIVE_SPEAKER_OUTPUT=phone。',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey.shade600,
-                height: 1.4,
-              ),
-            ),
-            if (enabled && speaker.status == AssistantSpeakerStatus.error) ...[
-              const SizedBox(height: 4),
-              Text(
-                speaker.lastError ?? '连接异常',
-                style: TextStyle(fontSize: 12, color: Colors.red.shade600),
               ),
             ],
-            Row(
-              children: [
-                const Expanded(child: Text('')),
-                Text(
-                  '累计播报 ${speaker.playedCount} 条',
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-                ),
-                const SizedBox(width: 4),
-                Switch(
-                  key: const Key('liveMonitorSpeakerSwitch'),
-                  value: enabled,
-                  activeThumbColor: Colors.teal,
-                  onChanged: (value) {
-                    final notifier = ref.read(
-                      assistantSpeakerControllerProvider.notifier,
-                    );
-                    if (value) {
-                      notifier.start();
-                    } else {
-                      notifier.stop();
-                    }
-                  },
-                ),
-              ],
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            '启用后本机轮询播报队列并出声，经音频转接线送入开播手机；'
+            '需服务端 LIVE_SPEAKER_OUTPUT=phone。',
+            style: TextStyle(
+              fontSize: 12,
+              color: AppColors.nightTextDim,
+              height: 1.45,
+            ),
+          ),
+          if (enabled && speaker.status == AssistantSpeakerStatus.error) ...[
+            const SizedBox(height: 6),
+            Text(
+              speaker.lastError ?? '连接异常',
+              style: const TextStyle(fontSize: 12, color: AppColors.danger),
             ),
           ],
-        ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              const Icon(
+                Icons.history,
+                size: 14,
+                color: AppColors.nightTextFaint,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '累计播报 ${speaker.playedCount} 条',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.nightTextFaint,
+                ),
+              ),
+              const Spacer(),
+              Switch(
+                key: const Key('liveMonitorSpeakerSwitch'),
+                value: enabled,
+                activeThumbColor: AppColors.live,
+                activeTrackColor: AppColors.live.withValues(alpha: 0.35),
+                onChanged: (value) {
+                  final notifier = ref.read(
+                    assistantSpeakerControllerProvider.notifier,
+                  );
+                  if (value) {
+                    notifier.start();
+                  } else {
+                    notifier.stop();
+                  }
+                },
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -532,43 +580,70 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   /// 覆盖电脑线（虚拟声卡 → 直播伴侣）与手机线（音频转接线接入开播手机）
   /// 两种出声方式；开播后自动消失，不打扰直播中监控。
   Widget _buildPreflightCard() {
-    return Card(
+    return Container(
       key: const Key('liveMonitorPreflight'),
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.nightCard,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.nightStroke),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.primarySoft,
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: const Icon(
                   Icons.fact_check_outlined,
                   size: 18,
-                  color: Colors.blueGrey,
+                  color: AppColors.primary,
                 ),
-                const SizedBox(width: 8),
-                Text(
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
                   '开播前自检',
                   style: TextStyle(
-                    fontSize: 14,
+                    fontSize: 15,
                     fontWeight: FontWeight.w600,
-                    color: Colors.blueGrey.shade700,
+                    color: AppColors.nightText,
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            _buildPreflightItem('直播间画面已开播（直播伴侣 / 手机开播），真人出镜正常'),
-            const SizedBox(height: 8),
-            _buildPreflightItem(
-              '出声链路就位：电脑线 = 系统默认播放指向虚拟声卡、直播伴侣麦克风选 '
-              'CABLE Output；手机线 = 出声设备经音频转接线连到开播手机',
-            ),
-            const SizedBox(height: 8),
-            _buildPreflightItem('开播后在本页发一条测试弹幕，确认直播间能听到 AI 语音回复'),
-          ],
-        ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.warningSoft,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: const Text(
+                  '待确认',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppColors.warning,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _buildPreflightItem('直播间画面已开播（直播伴侣 / 手机开播），真人出镜正常'),
+          const SizedBox(height: 10),
+          _buildPreflightItem(
+            '出声链路就位：电脑线 = 系统默认播放指向虚拟声卡、直播伴侣麦克风选 '
+            'CABLE Output；手机线 = 出声设备经音频转接线连到开播手机',
+          ),
+          const SizedBox(height: 10),
+          _buildPreflightItem('开播后在本页发一条测试弹幕，确认直播间能听到 AI 语音回复'),
+        ],
       ),
     );
   }
@@ -578,19 +653,24 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(
-          Icons.check_circle_outline,
-          size: 16,
-          color: Colors.green.shade600,
+        Container(
+          margin: const EdgeInsets.only(top: 1),
+          width: 18,
+          height: 18,
+          decoration: BoxDecoration(
+            color: AppColors.live.withValues(alpha: 0.16),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.check, size: 12, color: AppColors.live),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 10),
         Expanded(
           child: Text(
             text,
-            style: TextStyle(
+            style: const TextStyle(
               fontSize: 13,
-              color: Colors.grey.shade700,
-              height: 1.4,
+              color: AppColors.nightTextDim,
+              height: 1.45,
             ),
           ),
         ),
@@ -601,71 +681,149 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   /// 顶部状态卡片：状态徽章 + 已播时长。
   Widget _buildStatusCard(LiveMonitor monitor, int durationSeconds) {
     final color = _statusColor(monitor.status);
+    final live = monitor.status == LiveStatus.live;
     final label = _durationLabel(durationSeconds);
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [AppColors.nightCardHi, AppColors.nightCard],
+        ),
+        border: Border.all(color: AppColors.nightStroke),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+            child: Row(
               children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: color.withValues(alpha: 0.45),
+                          ),
+                        ),
+                        child: Text(
+                          monitor.status.label,
+                          key: const Key('liveMonitorStatus'),
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: color,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: live ? AppColors.live : color,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            _phaseLabel(monitor.status),
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: AppColors.nightTextDim,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    monitor.status.label,
-                    key: const Key('liveMonitorStatus'),
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: color,
-                      fontWeight: FontWeight.w600,
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    const Text(
+                      '已播时长',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.nightTextFaint,
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                const Icon(
-                  Icons.fiber_manual_record,
-                  size: 10,
-                  color: Colors.red,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  _phaseLabel(monitor.status),
-                  style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                    const SizedBox(height: 6),
+                    Text(
+                      label,
+                      key: const Key('liveMonitorDuration'),
+                      style: const TextStyle(
+                        fontSize: 36,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.nightText,
+                        letterSpacing: 1.2,
+                        fontFeatures: [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            Text(
-              '已播时长',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          ),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            decoration: const BoxDecoration(
+              color: AppColors.primarySoft,
+              border: Border(top: BorderSide(color: AppColors.nightStroke)),
             ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              key: const Key('liveMonitorDuration'),
-              style: const TextStyle(
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
-                fontFeatures: [FontFeature.tabularFigures()],
-              ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.forum_outlined,
+                  size: 16,
+                  color: AppColors.primary,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '弹幕 ${monitor.danmakuCount} 条',
+                  key: const Key('liveMonitorDanmakuCount'),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppColors.nightTextDim,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                if (live)
+                  Row(
+                    children: const [
+                      Icon(
+                        Icons.fiber_manual_record,
+                        size: 8,
+                        color: AppColors.live,
+                      ),
+                      SizedBox(width: 4),
+                      Text(
+                        'AI 实时播报中',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: AppColors.nightTextFaint,
+                        ),
+                      ),
+                    ],
+                  ),
+              ],
             ),
-            const SizedBox(height: 8),
-            Text(
-              '弹幕 ${monitor.danmakuCount} 条',
-              key: const Key('liveMonitorDanmakuCount'),
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -702,92 +860,92 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     if (live) {
       stateText = '播报中';
       note = '真人出镜现场，AI 语音主播在后台实时朗读弹幕、介绍产品并回复提问。';
-      stateColor = Colors.teal.shade700;
+      stateColor = AppColors.live;
     } else if (ready) {
       stateText = '待开播';
       note = '配置已就绪，点击下方「开始直播」后 AI 语音主播将上线播报。';
-      stateColor = Colors.orange.shade700;
+      stateColor = AppColors.primary;
     } else if (finished) {
       stateText = '已停止';
       note = '直播已结束，AI 语音播报已停止。';
-      stateColor = Colors.grey;
+      stateColor = AppColors.nightTextFaint;
     } else {
       stateText = '待机';
       note = '直播尚未开播，AI 语音主播暂未上线。';
-      stateColor = Colors.grey;
+      stateColor = AppColors.info;
     }
-    return Card(
+    return Container(
       key: const Key('liveMonitorAiHostCard'),
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.orange.shade50,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(
-                Icons.record_voice_over,
-                color: Colors.orange.shade700,
-                size: 22,
-              ),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.nightCard,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.nightStroke),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: stateColor.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(14),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Expanded(
-                        child: Text(
-                          'AI 语音主播',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                          ),
+            child: Icon(Icons.record_voice_over, color: stateColor, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'AI 语音主播',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.nightText,
                         ),
                       ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 3,
-                        ),
-                        decoration: BoxDecoration(
-                          color: stateColor.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text(
-                          stateText,
-                          key: const Key('liveMonitorAiHostState'),
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: stateColor,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    note,
-                    key: const Key('liveMonitorAiHostNote'),
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey.shade600,
-                      height: 1.4,
                     ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: stateColor.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        stateText,
+                        key: const Key('liveMonitorAiHostState'),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: stateColor,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  note,
+                  key: const Key('liveMonitorAiHostNote'),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppColors.nightTextDim,
+                    height: 1.45,
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -800,26 +958,40 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
         live && !_sendingDanmaku && _testController.text.trim().isNotEmpty;
     return Container(
       key: const Key('liveMonitorTestSection'),
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.blueGrey.withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(8),
+        color: AppColors.nightCard,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.nightStroke),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(
-                Icons.science_outlined,
-                size: 16,
-                color: Colors.blueGrey.shade600,
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.info.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: const Icon(
+                  Icons.science_outlined,
+                  size: 18,
+                  color: AppColors.info,
+                ),
               ),
-              const SizedBox(width: 6),
-              const Text(
-                '发送测试弹幕',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  '发送测试弹幕',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.nightText,
+                  ),
+                ),
               ),
             ],
           ),
@@ -827,9 +999,13 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
           Text(
             _testDanmakuHint(monitor.status),
             key: const Key('liveMonitorTestHint'),
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppColors.nightTextDim,
+              height: 1.4,
+            ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
@@ -842,31 +1018,37 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                   textInputAction: TextInputAction.send,
                   onChanged: (_) => setState(() {}),
                   onSubmitted: canSend ? (_) => _sendTestDanmaku() : null,
+                  style: const TextStyle(color: AppColors.nightText),
                   decoration: InputDecoration(
                     hintText: '如：今天双人套餐多少钱？',
                     counterText: '',
                     isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
                     border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(12),
                     ),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
-              FilledButton.tonal(
-                key: const Key('liveMonitorTestSend'),
-                onPressed: canSend ? _sendTestDanmaku : null,
-                child: _sendingDanmaku
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('发送'),
+              const SizedBox(width: 10),
+              SizedBox(
+                height: 48,
+                child: FilledButton(
+                  key: const Key('liveMonitorTestSend'),
+                  onPressed: canSend ? _sendTestDanmaku : null,
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: _sendingDanmaku
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('发送'),
+                ),
               ),
             ],
           ),
@@ -888,25 +1070,35 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
 
   /// 合规角标提示：恒 true、无关闭入口。
   Widget _buildComplianceBadge(LiveMonitor monitor) {
+    final ok = monitor.aiBadgeShown;
+    final color = ok ? AppColors.warning : AppColors.danger;
+    final background = ok
+        ? AppColors.warningSoft
+        : AppColors.danger.withValues(alpha: 0.14);
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.amber.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(8),
+        color: background,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.gpp_good_outlined, size: 16, color: Colors.orange),
-          const SizedBox(width: 8),
+          Icon(
+            ok ? Icons.verified_outlined : Icons.warning_amber_rounded,
+            size: 18,
+            color: color,
+          ),
+          const SizedBox(width: 10),
           Expanded(
             child: Text(
               monitor.aiBadgeShown
                   ? '合规提示：直播画面已强制叠加「AI 智能直播」角标，无法关闭。'
                   : '合规提示：直播画面未检测到 AI 角标。',
               key: const Key('liveMonitorBadgeNote'),
-              style: const TextStyle(fontSize: 12, color: Colors.orange),
+              style: TextStyle(fontSize: 12.5, color: color, height: 1.4),
             ),
           ),
         ],
@@ -919,25 +1111,53 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          '弹幕日志',
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+        Row(
+          children: [
+            const Text(
+              '弹幕日志',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: AppColors.nightText,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppColors.nightCardHi,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                '共 ${_danmaku.length} 条',
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: AppColors.nightTextFaint,
+                ),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
         if (_danmaku.isEmpty)
           Container(
             key: const Key('liveMonitorDanmakuEmpty'),
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 32),
+            padding: const EdgeInsets.symmetric(vertical: 28),
+            decoration: BoxDecoration(
+              color: AppColors.nightCard,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppColors.nightStroke),
+            ),
             child: Column(
               children: [
-                Icon(
+                const Icon(
                   Icons.chat_bubble_outline,
-                  size: 40,
-                  color: Colors.grey.shade400,
+                  size: 34,
+                  color: AppColors.nightTextFaint,
                 ),
                 const SizedBox(height: 8),
-                Text('暂无弹幕', style: TextStyle(color: Colors.grey.shade500)),
+                Text('暂无弹幕', style: TextStyle(color: AppColors.nightTextDim)),
               ],
             ),
           )
@@ -948,20 +1168,30 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   }
 
   Widget _buildDanmakuItem(LiveDanmaku item) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.nightCard,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.nightStroke),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           CircleAvatar(
-            radius: 14,
-            backgroundColor: Colors.orange.shade100,
+            radius: 16,
+            backgroundColor: AppColors.primarySoft,
             child: Text(
               _nicknameInitial(item.senderNickname),
-              style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.primary,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -972,29 +1202,34 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                       child: Text(
                         item.senderNickname ?? '匿名观众',
                         key: Key('liveDanmakuNickname_${item.id}'),
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 12,
-                          color: Colors.grey.shade600,
+                          color: AppColors.nightTextDim,
                           fontWeight: FontWeight.w600,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    const SizedBox(width: 8),
                     Text(
                       _sentAtLabel(item.sentAt),
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 11,
-                        color: Colors.grey.shade400,
+                        color: AppColors.nightTextFaint,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 3),
                 Text(
                   item.content,
                   key: Key('liveDanmakuContent_${item.id}'),
-                  style: const TextStyle(fontSize: 14),
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: AppColors.nightText,
+                    height: 1.35,
+                  ),
                 ),
               ],
             ),
@@ -1039,16 +1274,16 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
 Color _statusColor(LiveStatus status) {
   switch (status) {
     case LiveStatus.live:
-      return Colors.orange.shade800;
+      return AppColors.live;
     case LiveStatus.ended:
-      return Colors.grey;
+      return AppColors.nightTextFaint;
     case LiveStatus.idle:
-      return Colors.blue.shade700;
+      return AppColors.info;
     case LiveStatus.processing:
-      return Colors.indigo;
+      return AppColors.warning;
     case LiveStatus.ready:
-      return Colors.green.shade700;
+      return AppColors.primary;
     case LiveStatus.failed:
-      return Colors.red;
+      return AppColors.danger;
   }
 }
