@@ -4,12 +4,13 @@ import { unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { env } from '../config/env';
-import { createVoicePlayer, type VoicePlayer } from './voicePlayer';
+import { createVoicePlayer, type PlayOutcome, type VoicePlayer } from './voicePlayer';
 import { volcTtsSynth } from './volcTTS';
 
-// G5 现场口播出口：TTS 合成 → 播放队列 → 默认播放设备。
-// 本模块是 G4 `onReply` 的消费方：引擎产出的回复文字进来 → 合成本机女声 wav → 排队出声；
-// 系统默认播放设备指向 VB-Cable 虚拟声卡时，这段声音会像麦克风一样进入抖音直播伴侣。
+// G5/P1 现场口播出口：TTS 合成 → 出声端（SpeechSink）→ 播放。
+// 本模块是 G4 `onReply` 的消费方：引擎产出的回复文字进来 → 合成 wav → 交给当前出声端排队播放；
+// 默认出声端 = 本机播放（默认播放设备指向 VB-Cable 虚拟声卡时，声音会像麦克风一样进入抖音直播伴侣）；
+// P1 手机线将新增远程出声端（助播机出声），同接口换实现，合成器与引擎接线不变。
 // 音色策略：LIVE_TTS_PROVIDER=volc 且已配置 VOLC_TTS_API_KEY（火山豆包语音，商用音色）时走火山 provider；
 // 默认 local = Windows 本机 SAPI（火山账号开通模型服务前先保住出声，避免直播演示无声）；
 // 火山真连验证通过后，把 .env 的 LIVE_TTS_PROVIDER 改为 volc 即可整体切换，播放队列与引擎接线不变。
@@ -115,20 +116,75 @@ function runHiddenPowerShell(command: string): Promise<{ code: number | null; st
   });
 }
 
+// ---------- 出声端抽象（P1 手机线：合成与播放分离） ----------
+
+/** 出声端（SpeechSink）：一段合成好的 wav 交给谁播、由谁负责收尾清理。
+ *  - 本地实现（默认）：本机默认播放设备 / 虚拟声卡，播完即删临时文件（本期行为不变）；
+ *  - 未来远程实现：助播机出声端（双手机线）——同接口换实现，liveSpeaker 与引擎零改动。
+ *  说明：远程出声端落地前，speak 的 win32 门槛仍代表「本机出声」；
+ *  换远程 sink 后再把平台限制下放到各 sink 自身判断。
+ */
+export interface SpeechSink {
+  /** 当前是否静音（静音只拦新播放，播到一半让其自然播完） */
+  isMuted(): boolean;
+  setMuted(muted: boolean): void;
+  /** 播放一段 wav：播放权与文件清理权都移交给 sink，播完 / 跳过 / 失败都由 sink 收尾 */
+  play(wavPath: string): Promise<PlayOutcome>;
+  /** 清空未播队列并打断当前播放（真人接管 / 一键静音） */
+  stop(): void;
+  /** 尚未播出的排队条数 */
+  pendingCount(): number;
+}
+
+/** 本地出声端：包装现有 Windows 播放队列（voicePlayer），并接管临时 wav 的文件生命周期 */
+class LocalDeviceSink implements SpeechSink {
+  constructor(private readonly player: VoicePlayer) {}
+
+  isMuted(): boolean {
+    return this.player.isMuted();
+  }
+
+  setMuted(muted: boolean): void {
+    this.player.setMuted(muted);
+  }
+
+  async play(wavPath: string): Promise<PlayOutcome> {
+    try {
+      return await this.player.enqueue(wavPath);
+    } finally {
+      // 无论 played / skipped / failed 都清理，避免临时 wav 堆积（远程 sink 改为收到回执后再删）
+      await unlink(wavPath).catch(() => undefined);
+    }
+  }
+
+  stop(): void {
+    this.player.stop();
+  }
+
+  pendingCount(): number {
+    return this.player.pendingCount();
+  }
+}
+
+/** 本地出声端工厂：生产默认使用；测试可用假播放器包装后验证清理职责 */
+export function createLocalDeviceSink(player: VoicePlayer): SpeechSink {
+  return new LocalDeviceSink(player);
+}
+
 // ---------- 出口门面 ----------
 
-/** 播放器全局单例：多个场次共用同一条出声队列（排队 / 打断语义在 voicePlayer） */
-let sharedPlayer: VoicePlayer | null = null;
+/** 出声端全局单例：多个场次共用同一条出声链路（排队 / 打断语义在 voicePlayer，sink 只换“谁播放”） */
+let sharedSink: SpeechSink | null = null;
 
-function getSharedPlayer(): VoicePlayer {
-  if (!sharedPlayer) {
-    sharedPlayer = createVoicePlayer();
+function getSharedSink(): SpeechSink {
+  if (!sharedSink) {
+    sharedSink = createLocalDeviceSink(createVoicePlayer());
   }
-  return sharedPlayer;
+  return sharedSink;
 }
 
 export interface LiveSpeaker {
-  /** 把一段口播文字合成本机语音并播放；任何失败都不上抛，由调用方看结果决定是否告警 */
+  /** 把一段口播文字合成语音并交给当前出声端播放；任何失败都不上抛，由调用方看结果决定是否告警 */
   speak(text: string): Promise<SpeakResult>;
 }
 
@@ -143,8 +199,8 @@ export interface CreateLiveSpeakerOptions {
   rate?: number;
   /** 测试注入合成器 */
   synth?: LocalWavSynth;
-  /** 测试注入播放器 */
-  player?: VoicePlayer;
+  /** 测试注入出声端；不传用本地默认（Windows 播放队列） */
+  sink?: SpeechSink;
 }
 
 /** 出口工厂：生产用真实本机合成 + 真实播放器；测试可注入替身 */
@@ -153,23 +209,23 @@ export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveS
   const enabled = options.enabled ?? env.liveSpeaker.enabled;
   const voice = options.voice ?? env.liveSpeaker.localTtsVoice ?? DEFAULT_LOCAL_TTS_VOICE;
   const rate = options.rate ?? LOCAL_TTS_RATE;
-  const injectedSynth = options.synth;
-  const injectedPlayer = options.player;
+  const synth = options.synth ?? new WindowsLocalSpeechSynth({ voice, rate });
+  const sink = options.sink ?? getSharedSink();
 
   return {
     async speak(text: string): Promise<SpeakResult> {
       if (!enabled) {
         return { spoken: false, reason: 'disabled' };
       }
+      // 远程出声端落地后，平台限制下放到各 sink 自判；本期仍按“本机出声”判断
       if (platform !== 'win32') {
         return { spoken: false, reason: 'unsupported' };
       }
-      const synth = injectedSynth ?? new WindowsLocalSpeechSynth({ voice, rate });
-      let wavPath: string | null = null;
+      let sinkReached = false;
       try {
-        const synthesized = await synth.synthesize(text);
-        wavPath = synthesized.wavPath;
-        const outcome = await (injectedPlayer ?? getSharedPlayer()).enqueue(wavPath);
+        const { wavPath } = await synth.synthesize(text);
+        sinkReached = true;
+        const outcome = await sink.play(wavPath);
         if (outcome === 'played') {
           return { spoken: true, reason: 'spoken' };
         }
@@ -182,14 +238,9 @@ export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveS
         console.warn(`[liveSpeaker] 现场口播出口失败：${error}`);
         return {
           spoken: false,
-          reason: wavPath === null ? 'synthesize_failed' : 'play_failed',
+          reason: sinkReached ? 'play_failed' : 'synthesize_failed',
           error,
         };
-      } finally {
-        // 播放完毕（或被跳过 / 打断）后清理临时 wav，失败不阻塞主线
-        if (wavPath !== null) {
-          void unlink(wavPath).catch(() => undefined);
-        }
       }
     },
   };
