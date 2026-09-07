@@ -1,14 +1,20 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client';
-import { scripts as scriptsTable } from '../db/schema';
-import { scanSensitive } from '../services/sensitive';
+import { scripts as scriptsTable, usageLogs as usageLogsTable } from '../db/schema';
+import { scanSensitive, SENSITIVE_GUARD_PROMPT } from '../services/sensitive';
 import {
   buildSafeScriptFallback,
   isScriptIndustry,
   ScriptError,
   scriptService,
+  scriptTemplates,
 } from '../services/script';
+import {
+  bumpScriptGenerationUsed,
+  ensureMonthlyQuotaRow,
+  readCurrentPeriod,
+} from '../services/quota';
 
 // ---------- 常量与类型 ----------
 
@@ -116,6 +122,18 @@ export const scriptsRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: 'PRODUCT_INVALID', message: '商品信息不能为空' });
     }
 
+    // 商业化配额（console-roadmap M4）：首次调用按免费试用档自动建档；
+    // 额度耗尽直接 402 QUOTA_EXCEEDED，不触发任何第三方 AI 调用
+    const userId = request.user.userId;
+    const period = await readCurrentPeriod();
+    const quotaRow = await ensureMonthlyQuotaRow(userId, period);
+    if (quotaRow.scriptGenerationsUsed >= quotaRow.scriptGenerationsQuota) {
+      return reply.code(402).send({
+        error: 'QUOTA_EXCEEDED',
+        message: '本月话术生成额度已用完，请升级套餐或联系运营扩容',
+      });
+    }
+
     const MAX_GENERATE_REWRITES = 2;
     let content: string;
     let generationNote: string | undefined;
@@ -149,7 +167,7 @@ export const scriptsRoutes: FastifyPluginAsync = async (app) => {
       const inserted = await db
         .insert(scriptsTable)
         .values({
-          userId: request.user.userId,
+          userId,
           industry,
           title,
           productSnapshot: product,
@@ -165,6 +183,24 @@ export const scriptsRoutes: FastifyPluginAsync = async (app) => {
         // 理论上插入成功必有返回，此处兜底避免静默失败
         throw new Error('保存话术失败');
       }
+      // 配额与流水：生成成功才扣减（失败 502 走 catch，不扣不记）；
+      // 自动改写/兜底属于同一生成请求，只记 1 次 script_generation
+      await bumpScriptGenerationUsed(userId, period);
+      const template = scriptTemplates[industry];
+      await db.insert(usageLogsTable).values({
+        userId,
+        category: 'script_generation',
+        provider: 'deepseek',
+        model: 'deepseek-chat',
+        // prompt/output 均按字符估算；本自用阶段不落成本金额（costCents=0）
+        promptChars:
+          (template?.systemPrompt.length ?? 0) +
+          SENSITIVE_GUARD_PROMPT.length +
+          JSON.stringify(product).length,
+        outputChars: content.length,
+        costCents: 0,
+        status: 'success',
+      });
       // generationNote 仅在发生自动改写/兜底时随响应下发（不入库，刷新后不保留）
       return reply.code(201).send({ ...created, ...(generationNote ? { generationNote } : {}) });
     } catch (err) {

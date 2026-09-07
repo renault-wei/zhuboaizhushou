@@ -35,6 +35,8 @@ const PHONE_EDIT = '13900000030';
 const PHONE_FAIL = '13900000031';
 const PHONE_REWRITE_FALLBACK = '13900000032';
 const PHONE_GENERIC_FALLBACK = '13900000033';
+const PHONE_QUOTA_FIRST = '13900000034';
+const PHONE_QUOTA_EXHAUST = '13900000035';
 
 async function registerAndGetToken(phone: string): Promise<string> {
   const send = await app.inject({
@@ -63,9 +65,11 @@ async function userIdOf(phone: string): Promise<string> {
   return row.id;
 }
 
-/** 复位：清空该用户的话术记录，保证用例之间互不影响 */
+/** 复位：清空该用户的话术/配额/用量流水，保证用例之间互不影响（M4 起配额账本随用例复位） */
 async function resetUserData(phone: string): Promise<void> {
   const userId = await userIdOf(phone);
+  await pool.query('DELETE FROM usage_logs WHERE user_id = $1', [userId]);
+  await pool.query('DELETE FROM quotas WHERE user_id = $1', [userId]);
   await pool.query('DELETE FROM scripts WHERE user_id = $1', [userId]);
 }
 
@@ -325,6 +329,19 @@ dbIt('DeepSeek 调用失败：非 2xx / 网络异常 → 502 GENERATION_FAILED',
   });
   expect(networkError.statusCode).toBe(502);
   expect(networkError.json()).toMatchObject({ error: 'GENERATION_FAILED' });
+
+  // M4 配额口径：调用失败不扣减、不落流水（配额行在预检时建档，但 used 保持 0）
+  const failUserId = await userIdOf(PHONE_FAIL);
+  const quotaRes = await pool.query(
+    'SELECT script_generations_used FROM quotas WHERE user_id = $1',
+    [failUserId],
+  );
+  expect(quotaRes.rows[0]?.script_generations_used ?? 0).toBe(0);
+  const failLogRes = await pool.query(
+    "SELECT count(*)::int AS total FROM usage_logs WHERE user_id = $1 AND category = 'script_generation'",
+    [failUserId],
+  );
+  expect(failLogRes.rows[0]?.total).toBe(0);
 });
 
 // ---------- 列表与归属隔离 ----------
@@ -459,4 +476,102 @@ dbIt('编辑保存时 content 为空返回 400 CONTENT_REQUIRED', async () => {
   });
   expect(res.statusCode).toBe(400);
   expect(res.json()).toMatchObject({ error: 'CONTENT_REQUIRED' });
+});
+
+// ---------- M4 商业化配额接线 ----------
+
+dbIt('首次生成自动按免费档建档：201 后 quotas/usage_logs 均 +1 且流水完整', async () => {
+  const token = await registerAndGetToken(PHONE_QUOTA_FIRST);
+  await resetUserData(PHONE_QUOTA_FIRST);
+  const content = '锅底现炒、毛肚脆嫩，双人套餐只要 99 元，欢迎到店品尝。';
+  vi.mocked(fetch).mockResolvedValue(fakeDeepSeekResponse(content));
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/scripts/generate',
+    headers: bearer(token),
+    payload: { industry: 'restaurant', product: hotpotProduct },
+  });
+  expect(res.statusCode).toBe(201);
+
+  const userId = await userIdOf(PHONE_QUOTA_FIRST);
+  const quotaRows = await pool.query(
+    `SELECT period, tts_chars_quota, script_generations_quota, script_generations_used, live_minutes_quota
+     FROM quotas WHERE user_id = $1 ORDER BY period DESC LIMIT 1`,
+    [userId],
+  );
+  const quota = quotaRows.rows[0] as {
+    period: string;
+    tts_chars_quota: number;
+    script_generations_quota: number;
+    script_generations_used: number;
+    live_minutes_quota: number;
+  };
+  expect(quota).toBeTruthy();
+  expect(quota.period).toMatch(/^\d{4}-\d{2}$/);
+  // 免费试用档：TTS 50 万字符 / 话术 300 次 / 直播 2 万分钟
+  expect(quota.tts_chars_quota).toBe(500000);
+  expect(quota.script_generations_quota).toBe(300);
+  expect(quota.script_generations_used).toBe(1);
+  expect(quota.live_minutes_quota).toBe(20000);
+
+  const logRows = await pool.query(
+    `SELECT category, provider, model, output_chars, cost_cents, status
+     FROM usage_logs WHERE user_id = $1 AND category = 'script_generation'`,
+    [userId],
+  );
+  expect(logRows.rows).toHaveLength(1);
+  const log = logRows.rows[0] as {
+    provider: string;
+    model: string;
+    output_chars: number;
+    cost_cents: number;
+    status: string;
+  };
+  expect(log.provider).toBe('deepseek');
+  expect(log.model).toBe('deepseek-chat');
+  expect(log.output_chars).toBeGreaterThan(0);
+  expect(log.cost_cents).toBe(0);
+  expect(log.status).toBe('success');
+});
+
+dbIt('当月话术额度耗尽：生成返回 402 QUOTA_EXCEEDED 且不触发 DeepSeek、不入库', async () => {
+  const token = await registerAndGetToken(PHONE_QUOTA_EXHAUST);
+  await resetUserData(PHONE_QUOTA_EXHAUST);
+  vi.mocked(fetch).mockResolvedValue(fakeDeepSeekResponse('这是额度耗尽前的干净话术。'));
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/scripts/generate',
+    headers: bearer(token),
+    payload: { industry: 'restaurant', product: hotpotProduct },
+  });
+  expect(created.statusCode).toBe(201);
+
+  // 模拟当月额度被用尽（等价于运营把话术额度调到 0 后的状态）
+  const userId = await userIdOf(PHONE_QUOTA_EXHAUST);
+  await pool.query(
+    'UPDATE quotas SET script_generations_used = script_generations_quota WHERE user_id = $1',
+    [userId],
+  );
+
+  const blocked = await app.inject({
+    method: 'POST',
+    url: '/api/scripts/generate',
+    headers: bearer(token),
+    payload: { industry: 'restaurant', product: hotpotProduct },
+  });
+  expect(blocked.statusCode).toBe(402);
+  expect(blocked.json()).toMatchObject({ error: 'QUOTA_EXCEEDED' });
+  // 只有首次成功那次真正请求了 DeepSeek，402 在调用前即拦截
+  expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+
+  // 402 未入库话术、未落新流水
+  const listRes = await app.inject({ method: 'GET', url: '/api/scripts', headers: bearer(token) });
+  expect(listRes.statusCode).toBe(200);
+  expect(listRes.json()).toHaveLength(1);
+  const logRes = await pool.query(
+    "SELECT count(*)::int AS total FROM usage_logs WHERE user_id = $1 AND category = 'script_generation'",
+    [userId],
+  );
+  expect(logRes.rows[0]?.total).toBe(1);
 });
