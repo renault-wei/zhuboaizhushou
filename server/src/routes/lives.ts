@@ -1,4 +1,4 @@
-﻿import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import {
   createLive,
   deleteLive,
@@ -16,6 +16,7 @@ import { pipeline } from 'node:stream/promises';
 import { streamingService } from '../services/streaming';
 import { endLive, getLiveMonitor, listDanmaku, startLive } from '../services/liveSession';
 import { danmakuGateway, DanmakuError } from '../services/danmaku';
+import { loopCaster } from '../services/loopCaster';
 
 // 直播状态全集：用于列表 ?status= 过滤校验（与服务端 live_status 枚举一致）
 const LIVE_STATUSES: LiveStatus[] = ['idle', 'processing', 'ready', 'live', 'ended', 'failed'];
@@ -375,6 +376,8 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       if (!live) {
         return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
       }
+      // M5：开播即启动循环台本 Runner（未绑定台本 → 快照为空自动退出，只回弹幕）
+      loopCaster.start(live.id);
       return { live };
     } catch (err) {
       if (err instanceof LiveError) {
@@ -392,6 +395,8 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       if (!live) {
         return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
       }
+      // M5：结束直播 = 循环播报唯一停止入口（正在播的当前句播完即止，不打断真人接管）
+      loopCaster.stop(live.id);
       return { live };
     } catch (err) {
       if (err instanceof LiveError) {

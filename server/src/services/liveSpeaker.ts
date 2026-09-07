@@ -184,6 +184,25 @@ function getSharedSink(): SpeechSink {
   return sharedSink;
 }
 
+// ---------- 出声链路单例：liveSpeaker 出声与 loopCaster 查忙共用同一路 ----------
+
+/** 当前出声链路单例：谁出声（pc 本机播放 / phone 助播机远程队列）只解析一次 */
+let lineSink: SpeechSink | null = null;
+
+/** 解析并缓存当前出声链路：pc = 本机播放（默认播放设备指向虚拟声卡时进直播伴侣）；phone = 远程出声队列 */
+function getLineSink(): SpeechSink {
+  if (!lineSink) {
+    lineSink =
+      env.liveSpeaker.output === 'phone' ? createRemoteSpeechSink() : getSharedSink();
+  }
+  return lineSink;
+}
+
+/** 统一忙闲出口：当前出声链路尚未播出的排队条数（弹幕回复 / 循环口播共用一条链路） */
+export function speechLinePendingCount(): number {
+  return getLineSink().pendingCount();
+}
+
 export interface LiveSpeaker {
   /** 把一段口播文字合成语音并交给当前出声端播放；任何失败都不上抛，由调用方看结果决定是否告警 */
   speak(text: string): Promise<SpeakResult>;
@@ -256,5 +275,5 @@ export const liveSpeaker = createLiveSpeaker({
       ? volcTtsSynth
       : undefined,
   // 出声通道：LIVE_SPEAKER_OUTPUT=phone 时改交远程出声队列（助播机拉取）；默认 pc 保持本机播放
-  sink: env.liveSpeaker.output === 'phone' ? createRemoteSpeechSink() : undefined,
+  sink: getLineSink(),
 });

@@ -2,6 +2,7 @@ import { and, count, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { liveDanmaku as liveDanmakuTable, lives as livesTable } from '../db/schema';
 import { LiveError, toLive } from './live';
+import { loopCaster } from './loopCaster';
 import type { Live, LiveRow, LiveStatus } from './live';
 
 // ---------- 常量 ----------
@@ -22,7 +23,7 @@ export interface LiveDanmaku {
   sentAt: string;
 }
 
-/** 直播中监控快照：状态 + 已播时长 + 弹幕计数（供客户端轮询） */
+/** 直播中监控快照：状态 + 已播时长 + 弹幕计数 + 循环播报状态（供客户端轮询） */
 export interface LiveMonitor {
   status: LiveStatus;
   videoSourceUrl: string;
@@ -32,6 +33,14 @@ export interface LiveMonitor {
   /** 已播时长（秒）：live = now - startedAt；ended = endedAt - startedAt；其它 0 */
   durationSeconds: number;
   danmakuCount: number;
+  /** 循环台本 Runner 是否运行中（live 且有绑定台本且已开播才可能为 true） */
+  loopRunning: boolean;
+  /** 已播轮数（loopCaster 内存态；进程重启不恢复属已知限制） */
+  loopRound: number;
+  /** 当前轮到第几条（1 起；空闲 / 结束为 0） */
+  loopCurrentSeq: number;
+  /** 未绑定循环台本：开播也只回弹幕，工作台需提示（Q2 正常流程不出现） */
+  loopMissing: boolean;
 }
 
 // ---------- 内部工具 ----------
@@ -119,6 +128,8 @@ export async function getLiveMonitor(userId: string, id: string): Promise<LiveMo
     .where(eq(liveDanmakuTable.liveId, id));
   const rawCount = countRows[0]?.count ?? 0;
   const danmakuCount = typeof rawCount === 'number' ? rawCount : Number(rawCount);
+  // M5：循环播报状态（loopCaster 为内存态；进程重启不自动恢复属已知限制）
+  const loopStatus = row.status === 'live' ? loopCaster.status(id) : null;
   return {
     status: row.status,
     videoSourceUrl: row.videoSourceUrl,
@@ -127,6 +138,11 @@ export async function getLiveMonitor(userId: string, id: string): Promise<LiveMo
     endedAt: row.endedAt ? row.endedAt.toISOString() : null,
     durationSeconds: computeDurationSeconds(row),
     danmakuCount,
+    loopRunning: loopStatus?.running ?? false,
+    loopRound: loopStatus?.round ?? 0,
+    loopCurrentSeq: loopStatus?.currentSeq ?? 0,
+    // 未绑定循环台本：开播也只回弹幕，工作台给提示（Q2 正常流程不出现）
+    loopMissing: row.status === 'live' && !row.loopScriptId,
   };
 }
 
