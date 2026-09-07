@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app';
 import { pool } from '../src/db/client';
+import { loopCaster } from '../src/services/loopCaster';
+import { liveSpeaker } from '../src/services/liveSpeaker';
 
 const app: FastifyInstance = buildApp();
 
@@ -31,6 +33,7 @@ const PHONE_END = '13920000303'; // 结束流程
 const PHONE_MONITOR = '13920000304'; // 监控 + 弹幕
 const PHONE_OWNER_A = '13920000305'; // 归属隔离 A
 const PHONE_OWNER_B = '13920000306'; // 归属隔离 B
+const PHONE_LOOP = '13920000307'; // M5 循环播报接线
 
 async function registerAndGetToken(phone: string): Promise<string> {
   const send = await app.inject({
@@ -62,6 +65,7 @@ async function userIdOf(phone: string): Promise<string> {
 /** 复位：清空该用户的 lives（级联清 live_danmaku）/ scripts / voices */
 async function resetUserData(phone: string): Promise<void> {
   const userId = await userIdOf(phone);
+  await pool.query('DELETE FROM loop_scripts WHERE user_id = $1', [userId]);
   await pool.query('DELETE FROM lives WHERE user_id = $1', [userId]);
   await pool.query('DELETE FROM scripts WHERE user_id = $1', [userId]);
   await pool.query('DELETE FROM voices WHERE user_id = $1', [userId]);
@@ -327,4 +331,141 @@ dbIt('status=live 时删除返回 409（删除保护沿用）', async () => {
   });
   expect(blocked.statusCode).toBe(409);
   expect(blocked.json()).toMatchObject({ error: 'LIVE_IN_PROGRESS' });
+});
+// ---------- M5 循环播报接线（loopCaster 生命周期随 start/end 驱动） ----------
+
+/** 直接 seed 一条归属该用户的循环台本（1 条安全文案）并绑定到 live，绕过 DeepSeek / 敏感扫描 */
+async function seedBoundLoopScript(phone: string, liveId: string): Promise<void> {
+  const userId = await userIdOf(phone);
+  const scriptId = randomUUID();
+  const itemId = randomUUID();
+  await pool.query(`INSERT INTO loop_scripts (id, user_id, title) VALUES ($1, $2, $3)`, [
+    scriptId,
+    userId,
+    '火锅循环台本（测试）',
+  ]);
+  await pool.query(
+    `INSERT INTO loop_script_items (id, loop_script_id, seq, kind, text, gap_after_seconds)
+     VALUES ($1, $2, 1, 'product', $3, 1)`,
+    [itemId, scriptId, '本店招牌毛肚套餐，欢迎到店品尝。'],
+  );
+  await pool.query(`UPDATE lives SET loop_script_id = $1 WHERE id = $2`, [scriptId, liveId]);
+}
+
+/** 轮询 monitor 直到谓词满足；Runner 异步启动，/start 返回时可能尚未 running（超时抛错防挂死） */
+async function waitMonitorUntil(
+  token: string,
+  liveId: string,
+  predicate: (monitor: Record<string, unknown>) => boolean,
+  timeoutMs = 4000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/lives/${liveId}/monitor`,
+      headers: bearer(token),
+    });
+    expect(res.statusCode).toBe(200);
+    const monitor = res.json() as Record<string, unknown>;
+    if (predicate(monitor)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`monitor 条件未在 ${timeoutMs}ms 内满足`);
+}
+
+dbIt('M5 接线：未绑台本 start 后 loopMissing=true；绑定台本 start 启 Runner（替身拦截出声）、end 停', async () => {
+  const token = await registerAndGetToken(PHONE_LOOP);
+  await resetUserData(PHONE_LOOP);
+  // 出声链路替身：绝不在测试里真发声（引擎会把台本句推到 liveSpeaker，但被吞掉）
+  const speakSpy = vi.spyOn(liveSpeaker, 'speak').mockResolvedValue({
+    spoken: false,
+    reason: 'disabled',
+  });
+
+  // 场景 1：未绑定循环台本 → 开播只回弹幕（Runner 空快照自动退出）
+  const unboundId = await createLiveDraft(token);
+  await setLiveStatus(unboundId, 'ready', { videoSourceUrl: `/uploads/lives/${unboundId}.mp4` });
+  const startUnbound = await app.inject({
+    method: 'POST',
+    url: `/api/lives/${unboundId}/start`,
+    headers: bearer(token),
+    payload: {},
+  });
+  expect(startUnbound.statusCode).toBe(200);
+  const unboundMonitor = await app.inject({
+    method: 'GET',
+    url: `/api/lives/${unboundId}/monitor`,
+    headers: bearer(token),
+  });
+  expect(unboundMonitor.statusCode).toBe(200);
+  expect(unboundMonitor.json()).toMatchObject({
+    status: 'live',
+    loopRunning: false,
+    loopRound: 0,
+    loopCurrentSeq: 0,
+    loopMissing: true,
+  });
+  await app.inject({
+    method: 'POST',
+    url: `/api/lives/${unboundId}/end`,
+    headers: bearer(token),
+    payload: {},
+  });
+
+  // 场景 2：绑定台本开播 → 引擎真实启动（循环口播被 speakSpy 拦截）；end → Runner 停
+  const boundId = await createLiveDraft(token);
+  await setLiveStatus(boundId, 'ready', { videoSourceUrl: `/uploads/lives/${boundId}.mp4` });
+  await seedBoundLoopScript(PHONE_LOOP, boundId);
+  try {
+    const startBound = await app.inject({
+      method: 'POST',
+      url: `/api/lives/${boundId}/start`,
+      headers: bearer(token),
+      payload: {},
+    });
+    expect(startBound.statusCode).toBe(200);
+
+    await waitMonitorUntil(token, boundId, (monitor) => monitor.loopRunning === true);
+    const runningMonitor = await app.inject({
+      method: 'GET',
+      url: `/api/lives/${boundId}/monitor`,
+      headers: bearer(token),
+    });
+    const running = runningMonitor.json() as {
+      status: string;
+      loopRunning: boolean;
+      loopMissing: boolean;
+      loopRound: number;
+    };
+    expect(running.status).toBe('live');
+    expect(running.loopRunning).toBe(true);
+    expect(running.loopMissing).toBe(false);
+    expect(running.loopRound).toBeGreaterThanOrEqual(1);
+    // 引擎确实把台本句交到出声链路（替身吞掉，未真发声）
+    expect(speakSpy).toHaveBeenCalled();
+
+    const endBound = await app.inject({
+      method: 'POST',
+      url: `/api/lives/${boundId}/end`,
+      headers: bearer(token),
+      payload: {},
+    });
+    expect(endBound.statusCode).toBe(200);
+    const endedMonitor = await app.inject({
+      method: 'GET',
+      url: `/api/lives/${boundId}/monitor`,
+      headers: bearer(token),
+    });
+    expect(endedMonitor.json()).toMatchObject({
+      status: 'ended',
+      loopRunning: false,
+      loopCurrentSeq: 0,
+    });
+  } finally {
+    // 兜底：无论断言走到哪一步都确保停掉 Runner，避免污染同文件后续用例
+    loopCaster.stop(boundId);
+  }
 });
