@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 
 import 'package:starvoice_app/core/models/voice.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/core/theme/app_colors.dart';
+import 'package:starvoice_app/core/theme/theme_tokens.dart';
 import 'package:starvoice_app/features/recording/application/recorder_controller.dart';
 import 'package:starvoice_app/features/voices/application/voice_library_controller.dart';
 import 'package:starvoice_app/providers.dart';
@@ -81,7 +83,9 @@ class _VoiceLibraryPageState extends ConsumerState<VoiceLibraryPage> {
       return;
     }
     try {
-      await ref.read(voiceLibraryControllerProvider.notifier).deleteVoice(voice.id);
+      await ref
+          .read(voiceLibraryControllerProvider.notifier)
+          .deleteVoice(voice.id);
     } on ApiException catch (error) {
       if (mounted) {
         _showSnack('删除失败：${error.message}');
@@ -187,7 +191,7 @@ class _VoiceLibraryPageState extends ConsumerState<VoiceLibraryPage> {
                         Icon(
                           Icons.record_voice_over_outlined,
                           size: 56,
-                          color: Colors.grey.shade400,
+                          color: context.tokenTextHint,
                         ),
                         const SizedBox(height: 16),
                         const Text(
@@ -229,15 +233,15 @@ class _VoiceCard extends StatelessWidget {
   ({String label, Color color}) _statusStyle() {
     switch (voice.status) {
       case 'pending':
-        return (label: '克隆中', color: Colors.grey);
+        return (label: '克隆中', color: AppColors.warning);
       case 'processing':
-        return (label: '处理中', color: Colors.blue);
+        return (label: '处理中', color: AppColors.info);
       case 'ready':
-        return (label: '可用', color: Colors.green.shade700);
+        return (label: '可用', color: AppColors.live);
       case 'failed':
-        return (label: '失败', color: Colors.red);
+        return (label: '失败', color: AppColors.danger);
       default:
-        return (label: voice.status, color: Colors.grey);
+        return (label: voice.status, color: AppColors.warning);
     }
   }
 
@@ -293,7 +297,10 @@ class _VoiceCard extends StatelessWidget {
                   Text(
                     '时长 ${formatRecordingDuration(voice.sampleDurationSeconds)} · '
                     '创建于 ${_formatCreatedAt(voice.createdAt)}',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: context.tokenTextBody,
+                    ),
                   ),
                 ],
               ),
@@ -308,7 +315,7 @@ class _VoiceCard extends StatelessWidget {
             IconButton(
               key: Key('voiceDelete_${voice.id}'),
               onPressed: onDelete,
-              icon: Icon(Icons.delete_outline, color: Colors.grey.shade600),
+              icon: Icon(Icons.delete_outline, color: context.tokenTextBody),
               tooltip: '删除',
             ),
           ],

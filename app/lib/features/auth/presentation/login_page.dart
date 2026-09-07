@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/core/theme/theme_tokens.dart';
 import 'package:starvoice_app/providers.dart';
 
 /// 手机号验证码登录页。
@@ -75,8 +76,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       _errorText = null;
     });
     try {
-      final result =
-          await ref.read(authControllerProvider.notifier).sendCode(phone);
+      final result = await ref
+          .read(authControllerProvider.notifier)
+          .sendCode(phone);
       if (!mounted) {
         return;
       }
@@ -158,8 +160,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   @override
   Widget build(BuildContext context) {
     final canSend = !_sending && _resendSeconds <= 0;
-    final sendLabel =
-        _resendSeconds > 0 ? '重新获取(${_resendSeconds}s)' : '获取验证码';
+    final sendLabel = _resendSeconds > 0 ? '重新获取(${_resendSeconds}s)' : '获取验证码';
 
     return Scaffold(
       appBar: AppBar(title: const Text('登录')),
@@ -172,9 +173,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               Text(
                 '星辰语音',
                 textAlign: TextAlign.center,
-                style: Theme.of(context)
-                    .textTheme
-                    .headlineSmall
+                style: Theme.of(context).textTheme.headlineSmall
                     ?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 36),
@@ -231,7 +230,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     key: const Key('devCodeHint'),
                     style: TextStyle(
                       fontSize: 12,
-                      color: Colors.grey.shade600,
+                      color: context.tokenTextBody,
                     ),
                   ),
                 ),
@@ -241,7 +240,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   child: Text(
                     _errorText!,
                     key: const Key('loginError'),
-                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
                   ),
                 ),
               const SizedBox(height: 24),

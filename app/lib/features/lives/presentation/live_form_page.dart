@@ -17,6 +17,8 @@ import 'package:starvoice_app/core/models/loop_script.dart';
 import 'package:starvoice_app/core/models/script.dart';
 import 'package:starvoice_app/core/models/voice.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/core/theme/app_colors.dart';
+import 'package:starvoice_app/core/theme/theme_tokens.dart';
 import 'package:starvoice_app/features/lives/application/live_form_controller.dart';
 import 'package:starvoice_app/providers.dart';
 
@@ -266,9 +268,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       _preparing = true;
     });
     try {
-      final live = await ref
-          .read(apiClientProvider)
-          .prepareLive(widget.liveId);
+      final live = await ref.read(apiClientProvider).prepareLive(widget.liveId);
       if (!mounted) {
         return;
       }
@@ -301,7 +301,10 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     final state = ref.watch(liveFormControllerProvider(widget.liveId));
     // 初值到达后延迟一帧回填，避免在 build 阶段修改 TextEditingController
     // 编辑模式须等 initial 到位后再回填；首帧（数据未加载）与新建模式（initial 恒空）都跳过
-    if (!_hydrated && state.initial != null && !state.loading && state.loadError == null) {
+    if (!_hydrated &&
+        state.initial != null &&
+        !state.loading &&
+        state.loadError == null) {
       _hydrated = true;
       final initial = state.initial;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -368,7 +371,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         const SizedBox(height: 4),
         Text(
           '绑定素材：音色来自「我的音色」，话术来自话术库，团购券来自已绑定的抖音号。',
-          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          style: TextStyle(fontSize: 12, color: context.tokenTextBody),
         ),
         const SizedBox(height: 12),
         _buildVoicePicker(state, voice),
@@ -386,9 +389,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         FilledButton(
           key: const Key('liveSaveButton'),
           onPressed: canSave ? _save : null,
-          style: FilledButton.styleFrom(
-            minimumSize: const Size.fromHeight(48),
-          ),
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
           child: state.saving
               ? const SizedBox(
                   width: 20,
@@ -413,7 +414,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       subtitle: Text(
         value,
         key: const Key('liveVoiceValue'),
-        style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+        style: TextStyle(fontSize: 13, color: context.tokenTextBody),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
@@ -435,7 +436,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       subtitle: Text(
         value,
         key: const Key('liveScriptValue'),
-        style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+        style: TextStyle(fontSize: 13, color: context.tokenTextBody),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
@@ -453,8 +454,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.teal.withValues(alpha: 0.04),
-        border: Border.all(color: Colors.teal.shade100),
+        color: context.tokenSurfaceFill,
+        border: Border.all(color: context.tokenDivider),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -474,7 +475,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
           Text(
             '绑定一条循环台本后，开播会按节奏循环口播商品与团购券；'
             '不绑定则本场仅弹幕回复。',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            style: TextStyle(fontSize: 12, color: context.tokenTextBody),
           ),
           const SizedBox(height: 8),
           if (_loopScriptId == null)
@@ -494,7 +495,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
           child: Text(
             '循环口播需绑定一条循环台本',
             key: Key('liveLoopScriptEmptyText'),
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+            style: TextStyle(fontSize: 13, color: context.tokenTextBody),
           ),
         ),
         OutlinedButton.icon(
@@ -523,7 +524,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
               : Text(
                   _loopSummaryLabel(),
                   key: const Key('liveLoopScriptValue'),
-                  style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                  style: TextStyle(fontSize: 13, color: context.tokenTextBody),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -572,7 +573,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       subtitle: Text(
         value,
         key: const Key('liveCouponValue'),
-        style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+        style: TextStyle(fontSize: 13, color: context.tokenTextBody),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
@@ -590,21 +591,18 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     // 仅编辑模式且初始为草稿（idle）可操作；合成中/就绪等由服务端保护
     final canOperate = _isEdit && !busy && (state.initial?.isEditable ?? false);
     final hasSource = _videoSourceUrl.isNotEmpty;
-    final canUpload =
-        canOperate && _videoPathController.text.trim().isNotEmpty;
+    final canUpload = canOperate && _videoPathController.text.trim().isNotEmpty;
     final canPrepare = canOperate && hasSource && !_composed;
     final sourceLabel = _composed
         ? '已生成：${_videoFileName(_videoSourceUrl)}'
-        : (hasSource
-            ? '已上传：${_videoFileName(_videoSourceUrl)}'
-            : '尚未上传实景视频');
+        : (hasSource ? '已上传：${_videoFileName(_videoSourceUrl)}' : '尚未上传实景视频');
     return Container(
       key: const Key('liveVideoSection'),
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.indigo.withValues(alpha: 0.04),
-        border: Border.all(color: Colors.indigo.shade100),
+        color: context.tokenSurfaceFill,
+        border: Border.all(color: context.tokenDivider),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -623,14 +621,14 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
           const SizedBox(height: 4),
           Text(
             '上传本机实景视频，再生成直播视频（循环播放 + 音轨 + 角标合成到本地文件）。',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            style: TextStyle(fontSize: 12, color: context.tokenTextBody),
           ),
           if (!_isEdit) ...[
             const SizedBox(height: 8),
             Text(
               '新建草稿先保存，再从列表进入编辑后上传实景视频并生成',
               key: const Key('liveVideoNewModeHint'),
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+              style: TextStyle(fontSize: 12, color: context.tokenTextBody),
             ),
           ],
           const SizedBox(height: 10),
@@ -665,12 +663,9 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
             Row(
               children: [
                 Icon(
-                  hasSource
-                      ? Icons.check_circle_outline
-                      : Icons.info_outline,
+                  hasSource ? Icons.check_circle_outline : Icons.info_outline,
                   size: 16,
-                  color:
-                      hasSource ? Colors.green.shade600 : Colors.grey.shade500,
+                  color: hasSource ? AppColors.live : context.tokenTextHint,
                 ),
                 const SizedBox(width: 6),
                 Expanded(
@@ -679,8 +674,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
                     key: const Key('liveVideoSourceText'),
                     style: TextStyle(
                       fontSize: 12,
-                      color:
-                          hasSource ? Colors.green.shade700 : Colors.grey.shade600,
+                      color: hasSource ? AppColors.live : context.tokenTextBody,
                     ),
                   ),
                 ),
@@ -699,11 +693,11 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
               ),
             ),
             if (_isEdit && !canOperate)
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
                 child: Text(
                   '仅草稿状态可操作（合成中 / 就绪等不可重复生成）',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                  style: TextStyle(fontSize: 12, color: context.tokenTextHint),
                 ),
               ),
           ],
@@ -726,7 +720,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
           child: Text(
             _videoUploading ? '正在上传实景视频…' : '正在合成直播视频…',
             key: const Key('liveVideoBusyText'),
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+            style: TextStyle(fontSize: 13, color: context.tokenTextBody),
           ),
         ),
       ],
@@ -739,19 +733,23 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.amber.withValues(alpha: 0.12),
+        color: AppColors.warningSoft,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: const Row(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.gpp_good_outlined, size: 16, color: Colors.orange),
-          SizedBox(width: 8),
+          const Icon(
+            Icons.gpp_good_outlined,
+            size: 16,
+            color: AppColors.warning,
+          ),
+          const SizedBox(width: 8),
           Expanded(
             child: Text(
               '合规说明：直播画面将强制叠加「AI 智能直播」角标，'
               '由服务端统一控制（aiBadgeShown 恒为 true），无法关闭。',
-              style: TextStyle(fontSize: 12, color: Colors.orange),
+              style: TextStyle(fontSize: 12, color: AppColors.warning),
             ),
           ),
         ],
@@ -854,14 +852,12 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       title: Text(voice.name),
       subtitle: Text(
         '${style.label} · 时长 ${(voice.sampleDurationSeconds / 60).floor()} 分',
-        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+        style: TextStyle(fontSize: 12, color: context.tokenTextBody),
       ),
       trailing: enabled && voice.id == _voiceId
-          ? const Icon(Icons.check, color: Colors.green)
+          ? Icon(Icons.check, color: AppColors.live)
           : null,
-      onTap: enabled
-          ? () => Navigator.of(sheetContext).pop(voice.id)
-          : null,
+      onTap: enabled ? () => Navigator.of(sheetContext).pop(voice.id) : null,
     );
   }
 
@@ -923,14 +919,12 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         '${_industryLabel(script.industry)} · ${_scriptPreview(script)}',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+        style: TextStyle(fontSize: 12, color: context.tokenTextBody),
       ),
       trailing: enabled && script.id == _scriptId
-          ? const Icon(Icons.check, color: Colors.green)
+          ? Icon(Icons.check, color: AppColors.live)
           : null,
-      onTap: enabled
-          ? () => Navigator.of(sheetContext).pop(script.id)
-          : null,
+      onTap: enabled ? () => Navigator.of(sheetContext).pop(script.id) : null,
     );
   }
 
@@ -951,15 +945,15 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
 ({String label, Color color}) _voiceStatusStyle(String status) {
   switch (status) {
     case 'pending':
-      return (label: '克隆中', color: Colors.grey);
+      return (label: '克隆中', color: AppColors.warning);
     case 'processing':
-      return (label: '处理中', color: Colors.blue);
+      return (label: '处理中', color: AppColors.info);
     case 'ready':
-      return (label: '可用', color: Colors.green.shade700);
+      return (label: '可用', color: AppColors.live);
     case 'failed':
-      return (label: '失败', color: Colors.red);
+      return (label: '失败', color: AppColors.danger);
     default:
-      return (label: status, color: Colors.grey);
+      return (label: status, color: AppColors.warning);
   }
 }
 

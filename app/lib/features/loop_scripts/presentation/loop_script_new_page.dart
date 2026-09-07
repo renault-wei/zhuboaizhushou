@@ -10,6 +10,8 @@ import 'package:go_router/go_router.dart';
 import 'package:starvoice_app/core/models/loop_script.dart';
 import 'package:starvoice_app/core/models/script.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/core/theme/app_colors.dart';
+import 'package:starvoice_app/core/theme/theme_tokens.dart';
 import 'package:starvoice_app/features/loop_scripts/presentation/loop_script_editor_panel.dart';
 import 'package:starvoice_app/providers.dart';
 
@@ -52,14 +54,16 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
   String _draftTitle = '';
   List<LoopScriptItem> _draftItems = <LoopScriptItem>[];
 
- @override
- void initState() {
-   super.initState();
+  @override
+  void initState() {
+    super.initState();
     _couponController = TextEditingController();
     // 复制为草稿：进入即加载原台本内容
     final copySourceId = widget.copySourceId;
     if (copySourceId != null && copySourceId.isNotEmpty) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _loadCopy(copySourceId));
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _loadCopy(copySourceId),
+      );
     }
   }
 
@@ -155,12 +159,14 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
       _generating = true;
     });
     try {
-      final draft = await ref.read(apiClientProvider).generateLoopScriptDraft(
-        sourceScriptId: scriptId,
-        couponText: _couponController.text.trim().isEmpty
-            ? null
-            : _couponController.text.trim(),
-      );
+      final draft = await ref
+          .read(apiClientProvider)
+          .generateLoopScriptDraft(
+            sourceScriptId: scriptId,
+            couponText: _couponController.text.trim().isEmpty
+                ? null
+                : _couponController.text.trim(),
+          );
       if (!mounted) {
         return;
       }
@@ -190,13 +196,15 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
   }
 
   Future<void> _save(String title, List<LoopScriptItem> items) async {
-    await ref.read(apiClientProvider).createLoopScript(
-      title: title,
-      items: <Map<String, dynamic>>[
-        for (final item in items) item.toPayload(),
-      ],
-      sourceScriptId: _sourceScriptId,
-    );
+    await ref
+        .read(apiClientProvider)
+        .createLoopScript(
+          title: title,
+          items: <Map<String, dynamic>>[
+            for (final item in items) item.toPayload(),
+          ],
+          sourceScriptId: _sourceScriptId,
+        );
     if (mounted) {
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
@@ -238,9 +246,7 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
       children: <Widget>[
         Text(
           '选择创建方式',
-          style: Theme.of(context)
-              .textTheme
-              .titleMedium
+          style: Theme.of(context).textTheme.titleMedium
               ?.copyWith(fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 12),
@@ -277,9 +283,7 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
       children: <Widget>[
         Text(
           '选择来源话术（仅「可开播」话术可选）',
-          style: Theme.of(context)
-              .textTheme
-              .titleMedium
+          style: Theme.of(context).textTheme.titleMedium
               ?.copyWith(fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 12),
@@ -287,7 +291,9 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 24),
             child: Center(
-              child: CircularProgressIndicator(key: Key('loopScriptSourceLoading')),
+              child: CircularProgressIndicator(
+                key: Key('loopScriptSourceLoading'),
+              ),
             ),
           )
         else if (_scriptsError != null && _scripts.isEmpty)
@@ -306,12 +312,12 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
             ),
           )
         else if (_scripts.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 24),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24),
             child: Text(
               '暂无话术，请先到「话术生成」创建并完善一条正式话术',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey),
+              style: TextStyle(color: context.tokenTextHint),
             ),
           )
         else ...<Widget>[
@@ -344,8 +350,8 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
                         style: TextStyle(
                           fontSize: 12,
                           color: script.isReady
-                              ? Colors.grey.shade600
-                              : Colors.red.shade400,
+                              ? context.tokenTextBody
+                              : AppColors.danger,
                         ),
                       ),
                     ),
@@ -367,7 +373,7 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
           const SizedBox(height: 4),
           Text(
             '填写券文案时，AI 会生成独立的券讲解段落，循环向观众介绍团购券。',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            style: TextStyle(fontSize: 12, color: context.tokenTextBody),
           ),
           const SizedBox(height: 12),
           FilledButton(

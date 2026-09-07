@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import 'package:starvoice_app/core/models/douyin_bind_status.dart';
 import 'package:starvoice_app/core/models/voice_agreement.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/core/theme/app_colors.dart';
+import 'package:starvoice_app/core/theme/theme_tokens.dart';
 import 'package:starvoice_app/providers.dart';
 
 String _twoDigits(int value) => value.toString().padLeft(2, '0');
@@ -125,14 +127,14 @@ class _LiveEntryCard extends StatelessWidget {
                   Icon(
                     Icons.chevron_right,
                     size: 20,
-                    color: Colors.grey.shade500,
+                    color: context.tokenTextHint,
                   ),
                 ],
               ),
               const SizedBox(height: 10),
               Text(
                 '绑定音色 / 话术 / 团购券，生成开播配置草稿（T11 接入视频源）',
-                style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                style: TextStyle(fontSize: 13, color: context.tokenTextBody),
               ),
             ],
           ),
@@ -320,7 +322,7 @@ class _DouyinAccountCardState extends ConsumerState<_DouyinAccountCard> {
               const SizedBox(height: 2),
               Text(
                 '抖音账号已绑定',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                style: TextStyle(fontSize: 12, color: context.tokenTextBody),
               ),
             ],
           ),
@@ -361,7 +363,12 @@ class _DouyinAccountCardState extends ConsumerState<_DouyinAccountCard> {
                 const Spacer(),
                 Text(
                   _status?.bound == true ? '已绑定' : '未绑定',
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _status?.bound == true
+                        ? AppColors.live
+                        : context.tokenTextHint,
+                  ),
                 ),
               ],
             ),
@@ -381,9 +388,9 @@ class _AvatarFallback extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: Colors.grey.shade300,
+      color: context.tokenSurfaceFill,
       alignment: Alignment.center,
-      child: const Icon(Icons.person, color: Colors.black45),
+      child: Icon(Icons.person, color: context.tokenTextHint),
     );
   }
 }
@@ -536,7 +543,7 @@ class _VoiceAgreementCardState extends ConsumerState<_VoiceAgreementCard> {
           signedAt != null
               ? '签署时间：${_formatDateTime(DateTime.parse(signedAt).toLocal())}'
               : '已签署当前版本协议',
-          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          style: TextStyle(fontSize: 12, color: context.tokenTextBody),
         ),
       ],
     );
@@ -564,7 +571,12 @@ class _VoiceAgreementCardState extends ConsumerState<_VoiceAgreementCard> {
                 Text(
                   _status?.signed == true ? '已签署' : '未签署',
                   key: const Key('voiceAgreementStatusLabel'),
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _status?.signed == true
+                        ? AppColors.live
+                        : context.tokenTextHint,
+                  ),
                 ),
               ],
             ),
@@ -699,9 +711,7 @@ class _CloneVoiceCardState extends ConsumerState<_CloneVoiceCard> {
                   key: const Key('cloneVoiceStatusLabel'),
                   style: TextStyle(
                     fontSize: 12,
-                    color: _signed
-                        ? Colors.green.shade700
-                        : Colors.grey.shade600,
+                    color: _signed ? AppColors.live : context.tokenTextHint,
                   ),
                 ),
               ],
@@ -710,7 +720,7 @@ class _CloneVoiceCardState extends ConsumerState<_CloneVoiceCard> {
             Text(
               hint,
               key: const Key('cloneVoiceHint'),
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+              style: TextStyle(fontSize: 13, color: context.tokenTextBody),
             ),
             const SizedBox(height: 12),
             FilledButton.tonal(
@@ -803,8 +813,7 @@ class _VoiceLibraryCardState extends ConsumerState<_VoiceLibraryCard> {
 
   @override
   Widget build(BuildContext context) {
-    final hint = _error ??
-        (_loading ? '正在同步音色…' : '已有 $_count 个音色，可查看克隆进度或删除');
+    final hint = _error ?? (_loading ? '正在同步音色…' : '已有 $_count 个音色，可查看克隆进度或删除');
     return Card(
       key: const Key('voiceLibraryCard'),
       margin: EdgeInsets.zero,
@@ -829,7 +838,7 @@ class _VoiceLibraryCardState extends ConsumerState<_VoiceLibraryCard> {
                     fontSize: 12,
                     color: _error != null
                         ? Theme.of(context).colorScheme.error
-                        : Colors.grey.shade600,
+                        : context.tokenTextBody,
                   ),
                 ),
               ],
@@ -838,7 +847,7 @@ class _VoiceLibraryCardState extends ConsumerState<_VoiceLibraryCard> {
             Text(
               hint,
               key: const Key('voiceLibraryHint'),
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+              style: TextStyle(fontSize: 13, color: context.tokenTextBody),
             ),
             const SizedBox(height: 12),
             FilledButton.tonal(
@@ -925,8 +934,8 @@ class _ScriptLibraryCardState extends ConsumerState<_ScriptLibraryCard> {
 
   @override
   Widget build(BuildContext context) {
-    final hint = _error ??
-        (_loading ? '正在同步话术…' : '已有 $_count 条话术，可生成 AI 直播话术');
+    final hint =
+        _error ?? (_loading ? '正在同步话术…' : '已有 $_count 条话术，可生成 AI 直播话术');
     return Card(
       key: const Key('scriptEntryCard'),
       margin: EdgeInsets.zero,
@@ -951,7 +960,7 @@ class _ScriptLibraryCardState extends ConsumerState<_ScriptLibraryCard> {
                     fontSize: 12,
                     color: _error != null
                         ? Theme.of(context).colorScheme.error
-                        : Colors.grey.shade600,
+                        : context.tokenTextBody,
                   ),
                 ),
               ],
@@ -960,7 +969,7 @@ class _ScriptLibraryCardState extends ConsumerState<_ScriptLibraryCard> {
             Text(
               hint,
               key: const Key('scriptEntryHint'),
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+              style: TextStyle(fontSize: 13, color: context.tokenTextBody),
             ),
             const SizedBox(height: 12),
             FilledButton.tonal(
@@ -1049,8 +1058,8 @@ class _LoopScriptLibraryCardState
 
   @override
   Widget build(BuildContext context) {
-    final hint = _error ??
-        (_loading ? '正在同步循环台本…' : '已有 $_count 本循环台本，绑定后开播自动循环口播');
+    final hint =
+        _error ?? (_loading ? '正在同步循环台本…' : '已有 $_count 本循环台本，绑定后开播自动循环口播');
     return Card(
       key: const Key('loopScriptEntryCard'),
       margin: EdgeInsets.zero,
@@ -1075,7 +1084,7 @@ class _LoopScriptLibraryCardState
                     fontSize: 12,
                     color: _error != null
                         ? Theme.of(context).colorScheme.error
-                        : Colors.grey.shade600,
+                        : context.tokenTextBody,
                   ),
                 ),
               ],
@@ -1084,7 +1093,7 @@ class _LoopScriptLibraryCardState
             Text(
               hint,
               key: const Key('loopScriptEntryHint'),
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+              style: TextStyle(fontSize: 13, color: context.tokenTextBody),
             ),
             const SizedBox(height: 12),
             FilledButton.tonal(
@@ -1133,14 +1142,14 @@ class _CouponEntryCard extends StatelessWidget {
                   Icon(
                     Icons.chevron_right,
                     size: 20,
-                    color: Colors.grey.shade500,
+                    color: context.tokenTextHint,
                   ),
                 ],
               ),
               const SizedBox(height: 10),
               Text(
                 '拉取抖音团购券，为实景直播挂载商品',
-                style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                style: TextStyle(fontSize: 13, color: context.tokenTextBody),
               ),
             ],
           ),

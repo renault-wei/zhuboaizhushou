@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:starvoice_app/core/models/coupon.dart';
+import 'package:starvoice_app/core/theme/theme_tokens.dart';
 import 'package:starvoice_app/features/coupons/application/coupon_controller.dart';
 import 'package:starvoice_app/providers.dart';
 
@@ -105,8 +106,7 @@ class _CouponListPageState extends ConsumerState<CouponListPage> {
           return _CouponCard(
             coupon: state.coupons[index],
             onTap: widget.selectable
-                ? () =>
-                    Navigator.of(context).pop(state.coupons[index].couponId)
+                ? () => Navigator.of(context).pop(state.coupons[index].couponId)
                 : null,
           );
         },
@@ -122,7 +122,7 @@ class _CouponListPageState extends ConsumerState<CouponListPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Icon(Icons.link_off, size: 56, color: Colors.grey.shade400),
+            Icon(Icons.link_off, size: 56, color: context.tokenTextHint),
             const SizedBox(height: 16),
             const Text(
               '请先绑定抖音号，才能拉取团购券',
@@ -184,7 +184,7 @@ class _CouponListPageState extends ConsumerState<CouponListPage> {
                         Icon(
                           Icons.confirmation_number_outlined,
                           size: 56,
-                          color: Colors.grey.shade400,
+                          color: context.tokenTextHint,
                         ),
                         const SizedBox(height: 16),
                         const Text(
@@ -222,112 +222,112 @@ class _CouponCard extends StatelessWidget {
         key: Key('couponCard_${coupon.couponId}'),
         margin: EdgeInsets.zero,
         clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            // 券图占位：mock 阶段无真实券图，按券 ID 稳定取色
-            Container(
-              width: 72,
-              height: 72,
-              decoration: BoxDecoration(
-                color: _placeholderColor(coupon.couponId),
-                borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              // 券图占位：mock 阶段无真实券图，按券 ID 稳定取色
+              Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  color: _placeholderColor(coupon.couponId),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                alignment: Alignment.center,
+                child: const Icon(
+                  Icons.restaurant,
+                  color: Colors.white,
+                  size: 30,
+                ),
               ),
-              alignment: Alignment.center,
-              child: const Icon(
-                Icons.restaurant,
-                color: Colors.white,
-                size: 30,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    coupon.name,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    coupon.package,
-                    style: TextStyle(
-                      fontSize: 12,
-                      height: 1.4,
-                      color: Colors.grey.shade600,
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: <Widget>[
-                      Text(
-                        coupon.priceText,
-                        key: Key('couponPrice_${coupon.couponId}'),
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: scheme.error,
-                        ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      coupon.name,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
                       ),
-                      const SizedBox(width: 6),
-                      if (coupon.hasDiscount) ...<Widget>[
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      coupon.package,
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.4,
+                        color: context.tokenTextBody,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: <Widget>[
                         Text(
-                          coupon.originalPriceText,
+                          coupon.priceText,
+                          key: Key('couponPrice_${coupon.couponId}'),
                           style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey.shade500,
-                            decoration: TextDecoration.lineThrough,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: scheme.error,
                           ),
                         ),
                         const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: scheme.error.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            coupon.discountText,
-                            key: Key('couponDiscount_${coupon.couponId}'),
+                        if (coupon.hasDiscount) ...<Widget>[
+                          Text(
+                            coupon.originalPriceText,
                             style: TextStyle(
-                              fontSize: 11,
-                              color: scheme.error,
-                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                              color: context.tokenTextHint,
+                              decoration: TextDecoration.lineThrough,
                             ),
+                          ),
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: scheme.error.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              coupon.discountText,
+                              key: Key('couponDiscount_${coupon.couponId}'),
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: scheme.error,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                        const Spacer(),
+                        Text(
+                          coupon.salesText,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: context.tokenTextBody,
                           ),
                         ),
                       ],
-                      const Spacer(),
-                      Text(
-                        coupon.salesText,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
   }
 }

@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 
 import 'package:starvoice_app/core/models/loop_script.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/core/theme/app_colors.dart';
+import 'package:starvoice_app/core/theme/theme_tokens.dart';
 
 const Map<String, String> _loopKindLabels = <String, String>{
   'opening': '开场',
@@ -104,8 +106,8 @@ class _LoopItemRowState extends State<_LoopItemRow> {
       key: ValueKey<int>(widget.item.uid),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.teal.withValues(alpha: 0.04),
-        border: Border.all(color: Colors.teal.shade100),
+        color: context.tokenSurfaceFill,
+        border: Border.all(color: context.tokenDivider),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -118,13 +120,13 @@ class _LoopItemRowState extends State<_LoopItemRow> {
                 height: 22,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: Colors.teal.shade600,
+                  color: Theme.of(context).colorScheme.primary,
                   shape: BoxShape.circle,
                 ),
                 child: Text(
                   '${widget.index + 1}',
-                  style: const TextStyle(
-                    color: Colors.white,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onPrimary,
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
                   ),
@@ -138,15 +140,12 @@ class _LoopItemRowState extends State<_LoopItemRow> {
                     vertical: 2,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.teal.shade50,
+                    color: AppColors.primarySoft,
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
                     kindLabel,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.teal.shade700,
-                    ),
+                    style: TextStyle(fontSize: 11, color: AppColors.primary),
                   ),
                 ),
               ],
@@ -163,8 +162,9 @@ class _LoopItemRowState extends State<_LoopItemRow> {
                 visualDensity: VisualDensity.compact,
                 icon: const Icon(Icons.keyboard_arrow_down),
                 tooltip: '下移',
-                onPressed:
-                    widget.index == widget.total - 1 ? null : widget.onMoveDown,
+                onPressed: widget.index == widget.total - 1
+                    ? null
+                    : widget.onMoveDown,
               ),
               IconButton(
                 key: Key('loopItemDelete_${widget.item.uid}'),
@@ -194,8 +194,11 @@ class _LoopItemRowState extends State<_LoopItemRow> {
           const SizedBox(height: 4),
           Row(
             children: <Widget>[
-              Icon(Icons.timer_outlined,
-                  size: 16, color: Colors.grey.shade500),
+              Icon(
+                Icons.timer_outlined,
+                size: 16,
+                color: context.tokenTextHint,
+              ),
               const SizedBox(width: 6),
               SizedBox(
                 width: 88,
@@ -222,14 +225,14 @@ class _LoopItemRowState extends State<_LoopItemRow> {
               const SizedBox(width: 6),
               Text(
                 '0-60，播完停顿',
-                style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                style: TextStyle(fontSize: 11, color: context.tokenTextHint),
               ),
             ],
           ),
           const SizedBox(height: 6),
           Text(
             '台词 ${widget.item.text.trim().length} 字',
-            style: textTheme.bodySmall?.copyWith(color: Colors.grey),
+            style: textTheme.bodySmall?.copyWith(color: context.tokenTextHint),
           ),
         ],
       ),
@@ -258,8 +261,7 @@ class LoopScriptEditorPanel extends StatefulWidget {
   final String? generationNote;
 
   /// 保存回调：由宿主决定走新建（create）还是整体替换（update）
-  final Future<void> Function(String title, List<LoopScriptItem> items)
-  onSave;
+  final Future<void> Function(String title, List<LoopScriptItem> items) onSave;
 
   /// 底部保存按钮的 key（页面级便于测试定位）
   final Key? saveButtonKey;
@@ -301,9 +303,7 @@ class _LoopScriptEditorPanelState extends State<LoopScriptEditorPanel> {
 
   void _addItem() {
     setState(() {
-      _items.add(
-        _EditableLoopItem(uid: _nextUid++, text: ''),
-      );
+      _items.add(_EditableLoopItem(uid: _nextUid++, text: ''));
     });
   }
 
@@ -360,8 +360,7 @@ class _LoopScriptEditorPanelState extends State<LoopScriptEditorPanel> {
       await widget.onSave(title, payloadItems);
     } on ApiException catch (error) {
       final hitWords = error.matchedWords;
-      final extra =
-          hitWords.isEmpty ? '' : '（命中：${hitWords.join('、')}）';
+      final extra = hitWords.isEmpty ? '' : '（命中：${hitWords.join('、')}）';
       if (mounted) {
         _showSnack('保存失败：${error.message}$extra');
       }
@@ -396,20 +395,23 @@ class _LoopScriptEditorPanelState extends State<LoopScriptEditorPanel> {
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
-              color: Colors.amber.withValues(alpha: 0.14),
+              color: AppColors.warningSoft,
               borderRadius: BorderRadius.circular(8),
             ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                const Icon(Icons.auto_fix_high_outlined,
-                    size: 16, color: Colors.orange),
+                const Icon(
+                  Icons.auto_fix_high_outlined,
+                  size: 16,
+                  color: AppColors.warning,
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     widget.generationNote!,
                     key: const Key('loopScriptGenerationNote'),
-                    style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
+                    style: TextStyle(fontSize: 12, color: AppColors.warning),
                   ),
                 ),
               ],
@@ -422,9 +424,7 @@ class _LoopScriptEditorPanelState extends State<LoopScriptEditorPanel> {
             Expanded(
               child: Text(
                 '台本条目（${_items.length}）',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleSmall
+                style: Theme.of(context).textTheme.titleSmall
                     ?.copyWith(fontWeight: FontWeight.bold),
               ),
             ),
@@ -445,12 +445,12 @@ class _LoopScriptEditorPanelState extends State<LoopScriptEditorPanel> {
             ),
           ),
         if (_items.isEmpty)
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(vertical: 20),
             child: Center(
               child: Text(
                 '还没有台词，点击下方「添加一句」开始编写',
-                style: TextStyle(color: Colors.grey),
+                style: TextStyle(color: context.tokenTextHint),
               ),
             ),
           ),
@@ -463,15 +463,13 @@ class _LoopScriptEditorPanelState extends State<LoopScriptEditorPanel> {
         const SizedBox(height: 10),
         Text(
           '循环节奏：整本按顺序循环播放，每条播完后停顿其「间隔秒」（空则默认 6 秒）。',
-          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          style: TextStyle(fontSize: 12, color: context.tokenTextBody),
         ),
         const SizedBox(height: 16),
         FilledButton(
           key: widget.saveButtonKey ?? const Key('loopScriptSaveButton'),
           onPressed: _saving ? null : _save,
-          style: FilledButton.styleFrom(
-            minimumSize: const Size.fromHeight(48),
-          ),
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
           child: _saving
               ? const SizedBox(
                   width: 20,

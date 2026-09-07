@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:starvoice_app/core/models/script.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/core/theme/app_colors.dart';
+import 'package:starvoice_app/core/theme/theme_tokens.dart';
 import 'package:starvoice_app/providers.dart';
 
 /// 话术编辑保存页（路由 /scripts/:id/edit）：
@@ -49,7 +51,9 @@ class _ScriptEditPageState extends ConsumerState<ScriptEditPage> {
       _loadError = null;
     });
     try {
-      final script = await ref.read(apiClientProvider).getScript(widget.scriptId);
+      final script = await ref
+          .read(apiClientProvider)
+          .getScript(widget.scriptId);
       if (!mounted) {
         return;
       }
@@ -91,7 +95,9 @@ class _ScriptEditPageState extends ConsumerState<ScriptEditPage> {
       _saving = true;
     });
     try {
-      final updated = await ref.read(apiClientProvider).updateScript(
+      final updated = await ref
+          .read(apiClientProvider)
+          .updateScript(
             widget.scriptId,
             content: content,
             title: title.isEmpty ? null : title,
@@ -179,15 +185,13 @@ class _ScriptEditPageState extends ConsumerState<ScriptEditPage> {
         const SizedBox(height: 4),
         Text(
           '保存后将重新进行敏感词扫描，命中拦截词会被标记为不可开播',
-          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          style: TextStyle(fontSize: 12, color: context.tokenTextBody),
         ),
         const SizedBox(height: 16),
         FilledButton(
           key: const Key('scriptSaveButton'),
           onPressed: _saving ? null : _save,
-          style: FilledButton.styleFrom(
-            minimumSize: const Size.fromHeight(48),
-          ),
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
           child: _saving
               ? const SizedBox(
                   width: 20,
@@ -202,16 +206,12 @@ class _ScriptEditPageState extends ConsumerState<ScriptEditPage> {
         else
           Row(
             children: <Widget>[
-              Icon(Icons.check_circle_outline,
-                  size: 16, color: Colors.green.shade700),
+              Icon(Icons.check_circle_outline, size: 16, color: AppColors.live),
               const SizedBox(width: 6),
               Text(
                 '扫描通过，当前话术可开播',
                 key: const Key('scriptEditReadyHint'),
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.green.shade700,
-                ),
+                style: TextStyle(fontSize: 13, color: AppColors.live),
               ),
             ],
           ),
@@ -227,19 +227,23 @@ class _ScriptEditPageState extends ConsumerState<ScriptEditPage> {
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.red.withValues(alpha: 0.08),
+        color: AppColors.danger.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          const Icon(Icons.warning_amber_rounded, size: 16, color: Colors.red),
+          const Icon(
+            Icons.warning_amber_rounded,
+            size: 16,
+            color: AppColors.danger,
+          ),
           const SizedBox(width: 6),
           Expanded(
             child: Text(
               words,
               key: const Key('scriptEditBlockedBanner'),
-              style: const TextStyle(fontSize: 13, color: Colors.red),
+              style: TextStyle(fontSize: 13, color: AppColors.danger),
             ),
           ),
         ],

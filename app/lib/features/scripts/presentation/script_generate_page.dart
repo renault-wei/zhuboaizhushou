@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 
 import 'package:starvoice_app/core/models/script.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/core/theme/app_colors.dart';
+import 'package:starvoice_app/core/theme/theme_tokens.dart';
 import 'package:starvoice_app/features/scripts/application/script_controller.dart';
 import 'package:starvoice_app/providers.dart';
 
@@ -22,41 +24,47 @@ class ScriptIndustryOption {
   final Map<String, String> productFields;
 }
 
-const List<ScriptIndustryOption> kScriptIndustryOptions = <ScriptIndustryOption>[
-  ScriptIndustryOption(
-    code: 'restaurant',
-    label: '餐饮',
-    productFields: <String, String>{
-      'name': '团购券名',
-      'package': '套餐内容',
-      'price': '价格',
-      'sellingPoints': '卖点',
-    },
-  ),
-  ScriptIndustryOption(
-    code: 'local_service',
-    label: '到店服务',
-    productFields: <String, String>{
-      'name': '服务名',
-      'package': '服务内容',
-      'price': '价格',
-      'sellingPoints': '卖点',
-    },
-  ),
-  ScriptIndustryOption(
-    code: 'retail',
-    label: '零售',
-    productFields: <String, String>{
-      'name': '商品名',
-      'package': '规格',
-      'price': '价格',
-      'sellingPoints': '卖点',
-    },
-  ),
-];
+const List<ScriptIndustryOption> kScriptIndustryOptions =
+    <ScriptIndustryOption>[
+      ScriptIndustryOption(
+        code: 'restaurant',
+        label: '餐饮',
+        productFields: <String, String>{
+          'name': '团购券名',
+          'package': '套餐内容',
+          'price': '价格',
+          'sellingPoints': '卖点',
+        },
+      ),
+      ScriptIndustryOption(
+        code: 'local_service',
+        label: '到店服务',
+        productFields: <String, String>{
+          'name': '服务名',
+          'package': '服务内容',
+          'price': '价格',
+          'sellingPoints': '卖点',
+        },
+      ),
+      ScriptIndustryOption(
+        code: 'retail',
+        label: '零售',
+        productFields: <String, String>{
+          'name': '商品名',
+          'package': '规格',
+          'price': '价格',
+          'sellingPoints': '卖点',
+        },
+      ),
+    ];
 
 /// 商品表单固定字段顺序，标签随行业切换。
-const List<String> _scriptFieldKeys = <String>['name', 'package', 'price', 'sellingPoints'];
+const List<String> _scriptFieldKeys = <String>[
+  'name',
+  'package',
+  'price',
+  'sellingPoints',
+];
 
 String _twoDigits(int value) => value.toString().padLeft(2, '0');
 
@@ -147,10 +155,9 @@ class _ScriptGeneratePageState extends ConsumerState<ScriptGeneratePage> {
       return;
     }
     try {
-      final created = await ref.read(scriptControllerProvider.notifier).generate(
-            industry: _industry,
-            product: product,
-          );
+      final created = await ref
+          .read(scriptControllerProvider.notifier)
+          .generate(industry: _industry, product: product);
       final note = created.generationNote;
       if (note != null && note.isNotEmpty) {
         // 初稿被自动改写/兜底时一次性告知，成品本身可直接开播
@@ -192,9 +199,7 @@ class _ScriptGeneratePageState extends ConsumerState<ScriptGeneratePage> {
         children: <Widget>[
           Text(
             '选择行业',
-            style: Theme.of(context)
-                .textTheme
-                .titleMedium
+            style: Theme.of(context).textTheme.titleMedium
                 ?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
@@ -217,9 +222,7 @@ class _ScriptGeneratePageState extends ConsumerState<ScriptGeneratePage> {
           const SizedBox(height: 20),
           Text(
             '商品信息',
-            style: Theme.of(context)
-                .textTheme
-                .titleMedium
+            style: Theme.of(context).textTheme.titleMedium
                 ?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
@@ -253,9 +256,7 @@ class _ScriptGeneratePageState extends ConsumerState<ScriptGeneratePage> {
           const SizedBox(height: 28),
           Text(
             '我的话术（${state.scripts.length}）',
-            style: Theme.of(context)
-                .textTheme
-                .titleMedium
+            style: Theme.of(context).textTheme.titleMedium
                 ?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
@@ -299,10 +300,7 @@ class _ScriptGeneratePageState extends ConsumerState<ScriptGeneratePage> {
         Padding(
           padding: EdgeInsets.symmetric(vertical: 24),
           child: Center(
-            child: Text(
-              '还没有话术，先在上方填写商品信息生成第一条吧',
-              key: Key('scriptEmptyText'),
-            ),
+            child: Text('还没有话术，先在上方填写商品信息生成第一条吧', key: Key('scriptEmptyText')),
           ),
         ),
       ];
@@ -329,19 +327,19 @@ class _ScriptCard extends StatelessWidget {
   final Script script;
   final VoidCallback onEdit;
 
-  ({String label, Color color}) _statusStyle() {
+  ({String label, Color color}) _statusStyle(BuildContext context) {
     if (script.isReady) {
-      return (label: '可开播', color: Colors.green.shade700);
+      return (label: '可开播', color: AppColors.live);
     }
     if (script.isBlocked) {
-      return (label: '已拦截', color: Colors.red);
+      return (label: '已拦截', color: AppColors.danger);
     }
-    return (label: '草稿', color: Colors.grey);
+    return (label: '草稿', color: context.tokenTextHint);
   }
 
   @override
   Widget build(BuildContext context) {
-    final style = _statusStyle();
+    final style = _statusStyle(context);
     final words = script.sensitiveMatchedWords;
     final bannerText = words.isEmpty
         ? '命中拦截级敏感词，话术不可开播'
@@ -368,7 +366,10 @@ class _ScriptCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: style.color.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(999),
@@ -389,25 +390,31 @@ class _ScriptCard extends StatelessWidget {
               const SizedBox(height: 10),
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
-                  color: Colors.red.withValues(alpha: 0.08),
+                  color: AppColors.danger.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    const Icon(
+                    Icon(
                       Icons.warning_amber_rounded,
                       size: 16,
-                      color: Colors.red,
+                      color: AppColors.danger,
                     ),
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
                         bannerText,
                         key: Key('scriptBlockedBanner_${script.id}'),
-                        style: const TextStyle(fontSize: 12, color: Colors.red),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColors.danger,
+                        ),
                       ),
                     ),
                   ],
@@ -422,7 +429,7 @@ class _ScriptCard extends StatelessWidget {
               style: TextStyle(
                 fontSize: 13,
                 height: 1.4,
-                color: Colors.grey.shade800,
+                color: context.tokenTextBody,
               ),
             ),
             const SizedBox(height: 4),
@@ -432,7 +439,10 @@ class _ScriptCard extends StatelessWidget {
                   child: Text(
                     '${_industryLabel(script.industry)} · '
                     '创建于 ${_formatCreatedAt(script.createdAt)}',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: context.tokenTextBody,
+                    ),
                   ),
                 ),
                 TextButton(

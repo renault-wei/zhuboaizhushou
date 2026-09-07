@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:starvoice_app/core/models/loop_script.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/core/theme/theme_tokens.dart';
 import 'package:starvoice_app/features/loop_scripts/application/loop_script_controller.dart';
 import 'package:starvoice_app/providers.dart';
 
@@ -93,8 +94,10 @@ class _LoopScriptLibraryPageState extends ConsumerState<LoopScriptLibraryPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('删除循环台本'),
-        content: const Text('删除后引用该台本的开播配置会自动解除绑定，'
-            '进行中的直播不受影响。确定删除吗？'),
+        content: const Text(
+          '删除后引用该台本的开播配置会自动解除绑定，'
+          '进行中的直播不受影响。确定删除吗？',
+        ),
         actions: <Widget>[
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -157,9 +160,7 @@ class _LoopScriptLibraryPageState extends ConsumerState<LoopScriptLibraryPage> {
             Expanded(
               child: Text(
                 '我的循环台本（${state.scripts.length}）',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
+                style: Theme.of(context).textTheme.titleMedium
                     ?.copyWith(fontWeight: FontWeight.bold),
               ),
             ),
@@ -172,12 +173,12 @@ class _LoopScriptLibraryPageState extends ConsumerState<LoopScriptLibraryPage> {
         ),
         const SizedBox(height: 8),
         if (widget.selectable)
-          const Padding(
-            padding: EdgeInsets.only(bottom: 8),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
             child: Text(
               '点选一条循环台本绑定到本场开播；没有合适的台本可先「新建台本」',
-              key: Key('loopScriptSelectHint'),
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+              key: const Key('loopScriptSelectHint'),
+              style: TextStyle(fontSize: 12, color: context.tokenTextHint),
             ),
           ),
         if (state.error != null && state.scripts.isEmpty)
@@ -196,14 +197,14 @@ class _LoopScriptLibraryPageState extends ConsumerState<LoopScriptLibraryPage> {
             ),
           )
         else if (state.scripts.isEmpty && !state.loading)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 40),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 40),
             child: Center(
               child: Text(
                 '还没有循环台本，点击「新建台本」创建一条循环口播台本',
-                key: Key('loopScriptEmptyText'),
+                key: const Key('loopScriptEmptyText'),
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey),
+                style: TextStyle(color: context.tokenTextHint),
               ),
             ),
           )
@@ -232,7 +233,7 @@ class _LoopScriptLibraryPageState extends ConsumerState<LoopScriptLibraryPage> {
             ),
             subtitle: Text(
               '${script.itemCount} 条 · 更新于 ${_formatUpdatedAt(script.updatedAt)}',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+              style: TextStyle(fontSize: 12, color: context.tokenTextBody),
             ),
             trailing: widget.selectable
                 ? const Icon(Icons.check_circle_outline)

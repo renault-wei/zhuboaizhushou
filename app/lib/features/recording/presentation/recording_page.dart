@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/core/theme/app_colors.dart';
+import 'package:starvoice_app/core/theme/theme_tokens.dart';
 import 'package:starvoice_app/features/recording/application/recorder_controller.dart';
 import 'package:starvoice_app/features/recording/data/reading_passages.dart';
 import 'package:starvoice_app/providers.dart';
@@ -127,7 +129,7 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
         const Spacer(),
         Text(
           '已完成 ${state.completedCount}/2',
-          style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+          style: TextStyle(fontSize: 13, color: context.tokenTextBody),
         ),
       ],
     );
@@ -139,9 +141,9 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.deepPurple.withValues(alpha: 0.06),
+        color: context.tokenSurfaceFill,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.deepPurple.withValues(alpha: 0.25)),
+        border: Border.all(color: context.tokenDivider),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -150,7 +152,7 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
             '第 ${index + 1} 段念稿 · 请用自然语速跟读',
             style: TextStyle(
               fontSize: 13,
-              color: Colors.deepPurple.shade700,
+              color: AppColors.primary,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -170,12 +172,12 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
       key: const Key('recordingAllDonePanel'),
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.green.withValues(alpha: 0.08),
+        color: AppColors.live.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
         children: [
-          const Icon(Icons.task_alt, color: Colors.green, size: 40),
+          const Icon(Icons.task_alt, color: AppColors.live, size: 40),
           const SizedBox(height: 8),
           const Text(
             '2 段已全部录完',
@@ -185,7 +187,7 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
           Text(
             '累计 ${formatRecordingDuration(state.totalSeconds)}，'
             '达到 1 分钟即可开始克隆',
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+            style: TextStyle(fontSize: 13, color: context.tokenTextBody),
           ),
         ],
       ),
@@ -218,12 +220,12 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
                     vertical: 2,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.orange.shade100,
+                    color: AppColors.warningSoft,
                     borderRadius: BorderRadius.circular(4),
                   ),
-                  child: const Text(
+                  child: Text(
                     '已暂停',
-                    style: TextStyle(fontSize: 12, color: Colors.orange),
+                    style: TextStyle(fontSize: 12, color: AppColors.warning),
                   ),
                 ),
               ],
@@ -246,7 +248,7 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
             state.phase == RecorderPhase.recording
                 ? '正在录音，请大声清晰地朗读念稿'
                 : '已暂停，可继续录音或完成本段',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            style: TextStyle(fontSize: 12, color: context.tokenTextBody),
           ),
         ],
       );
@@ -259,14 +261,14 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
         '重新开始将覆盖旧文件',
         key: const Key('recordedSegmentHint'),
         textAlign: TextAlign.center,
-        style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+        style: TextStyle(fontSize: 13, color: context.tokenTextBody),
       );
     }
     return Text(
       '准备好后点击「录音」，跟随上方文案朗读即可',
       key: const Key('idleRecordHint'),
       textAlign: TextAlign.center,
-      style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+      style: TextStyle(fontSize: 13, color: context.tokenTextBody),
     );
   }
 
@@ -362,16 +364,12 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
       key: const Key('recentSegmentBanner'),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.grey.shade100,
+        color: context.tokenSurfaceFill,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         children: [
-          Icon(
-            Icons.check_circle_outline,
-            size: 18,
-            color: Colors.green.shade600,
-          ),
+          Icon(Icons.check_circle_outline, size: 18, color: AppColors.live),
           const SizedBox(width: 6),
           Expanded(
             child: Text(
@@ -413,7 +411,7 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
           Text(
             '录满 2 段且总时长 ≥ 1 分钟（当前 ${state.completedCount}/2 段）方可开始克隆',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            style: TextStyle(fontSize: 12, color: context.tokenTextBody),
           ),
         ],
         const SizedBox(height: 12),
@@ -491,9 +489,7 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
       messenger
         ..clearSnackBars()
         ..showSnackBar(
-          const SnackBar(
-            content: Text('克隆声音前需先签署《声音授权协议》，请先完成授权'),
-          ),
+          const SnackBar(content: Text('克隆声音前需先签署《声音授权协议》，请先完成授权')),
         );
       context.push('/voice-agreement');
       return;
@@ -501,9 +497,7 @@ class _RecordingPageState extends ConsumerState<RecordingPage> {
     if (error.code == 'DURATION_TOO_SHORT') {
       messenger
         ..clearSnackBars()
-        ..showSnackBar(
-          const SnackBar(content: Text('录音时长不足 1 分钟，无法开始克隆')),
-        );
+        ..showSnackBar(const SnackBar(content: Text('录音时长不足 1 分钟，无法开始克隆')));
       return;
     }
     messenger
@@ -593,7 +587,7 @@ class _SegmentChips extends StatelessWidget {
                       fontWeight: i == currentIndex ? FontWeight.bold : null,
                       color: segments[i] != null
                           ? scheme.onPrimaryContainer
-                          : Colors.grey.shade700,
+                          : context.tokenTextHint,
                     ),
                   ),
                 ),

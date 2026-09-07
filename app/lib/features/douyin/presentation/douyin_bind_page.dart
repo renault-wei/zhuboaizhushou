@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/core/theme/theme_tokens.dart';
 import 'package:starvoice_app/providers.dart';
 
 /// 抖音账号绑定页。
@@ -99,14 +100,12 @@ class _DouyinBindPageState extends ConsumerState<DouyinBindPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Icon(Icons.smart_display, size: 56, color: Colors.black54),
+              Icon(Icons.smart_display, size: 56, color: context.tokenTextHint),
               const SizedBox(height: 16),
               Text(
                 '绑定抖音账号',
                 textAlign: TextAlign.center,
-                style: Theme.of(context)
-                    .textTheme
-                    .headlineSmall
+                style: Theme.of(context).textTheme.headlineSmall
                     ?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 12),
@@ -134,7 +133,10 @@ class _DouyinBindPageState extends ConsumerState<DouyinBindPage> {
                   child: Text(
                     '开发模式：已自动填入模拟授权码',
                     key: const Key('douyinDevCodeHint'),
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: context.tokenTextBody,
+                    ),
                   ),
                 ),
               if (_errorText != null)
@@ -143,14 +145,18 @@ class _DouyinBindPageState extends ConsumerState<DouyinBindPage> {
                   child: Text(
                     _errorText!,
                     key: const Key('douyinBindError'),
-                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
                   ),
                 ),
               const SizedBox(height: 24),
               FilledButton(
                 key: const Key('mockAuthorizeButton'),
                 onPressed: _binding ? null : _handleMockAuthorize,
-                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48),
+                ),
                 child: _binding
                     ? const SizedBox(
                         width: 20,

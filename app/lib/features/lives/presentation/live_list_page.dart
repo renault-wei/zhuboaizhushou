@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 
 import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/core/theme/app_colors.dart';
+import 'package:starvoice_app/core/theme/theme_tokens.dart';
 import 'package:starvoice_app/features/lives/application/live_list_controller.dart';
 import 'package:starvoice_app/providers.dart';
 
@@ -181,8 +183,9 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
     if (state.lives.isEmpty) {
       return _buildEmptyState();
     }
-    final drafts =
-        state.lives.where((live) => live.status == LiveStatus.idle).toList();
+    final drafts = state.lives
+        .where((live) => live.status == LiveStatus.idle)
+        .toList();
     final active = state.lives
         .where(
           (live) =>
@@ -199,8 +202,7 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
         padding: const EdgeInsets.all(16),
         children: [
           if (drafts.isNotEmpty) _buildSection('草稿', drafts, state),
-          if (active.isNotEmpty)
-            _buildSection('就绪 / 合成中 / 直播中', active, state),
+          if (active.isNotEmpty) _buildSection('就绪 / 合成中 / 直播中', active, state),
           if (finished.isNotEmpty) _buildSection('已结束', finished, state),
         ],
       ),
@@ -232,8 +234,9 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
                   ? () => _goMonitor(live)
                   : null,
               onEnd: live.isLive ? () => _endLive(live) : null,
-              onDelete:
-                  live.isDeleteProtected ? null : () => _confirmDelete(live),
+              onDelete: live.isDeleteProtected
+                  ? null
+                  : () => _confirmDelete(live),
             ),
           ),
       ],
@@ -283,7 +286,7 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
                         Icon(
                           Icons.live_tv,
                           size: 56,
-                          color: Colors.grey.shade400,
+                          color: context.tokenTextHint,
                         ),
                         const SizedBox(height: 16),
                         const Text(
@@ -311,20 +314,20 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
 }
 
 /// 状态徽章配色：idle 蓝 / processing 靛 / ready 绿 / live 橙 / ended 灰 / failed 红。
-Color _statusColor(LiveStatus status) {
+Color _statusColor(BuildContext context, LiveStatus status) {
   switch (status) {
     case LiveStatus.idle:
-      return Colors.blue.shade700;
+      return AppColors.info;
     case LiveStatus.processing:
-      return Colors.indigo;
+      return AppColors.warning;
     case LiveStatus.ready:
-      return Colors.green.shade700;
+      return AppColors.primary;
     case LiveStatus.live:
-      return Colors.orange.shade800;
+      return AppColors.live;
     case LiveStatus.ended:
-      return Colors.grey;
+      return context.tokenTextHint;
     case LiveStatus.failed:
-      return Colors.red;
+      return AppColors.danger;
   }
 }
 
@@ -358,7 +361,8 @@ class _LiveCard extends StatelessWidget {
   /// 卡片摘要：优先展示引用资源名称，缺失时降级为原始 id。
   String get _summary {
     final parts = <String>[
-      if (live.voiceId != null) '音色：${voiceNames[live.voiceId] ?? live.voiceId}',
+      if (live.voiceId != null)
+        '音色：${voiceNames[live.voiceId] ?? live.voiceId}',
       if (live.scriptId != null)
         '话术：${scriptTitles[live.scriptId] ?? live.scriptId}',
       if (live.couponId != null)
@@ -372,7 +376,7 @@ class _LiveCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = _statusColor(live.status);
+    final color = _statusColor(context, live.status);
     return Card(
       key: Key('liveCard_${live.id}'),
       margin: EdgeInsets.zero,
@@ -419,7 +423,7 @@ class _LiveCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               _summary,
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+              style: TextStyle(fontSize: 12, color: context.tokenTextBody),
             ),
             const SizedBox(height: 6),
             Row(
@@ -449,7 +453,7 @@ class _LiveCard extends StatelessWidget {
                     key: Key('liveEndAction_${live.id}'),
                     onPressed: onEnd,
                     style: TextButton.styleFrom(
-                      foregroundColor: Colors.red,
+                      foregroundColor: AppColors.danger,
                     ),
                     child: const Text('结束'),
                   ),
@@ -459,12 +463,10 @@ class _LiveCard extends StatelessWidget {
                   icon: Icon(
                     Icons.delete_outline,
                     color: onDelete == null
-                        ? Colors.grey.shade400
-                        : Colors.grey.shade600,
+                        ? context.tokenTextHint
+                        : context.tokenTextBody,
                   ),
-                  tooltip: live.isDeleteProtected
-                      ? '合成中、已就绪或直播中，不可删除'
-                      : '删除',
+                  tooltip: live.isDeleteProtected ? '合成中、已就绪或直播中，不可删除' : '删除',
                 ),
               ],
             ),
