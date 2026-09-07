@@ -234,6 +234,31 @@ export const loopScriptItems = pgTable(
   ],
 );
 
+// ---------- atmosphere_templates：氛围台词库（竞品「氛围语」复刻：welcome/follow/thumb/clock/custom）----------
+// 循环播报空档自动插播的短句（如欢迎、感谢关注、感谢点赞、整点报时、自定义暖场），
+// 支持 {昵称} 占位（播报时按上下文替换）。入库前必过敏感词扫描，命中 400 不落库（合规红线）。
+export const atmosphereTemplates = pgTable(
+  'atmosphere_templates',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // 类别：welcome = 欢迎 / follow = 关注引导 / thumb = 点赞互动 / clock = 整点报时 / custom = 自定义
+    category: varchar('category', { length: 20 }).notNull(),
+    text: text('text').notNull(),
+    // 开关：关掉后循环引擎跳过该句（保留内容，方便直播中临时停用）
+    enabled: boolean('enabled').notNull().default(true),
+    // 敏感词扫描留痕（合规红线：落库前必扫，命中拦截级词一律拒绝保存，故库内恒为 pass）
+    sensitiveCheckStatus: sensitiveCheckStatusEnum('sensitive_check_status')
+      .notNull()
+      .default('pass'),
+    sensitiveMatchedWords: jsonb('sensitive_matched_words').notNull().default([]),
+    sensitiveScannedAt: timestamp('sensitive_scanned_at', { withTimezone: true }),
+    ...timestamps(),
+  },
+  (table) => [index('atmosphere_templates_user_id_idx').on(table.userId)],
+);
 // ---------- live_danmaku：直播弹幕日志（T13 只读 + G3 弹幕网关写入）----------
 export const liveDanmaku = pgTable(
   'live_danmaku',

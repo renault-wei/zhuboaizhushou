@@ -4,6 +4,7 @@ import { env } from './config/env';
 import { authPlugin } from './plugins/auth';
 import { adminRoutes } from './routes/admin';
 import { agreementsRoutes } from './routes/agreements';
+import { atmosphereTemplatesRoutes } from './routes/atmosphereTemplates';
 import { authRoutes } from './routes/auth';
 import { douyinRoutes } from './routes/douyin';
 import { healthRoutes } from './routes/health';
@@ -41,6 +42,7 @@ export function buildApp() {
   app.register(authRoutes);
   app.register(douyinRoutes);
   app.register(agreementsRoutes);
+  app.register(atmosphereTemplatesRoutes);
   app.register(healthRoutes);
   app.register(scriptsRoutes);
   app.register(voicesRoutes);
