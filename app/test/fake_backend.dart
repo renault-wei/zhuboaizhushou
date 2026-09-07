@@ -46,11 +46,14 @@ class FakeBackend implements HttpClientAdapter {
     List<Map<String, dynamic>>? coupons,
     List<Map<String, dynamic>>? lives,
     List<Map<String, dynamic>>? danmaku,
-  })  : voices = voices ?? <Map<String, dynamic>>[],
-        scripts = scripts ?? <Map<String, dynamic>>[],
-        coupons = coupons ?? _defaultCoupons(),
-        lives = lives ?? <Map<String, dynamic>>[],
-        danmaku = danmaku ?? <Map<String, dynamic>>[];
+    List<Uint8List>? speechOut,
+    this.failSpeechOut = false,
+  }) : voices = voices ?? <Map<String, dynamic>>[],
+       scripts = scripts ?? <Map<String, dynamic>>[],
+       coupons = coupons ?? _defaultCoupons(),
+       lives = lives ?? <Map<String, dynamic>>[],
+       danmaku = danmaku ?? <Map<String, dynamic>>[],
+       speechOut = speechOut ?? <Uint8List>[];
 
   final String userId;
   final String phone;
@@ -75,11 +78,23 @@ class FakeBackend implements HttpClientAdapter {
 
   /// 我的团购券（内存）：结构与服务端 /api/douyin/coupons 返回保持一致。
   final List<Map<String, dynamic>> coupons;
+
   /// 我的开播配置（内存）：结构与服务端 /api/lives 返回保持一致。
   final List<Map<String, dynamic>> lives;
+
   /// 我的直播弹幕日志（内存）：结构与服务端 /api/lives/:id/danmaku 返回保持一致；
   /// 弹幕网关写入（G3）后条目带 liveId，供按场次过滤与计数。
   final List<Map<String, dynamic>> danmaku;
+
+  /// 远程出声队列（内存）：结构与服务端 /api/out/speech/next 拉取口径一致；
+  /// 每次 GET 交付队首一条（空队列返回 204），并给每条 wav 分配 jobId。
+  final List<Uint8List> speechOut;
+
+  /// 模拟出声队列接口 500（测试轮询错误分支）。
+  bool failSpeechOut;
+
+  /// 已被助播机拉走的条数（也用作 jobId 序号）。
+  int speechOutPulledCount = 0;
   int _liveSeq = 0;
   int _danmakuSeq = 0;
 
@@ -131,7 +146,10 @@ class FakeBackend implements HttpClientAdapter {
       final body = _readBody(options);
       final code = body['code'];
       if (code is! String || !code.startsWith('mock-')) {
-        return _jsonResponse({'error': 'CODE_INVALID', 'message': '授权码无效或已过期，请重新授权'}, 400);
+        return _jsonResponse({
+          'error': 'CODE_INVALID',
+          'message': '授权码无效或已过期，请重新授权',
+        }, 400);
       }
       douyinBound = true;
       return _jsonResponse(_douyinBindStatus());
@@ -145,12 +163,14 @@ class FakeBackend implements HttpClientAdapter {
         return _serverError('团购券服务暂不可用');
       }
       if (!douyinBound) {
-        return _jsonResponse(
-          {'error': 'DOUYIN_NOT_BOUND', 'message': '请先绑定抖音号'},
-          403,
-        );
+        return _jsonResponse({
+          'error': 'DOUYIN_NOT_BOUND',
+          'message': '请先绑定抖音号',
+        }, 403);
       }
-      return _jsonResponse({'coupons': List<Map<String, dynamic>>.from(coupons)});
+      return _jsonResponse({
+        'coupons': List<Map<String, dynamic>>.from(coupons),
+      });
     }
     if (options.method == 'GET' && path.endsWith('/api/agreements/voice')) {
       return _jsonResponse({
@@ -159,22 +179,24 @@ class FakeBackend implements HttpClientAdapter {
         'content': fakeVoiceAgreementContent,
       });
     }
-    if (options.method == 'GET' && path.endsWith('/api/agreements/voice/status')) {
+    if (options.method == 'GET' &&
+        path.endsWith('/api/agreements/voice/status')) {
       return _jsonResponse(_voiceAgreementStatus());
     }
-    if (options.method == 'POST' && path.endsWith('/api/agreements/voice/sign')) {
+    if (options.method == 'POST' &&
+        path.endsWith('/api/agreements/voice/sign')) {
       final body = _readBody(options);
       if (body['version'] != '1.0') {
-        return _jsonResponse(
-          {'error': 'VERSION_MISMATCH', 'message': '协议版本不匹配，请阅读最新协议后重新签署'},
-          400,
-        );
+        return _jsonResponse({
+          'error': 'VERSION_MISMATCH',
+          'message': '协议版本不匹配，请阅读最新协议后重新签署',
+        }, 400);
       }
       if (body['agreed'] != true) {
-        return _jsonResponse(
-          {'error': 'NOT_AGREED', 'message': '请先阅读并勾选同意《声音授权协议》后再签署'},
-          400,
-        );
+        return _jsonResponse({
+          'error': 'NOT_AGREED',
+          'message': '请先阅读并勾选同意《声音授权协议》后再签署',
+        }, 400);
       }
       agreementSigned = true;
       return _jsonResponse(_voiceAgreementStatus());
@@ -208,12 +230,15 @@ class FakeBackend implements HttpClientAdapter {
     if (voiceItem != null && options.method == 'DELETE') {
       return _deleteVoice(voiceItem.group(1)!);
     }
+    if (options.method == 'GET' && path.endsWith('/api/out/speech/next')) {
+      return _nextSpeechOut();
+    }
     // T11 推流 / 会话子路径：/api/lives/:id 下的子路径（video / prepare /
     // stream-status / start / end / monitor / danmaku）需先于单段正则匹配，
     // 避免被 /api/lives/:id 的 GET/PATCH/DELETE 规则吞掉。
     final liveAction = RegExp(
-            r'^/api/lives/([^/]+)/(video|prepare|stream-status|start|end|monitor|danmaku)$')
-        .firstMatch(path);
+      r'^/api/lives/([^/]+)/(video|prepare|stream-status|start|end|monitor|danmaku)$',
+    ).firstMatch(path);
     if (liveAction != null && options.method == 'POST') {
       switch (liveAction.group(2)) {
         case 'video':
@@ -268,8 +293,9 @@ class FakeBackend implements HttpClientAdapter {
     result.sort((a, b) {
       final aAt = DateTime.tryParse(a['updatedAt']?.toString() ?? '');
       final bAt = DateTime.tryParse(b['updatedAt']?.toString() ?? '');
-      return (bAt ?? DateTime.fromMillisecondsSinceEpoch(0))
-          .compareTo(aAt ?? DateTime.fromMillisecondsSinceEpoch(0));
+      return (bAt ?? DateTime.fromMillisecondsSinceEpoch(0)).compareTo(
+        aAt ?? DateTime.fromMillisecondsSinceEpoch(0),
+      );
     });
     return _jsonResponse(result);
   }
@@ -278,7 +304,10 @@ class FakeBackend implements HttpClientAdapter {
   ResponseBody _getLive(String id) {
     final live = _findLive(id);
     if (live == null) {
-      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+      return _jsonResponse({
+        'error': 'LIVE_NOT_FOUND',
+        'message': '开播配置不存在',
+      }, 404);
     }
     return _jsonResponse(live);
   }
@@ -289,24 +318,26 @@ class FakeBackend implements HttpClientAdapter {
     final body = _readBody(options);
     final title = body['title']?.toString().trim() ?? '';
     if (title.isEmpty || title.length > 100) {
-      return _jsonResponse(
-        {'error': 'LIVE_TITLE_INVALID', 'message': '直播标题不能为空且不超过 100 字'},
-        400,
-      );
+      return _jsonResponse({
+        'error': 'LIVE_TITLE_INVALID',
+        'message': '直播标题不能为空且不超过 100 字',
+      }, 400);
     }
     final voiceId = _liveNullable(body['voiceId']);
     final scriptId = _liveNullable(body['scriptId']);
-    if (voiceId != null && voices.indexWhere((voice) => voice['id'] == voiceId) < 0) {
-      return _jsonResponse(
-        {'error': 'VOICE_NOT_OWNED', 'message': '音色不存在或不属于当前用户'},
-        400,
-      );
+    if (voiceId != null &&
+        voices.indexWhere((voice) => voice['id'] == voiceId) < 0) {
+      return _jsonResponse({
+        'error': 'VOICE_NOT_OWNED',
+        'message': '音色不存在或不属于当前用户',
+      }, 400);
     }
-    if (scriptId != null && scripts.indexWhere((script) => script['id'] == scriptId) < 0) {
-      return _jsonResponse(
-        {'error': 'SCRIPT_NOT_OWNED', 'message': '话术不存在或不属于当前用户'},
-        400,
-      );
+    if (scriptId != null &&
+        scripts.indexWhere((script) => script['id'] == scriptId) < 0) {
+      return _jsonResponse({
+        'error': 'SCRIPT_NOT_OWNED',
+        'message': '话术不存在或不属于当前用户',
+      }, 400);
     }
     final id = _nextLiveId();
     final now = DateTime.now().toUtc();
@@ -333,37 +364,42 @@ class FakeBackend implements HttpClientAdapter {
   ResponseBody _updateLive(RequestOptions options, String id) {
     final index = lives.indexWhere((live) => live['id'] == id);
     if (index < 0) {
-      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+      return _jsonResponse({
+        'error': 'LIVE_NOT_FOUND',
+        'message': '开播配置不存在',
+      }, 404);
     }
     final body = _readBody(options);
     final updated = <String, dynamic>{...lives[index]};
     if (body.containsKey('title')) {
       final title = body['title']?.toString().trim() ?? '';
       if (title.isEmpty || title.length > 100) {
-        return _jsonResponse(
-          {'error': 'LIVE_TITLE_INVALID', 'message': '直播标题不能为空且不超过 100 字'},
-          400,
-        );
+        return _jsonResponse({
+          'error': 'LIVE_TITLE_INVALID',
+          'message': '直播标题不能为空且不超过 100 字',
+        }, 400);
       }
       updated['title'] = title;
     }
     if (body.containsKey('voiceId')) {
       final voiceId = _liveNullable(body['voiceId']);
-      if (voiceId != null && voices.indexWhere((voice) => voice['id'] == voiceId) < 0) {
-        return _jsonResponse(
-          {'error': 'VOICE_NOT_OWNED', 'message': '音色不存在或不属于当前用户'},
-          400,
-        );
+      if (voiceId != null &&
+          voices.indexWhere((voice) => voice['id'] == voiceId) < 0) {
+        return _jsonResponse({
+          'error': 'VOICE_NOT_OWNED',
+          'message': '音色不存在或不属于当前用户',
+        }, 400);
       }
       updated['voiceId'] = voiceId;
     }
     if (body.containsKey('scriptId')) {
       final scriptId = _liveNullable(body['scriptId']);
-      if (scriptId != null && scripts.indexWhere((script) => script['id'] == scriptId) < 0) {
-        return _jsonResponse(
-          {'error': 'SCRIPT_NOT_OWNED', 'message': '话术不存在或不属于当前用户'},
-          400,
-        );
+      if (scriptId != null &&
+          scripts.indexWhere((script) => script['id'] == scriptId) < 0) {
+        return _jsonResponse({
+          'error': 'SCRIPT_NOT_OWNED',
+          'message': '话术不存在或不属于当前用户',
+        }, 400);
       }
       updated['scriptId'] = scriptId;
     }
@@ -371,7 +407,8 @@ class FakeBackend implements HttpClientAdapter {
       updated['couponId'] = _liveNullable(body['couponId']);
     }
     if (body.containsKey('videoSourceUrl')) {
-      updated['videoSourceUrl'] = body['videoSourceUrl']?.toString().trim() ?? '';
+      updated['videoSourceUrl'] =
+          body['videoSourceUrl']?.toString().trim() ?? '';
     }
     updated['updatedAt'] = DateTime.now().toUtc().toIso8601String();
     lives[index] = updated;
@@ -382,14 +419,17 @@ class FakeBackend implements HttpClientAdapter {
   ResponseBody _deleteLive(String id) {
     final index = lives.indexWhere((live) => live['id'] == id);
     if (index < 0) {
-      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+      return _jsonResponse({
+        'error': 'LIVE_NOT_FOUND',
+        'message': '开播配置不存在',
+      }, 404);
     }
     final status = lives[index]['status'];
     if (status == 'processing' || status == 'live' || status == 'ready') {
-      return _jsonResponse(
-        {'error': 'LIVE_IN_PROGRESS', 'message': '直播进行中或已就绪，不可删除'},
-        409,
-      );
+      return _jsonResponse({
+        'error': 'LIVE_IN_PROGRESS',
+        'message': '直播进行中或已就绪，不可删除',
+      }, 409);
     }
     lives.removeAt(index);
     return _jsonResponse({'ok': true});
@@ -401,16 +441,19 @@ class FakeBackend implements HttpClientAdapter {
   ResponseBody _uploadLiveVideo(String id, RequestOptions options) {
     final index = lives.indexWhere((live) => live['id'] == id);
     if (index < 0) {
-      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+      return _jsonResponse({
+        'error': 'LIVE_NOT_FOUND',
+        'message': '开播配置不存在',
+      }, 404);
     }
     final data = options.data;
     final hasVideo =
         data is FormData && data.files.any((entry) => entry.key == 'video');
     if (!hasVideo) {
-      return _jsonResponse(
-        {'error': 'VIDEO_REQUIRED', 'message': '缺少视频文件（multipart 字段 video）'},
-        400,
-      );
+      return _jsonResponse({
+        'error': 'VIDEO_REQUIRED',
+        'message': '缺少视频文件（multipart 字段 video）',
+      }, 400);
     }
     final now = DateTime.now().toUtc().toIso8601String();
     final updated = <String, dynamic>{
@@ -427,32 +470,37 @@ class FakeBackend implements HttpClientAdapter {
   ResponseBody _prepareLive(String id) {
     final index = lives.indexWhere((live) => live['id'] == id);
     if (index < 0) {
-      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+      return _jsonResponse({
+        'error': 'LIVE_NOT_FOUND',
+        'message': '开播配置不存在',
+      }, 404);
     }
     final live = lives[index];
     if ((live['videoSourceUrl']?.toString() ?? '').isEmpty) {
-      return _jsonResponse(
-        {'error': 'VIDEO_NOT_UPLOADED', 'message': '请先上传实景视频再生成'},
-        400,
-      );
+      return _jsonResponse({
+        'error': 'VIDEO_NOT_UPLOADED',
+        'message': '请先上传实景视频再生成',
+      }, 400);
     }
     final scriptId = _liveNullable(live['scriptId']);
     final script = scriptId == null ? null : _findScript(scriptId);
-    final scriptReady = script != null &&
+    final scriptReady =
+        script != null &&
         script['status'] == 'ready' &&
         script['sensitiveCheckStatus'] == 'pass';
     if (!scriptReady) {
-      return _jsonResponse(
-        {'error': 'SCRIPT_NOT_READY', 'message': '话术未就绪或敏感词未通过，不能生成'},
-        400,
-      );
+      return _jsonResponse({
+        'error': 'SCRIPT_NOT_READY',
+        'message': '话术未就绪或敏感词未通过，不能生成',
+      }, 400);
     }
     final voiceId = _liveNullable(live['voiceId']);
-    if (voiceId == null || voices.indexWhere((voice) => voice['id'] == voiceId) < 0) {
-      return _jsonResponse(
-        {'error': 'VOICE_NOT_SELECTED', 'message': '请先绑定可用的音色'},
-        400,
-      );
+    if (voiceId == null ||
+        voices.indexWhere((voice) => voice['id'] == voiceId) < 0) {
+      return _jsonResponse({
+        'error': 'VOICE_NOT_SELECTED',
+        'message': '请先绑定可用的音色',
+      }, 400);
     }
     final now = DateTime.now().toUtc().toIso8601String();
     final updated = <String, dynamic>{
@@ -470,7 +518,10 @@ class FakeBackend implements HttpClientAdapter {
   ResponseBody _streamStatus(String id) {
     final live = _findLive(id);
     if (live == null) {
-      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+      return _jsonResponse({
+        'error': 'LIVE_NOT_FOUND',
+        'message': '开播配置不存在',
+      }, 404);
     }
     return _jsonResponse(<String, dynamic>{
       'status': live['status'],
@@ -479,18 +530,44 @@ class FakeBackend implements HttpClientAdapter {
     });
   }
 
+  /// 远程出声队列拉取（镜像服务端 /api/out/speech/next）：空队列 204；
+  /// 有内容则交付队首 wav 字节并带 x-speech-job-id 头（交付即删除语义）。
+  ResponseBody _nextSpeechOut() {
+    if (failSpeechOut) {
+      return _serverError('出声队列服务暂不可用');
+    }
+    if (speechOut.isEmpty) {
+      return ResponseBody.fromString('', 204);
+    }
+    final bytes = speechOut.removeAt(0);
+    speechOutPulledCount += 1;
+    return ResponseBody.fromBytes(
+      bytes,
+      200,
+      headers: <String, List<String>>{
+        'content-type': <String>['audio/wav'],
+        'x-speech-job-id': <String>[
+          'speech-mock-${speechOutPulledCount.toString().padLeft(3, '0')}',
+        ],
+      },
+    );
+  }
+
   /// 一键开播（镜像服务端 startLive）：ready → live，记录 startedAt 并清空
   /// endedAt；未就绪返回 400 LIVE_NOT_READY。
   ResponseBody _startLive(String id) {
     final index = lives.indexWhere((live) => live['id'] == id);
     if (index < 0) {
-      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+      return _jsonResponse({
+        'error': 'LIVE_NOT_FOUND',
+        'message': '开播配置不存在',
+      }, 404);
     }
     if (lives[index]['status'] != 'ready') {
-      return _jsonResponse(
-        {'error': 'LIVE_NOT_READY', 'message': '只有合成完成（就绪）的直播才能开播'},
-        400,
-      );
+      return _jsonResponse({
+        'error': 'LIVE_NOT_READY',
+        'message': '只有合成完成（就绪）的直播才能开播',
+      }, 400);
     }
     final now = DateTime.now().toUtc().toIso8601String();
     final updated = <String, dynamic>{
@@ -509,13 +586,16 @@ class FakeBackend implements HttpClientAdapter {
   ResponseBody _endLive(String id) {
     final index = lives.indexWhere((live) => live['id'] == id);
     if (index < 0) {
-      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+      return _jsonResponse({
+        'error': 'LIVE_NOT_FOUND',
+        'message': '开播配置不存在',
+      }, 404);
     }
     if (lives[index]['status'] != 'live') {
-      return _jsonResponse(
-        {'error': 'LIVE_NOT_LIVE', 'message': '只有直播中的场次才能结束'},
-        400,
-      );
+      return _jsonResponse({
+        'error': 'LIVE_NOT_LIVE',
+        'message': '只有直播中的场次才能结束',
+      }, 400);
     }
     final now = DateTime.now().toUtc().toIso8601String();
     final updated = <String, dynamic>{
@@ -532,18 +612,25 @@ class FakeBackend implements HttpClientAdapter {
   ResponseBody _liveMonitor(String id) {
     final live = _findLive(id);
     if (live == null) {
-      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+      return _jsonResponse({
+        'error': 'LIVE_NOT_FOUND',
+        'message': '开播配置不存在',
+      }, 404);
     }
     var durationSeconds = 0;
     final startedAt = DateTime.tryParse(live['startedAt']?.toString() ?? '');
     final endedAt = DateTime.tryParse(live['endedAt']?.toString() ?? '');
     if (live['status'] == 'live' && startedAt != null) {
-      durationSeconds = (DateTime.now().millisecondsSinceEpoch -
+      durationSeconds =
+          (DateTime.now().millisecondsSinceEpoch -
               startedAt.millisecondsSinceEpoch) ~/
           1000;
-    } else if (live['status'] == 'ended' && startedAt != null && endedAt != null) {
+    } else if (live['status'] == 'ended' &&
+        startedAt != null &&
+        endedAt != null) {
       durationSeconds =
-          (endedAt.millisecondsSinceEpoch - startedAt.millisecondsSinceEpoch) ~/ 1000;
+          (endedAt.millisecondsSinceEpoch - startedAt.millisecondsSinceEpoch) ~/
+          1000;
     }
     if (durationSeconds < 0) {
       durationSeconds = 0;
@@ -563,17 +650,20 @@ class FakeBackend implements HttpClientAdapter {
   ResponseBody _listDanmaku(String id, RequestOptions options) {
     final live = _findLive(id);
     if (live == null) {
-      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+      return _jsonResponse({
+        'error': 'LIVE_NOT_FOUND',
+        'message': '开播配置不存在',
+      }, 404);
     }
     var limit = 50;
     final rawLimit = options.queryParameters['limit'];
     if (rawLimit != null) {
       final parsed = int.tryParse(rawLimit.toString());
       if (parsed == null || parsed < 1) {
-        return _jsonResponse(
-          {'error': 'LIMIT_INVALID', 'message': 'limit 必须为正整数'},
-          400,
-        );
+        return _jsonResponse({
+          'error': 'LIMIT_INVALID',
+          'message': 'limit 必须为正整数',
+        }, 400);
       }
       limit = parsed;
     }
@@ -581,8 +671,9 @@ class FakeBackend implements HttpClientAdapter {
       ..sort((a, b) {
         final aAt = DateTime.tryParse(a['sentAt']?.toString() ?? '');
         final bAt = DateTime.tryParse(b['sentAt']?.toString() ?? '');
-        return (bAt ?? DateTime.fromMillisecondsSinceEpoch(0))
-            .compareTo(aAt ?? DateTime.fromMillisecondsSinceEpoch(0));
+        return (bAt ?? DateTime.fromMillisecondsSinceEpoch(0)).compareTo(
+          aAt ?? DateTime.fromMillisecondsSinceEpoch(0),
+        );
       });
     return _jsonResponse(items.take(limit).toList());
   }
@@ -592,31 +683,31 @@ class FakeBackend implements HttpClientAdapter {
   ResponseBody _postDanmaku(String id, RequestOptions options) {
     final live = _findLive(id);
     if (live == null) {
-      return _jsonResponse({'error': 'LIVE_NOT_FOUND', 'message': '开播配置不存在'}, 404);
+      return _jsonResponse({
+        'error': 'LIVE_NOT_FOUND',
+        'message': '开播配置不存在',
+      }, 404);
     }
     final body = _readBody(options);
     final content = body['content']?.toString().trim() ?? '';
     if (content.isEmpty || content.length > 200) {
-      return _jsonResponse(
-        {'error': 'CONTENT_INVALID', 'message': '弹幕内容不能为空且不超过 200 字'},
-        400,
-      );
+      return _jsonResponse({
+        'error': 'CONTENT_INVALID',
+        'message': '弹幕内容不能为空且不超过 200 字',
+      }, 400);
     }
     if (live['status'] != 'live') {
-      return _jsonResponse(
-        {
-          'error': 'LIVE_NOT_LIVE',
-          'message': '只有直播中的场次才能接收弹幕（当前：${live['status']}）',
-        },
-        409,
-      );
+      return _jsonResponse({
+        'error': 'LIVE_NOT_LIVE',
+        'message': '只有直播中的场次才能接收弹幕（当前：${live['status']}）',
+      }, 409);
     }
     final rawNickname = body['senderNickname']?.toString().trim() ?? '';
     final senderNickname = rawNickname.isEmpty
         ? null
         : (rawNickname.length <= 50
-            ? rawNickname
-            : rawNickname.substring(0, 50));
+              ? rawNickname
+              : rawNickname.substring(0, 50));
     _danmakuSeq += 1;
     final record = <String, dynamic>{
       'id': 'dm-${_danmakuSeq.toString().padLeft(4, '0')}',
@@ -650,7 +741,8 @@ class FakeBackend implements HttpClientAdapter {
   String _nextLiveId() {
     var maxSeq = 0;
     for (final live in lives) {
-      final match = RegExp(r'^live-(\d+)$').firstMatch(live['id']?.toString() ?? '');
+      final match = RegExp(r'^live-(\d+)$')
+          .firstMatch(live['id']?.toString() ?? '');
       final seq = int.tryParse(match?.group(1) ?? '') ?? 0;
       if (seq > maxSeq) {
         maxSeq = seq;
@@ -672,13 +764,10 @@ class FakeBackend implements HttpClientAdapter {
 
   ResponseBody _createVoice(RequestOptions options) {
     if (!agreementSigned) {
-      return _jsonResponse(
-        {
-          'error': 'AGREEMENT_REQUIRED',
-          'message': '克隆声音前需先签署《声音授权协议》',
-        },
-        403,
-      );
+      return _jsonResponse({
+        'error': 'AGREEMENT_REQUIRED',
+        'message': '克隆声音前需先签署《声音授权协议》',
+      }, 403);
     }
     final body = _readBody(options);
     final rawName = body['name'];
@@ -686,16 +775,16 @@ class FakeBackend implements HttpClientAdapter {
     final rawDuration = body['sampleDurationSeconds'];
     final duration = rawDuration is num ? rawDuration.toInt() : 0;
     if (duration < 180) {
-      return _jsonResponse(
-        {'error': 'DURATION_TOO_SHORT', 'message': '录音时长不足 3 分钟'},
-        400,
-      );
+      return _jsonResponse({
+        'error': 'DURATION_TOO_SHORT',
+        'message': '录音时长不足 3 分钟',
+      }, 400);
     }
     if (name.isEmpty || name.length > 50) {
-      return _jsonResponse(
-        {'error': 'NAME_INVALID', 'message': '音色名称不能为空且不超过 50 字'},
-        400,
-      );
+      return _jsonResponse({
+        'error': 'NAME_INVALID',
+        'message': '音色名称不能为空且不超过 50 字',
+      }, 400);
     }
     _voiceSeq += 1;
     final id = 'voice-${_voiceSeq.toString().padLeft(3, '0')}';
@@ -716,10 +805,10 @@ class FakeBackend implements HttpClientAdapter {
   ResponseBody _getVoice(String id) {
     final index = voices.indexWhere((voice) => voice['id'] == id);
     if (index < 0) {
-      return _jsonResponse(
-        {'error': 'VOICE_NOT_FOUND', 'message': '音色不存在'},
-        404,
-      );
+      return _jsonResponse({
+        'error': 'VOICE_NOT_FOUND',
+        'message': '音色不存在',
+      }, 404);
     }
     final voice = voices[index];
     final status = voice['status'];
@@ -727,8 +816,10 @@ class FakeBackend implements HttpClientAdapter {
       final createdAt =
           DateTime.tryParse(voice['createdAt']?.toString() ?? '') ??
           DateTime.now().toUtc();
-      final elapsedMs =
-          DateTime.now().toUtc().difference(createdAt).inMilliseconds;
+      final elapsedMs = DateTime.now()
+          .toUtc()
+          .difference(createdAt)
+          .inMilliseconds;
       String? nextStatus;
       if (elapsedMs >= 8000) {
         nextStatus = 'ready';
@@ -749,10 +840,10 @@ class FakeBackend implements HttpClientAdapter {
     final before = voices.length;
     voices.removeWhere((voice) => voice['id'] == id);
     if (voices.length == before) {
-      return _jsonResponse(
-        {'error': 'VOICE_NOT_FOUND', 'message': '音色不存在'},
-        404,
-      );
+      return _jsonResponse({
+        'error': 'VOICE_NOT_FOUND',
+        'message': '音色不存在',
+      }, 404);
     }
     return _jsonResponse({'ok': true});
   }
@@ -767,11 +858,17 @@ class FakeBackend implements HttpClientAdapter {
     if (industry != 'restaurant' &&
         industry != 'local_service' &&
         industry != 'retail') {
-      return _jsonResponse({'error': 'INDUSTRY_INVALID', 'message': '不支持的行业类型'}, 400);
+      return _jsonResponse({
+        'error': 'INDUSTRY_INVALID',
+        'message': '不支持的行业类型',
+      }, 400);
     }
     final rawProduct = body['product'];
     if (rawProduct is! Map || rawProduct.isEmpty) {
-      return _jsonResponse({'error': 'PRODUCT_INVALID', 'message': '商品信息不能为空'}, 400);
+      return _jsonResponse({
+        'error': 'PRODUCT_INVALID',
+        'message': '商品信息不能为空',
+      }, 400);
     }
     final rawTitle = body['title'];
     final title = rawTitle is String && rawTitle.trim().isNotEmpty
@@ -803,7 +900,10 @@ class FakeBackend implements HttpClientAdapter {
   ResponseBody _getScript(String id) {
     final script = _findScript(id);
     if (script == null) {
-      return _jsonResponse({'error': 'SCRIPT_NOT_FOUND', 'message': '话术不存在'}, 404);
+      return _jsonResponse({
+        'error': 'SCRIPT_NOT_FOUND',
+        'message': '话术不存在',
+      }, 404);
     }
     return _jsonResponse(script);
   }
@@ -812,12 +912,18 @@ class FakeBackend implements HttpClientAdapter {
   ResponseBody _updateScript(RequestOptions options, String id) {
     final script = _findScript(id);
     if (script == null) {
-      return _jsonResponse({'error': 'SCRIPT_NOT_FOUND', 'message': '话术不存在'}, 404);
+      return _jsonResponse({
+        'error': 'SCRIPT_NOT_FOUND',
+        'message': '话术不存在',
+      }, 404);
     }
     final body = _readBody(options);
     final rawContent = body['content'];
     if (rawContent is! String || rawContent.trim().isEmpty) {
-      return _jsonResponse({'error': 'CONTENT_REQUIRED', 'message': '话术内容不能为空'}, 400);
+      return _jsonResponse({
+        'error': 'CONTENT_REQUIRED',
+        'message': '话术内容不能为空',
+      }, 400);
     }
     final content = rawContent.trim();
     final scan = _scanSensitive(content);
@@ -886,10 +992,10 @@ class FakeBackend implements HttpClientAdapter {
 
   /// 模拟服务端 500 错误响应（测试错误分支用）。
   ResponseBody _serverError(String message) {
-    return _jsonResponse(
-      <String, dynamic>{'error': 'INTERNAL_ERROR', 'message': message},
-      500,
-    );
+    return _jsonResponse(<String, dynamic>{
+      'error': 'INTERNAL_ERROR',
+      'message': message,
+    }, 500);
   }
 
   Map<String, dynamic> _douyinBindStatus() {
@@ -909,11 +1015,7 @@ class FakeBackend implements HttpClientAdapter {
     if (!agreementSigned) {
       return {'signed': false};
     }
-    return {
-      'signed': true,
-      'signedAt': agreementSignedAt,
-      'version': '1.0',
-    };
+    return {'signed': true, 'signedAt': agreementSignedAt, 'version': '1.0'};
   }
 
   /// 默认团购券列表：与服务端 mock 火锅店券保持一致（5 张）。

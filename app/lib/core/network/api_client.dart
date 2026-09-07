@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 
 import 'package:starvoice_app/core/models/coupon.dart';
@@ -7,6 +10,7 @@ import 'package:starvoice_app/core/models/user_profile.dart';
 import 'package:starvoice_app/core/models/voice.dart';
 import 'package:starvoice_app/core/models/voice_agreement.dart';
 import 'package:starvoice_app/core/models/script.dart';
+import 'package:starvoice_app/core/models/speech_out_item.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 
 /// 发送验证码的结果。dev 模式下服务端会额外返回明文 [code] 便于联调。
@@ -44,7 +48,9 @@ class VerifyCodeResult {
     return VerifyCodeResult(
       token: json['token']?.toString() ?? '',
       user: UserProfile.fromJson(
-        userJson is Map ? Map<String, dynamic>.from(userJson) : <String, dynamic>{},
+        userJson is Map
+            ? Map<String, dynamic>.from(userJson)
+            : <String, dynamic>{},
       ),
     );
   }
@@ -102,7 +108,9 @@ class ApiClient {
   /// 查询当前用户的抖音绑定状态。
   Future<DouyinBindStatus> fetchDouyinBindStatus() async {
     try {
-      final response = await _dio.get<Map<String, dynamic>>('/api/douyin/bind-status');
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/api/douyin/bind-status',
+      );
       return DouyinBindStatus.fromJson(response.data ?? <String, dynamic>{});
     } on DioException catch (error) {
       throw _toApiException(error);
@@ -141,7 +149,9 @@ class ApiClient {
   /// 未绑定抖音号时服务端返回 403 DOUYIN_NOT_BOUND。
   Future<List<Coupon>> fetchCoupons() async {
     try {
-      final response = await _dio.get<Map<String, dynamic>>('/api/douyin/coupons');
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/api/douyin/coupons',
+      );
       final data = response.data ?? <String, dynamic>{};
       final raw = data['coupons'];
       if (raw is List) {
@@ -159,7 +169,9 @@ class ApiClient {
   /// 获取最新版《声音授权协议》正文。
   Future<VoiceAgreement> fetchVoiceAgreement() async {
     try {
-      final response = await _dio.get<Map<String, dynamic>>('/api/agreements/voice');
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/api/agreements/voice',
+      );
       return VoiceAgreement.fromJson(response.data ?? <String, dynamic>{});
     } on DioException catch (error) {
       throw _toApiException(error);
@@ -169,7 +181,9 @@ class ApiClient {
   /// 查询当前用户的《声音授权协议》签署状态。
   Future<AgreementStatus> fetchVoiceAgreementStatus() async {
     try {
-      final response = await _dio.get<Map<String, dynamic>>('/api/agreements/voice/status');
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/api/agreements/voice/status',
+      );
       return AgreementStatus.fromJson(response.data ?? <String, dynamic>{});
     } on DioException catch (error) {
       throw _toApiException(error);
@@ -300,7 +314,11 @@ class ApiClient {
   }
 
   /// 编辑保存话术：服务端保存后会重新做敏感词扫描并返回最新话术。
-  Future<Script> updateScript(String id, {required String content, String? title}) async {
+  Future<Script> updateScript(
+    String id, {
+    required String content,
+    String? title,
+  }) async {
     try {
       final response = await _dio.put<Map<String, dynamic>>(
         '/api/scripts/$id',
@@ -435,9 +453,7 @@ class ApiClient {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/api/lives/$id/prepare',
-        data: <String, dynamic>{
-          'durationSeconds': ?durationSeconds,
-        },
+        data: <String, dynamic>{'durationSeconds': ?durationSeconds},
       );
       return _parseLive(response.data);
     } on DioException catch (error) {
@@ -509,7 +525,9 @@ class ApiClient {
       if (data is List) {
         return data
             .whereType<Map>()
-            .map((item) => LiveDanmaku.fromJson(Map<String, dynamic>.from(item)))
+            .map(
+              (item) => LiveDanmaku.fromJson(Map<String, dynamic>.from(item)),
+            )
             .toList();
       }
       return <LiveDanmaku>[];
@@ -534,6 +552,54 @@ class ApiClient {
     } on DioException catch (error) {
       throw _toApiException(error);
     }
+  }
+
+  /// 拉取远程出声队列队首一条播报（P1 手机线·助播机出声端轮询用）：
+  /// 空队列返回 null（服务端 204）；有内容返回 wav 字节与 jobId
+  /// （交付即从服务端删除，无重试语义）。
+  Future<SpeechOutItem?> fetchNextOutSpeech() async {
+    try {
+      final response = await _dio.get<Uint8List?>(
+        '/api/out/speech/next',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      if (response.statusCode == 204 ||
+          response.data == null ||
+          response.data!.isEmpty) {
+        return null;
+      }
+      return SpeechOutItem(
+        jobId: response.headers.value('x-speech-job-id'),
+        wavBytes: response.data!,
+      );
+    } on DioException catch (error) {
+      throw _toBytesApiException(error);
+    }
+  }
+
+  /// 二进制错误响应（字节流）按 UTF-8 解出 JSON，透传服务端中文 message，
+  /// 与默认 JSON 接口的报错文案口径一致；解析失败退回默认文案。
+  ApiException _toBytesApiException(DioException error) {
+    final response = error.response;
+    final raw = response?.data;
+    if (raw is Uint8List && raw.isNotEmpty) {
+      try {
+        final body = jsonDecode(utf8.decode(raw));
+        if (body is Map) {
+          final message = body['message']?.toString();
+          if (message != null && message.isNotEmpty) {
+            return ApiException(
+              code: body['error']?.toString() ?? 'HTTP_${response!.statusCode}',
+              message: message,
+              statusCode: response!.statusCode,
+            );
+          }
+        }
+      } catch (_) {
+        // 响应体不是 JSON：退回默认文案
+      }
+    }
+    return _toApiException(error);
   }
 
   /// 从响应体解析 Live：POST/PATCH 形如 { live: {...} }，GET :id 直接返回对象本身。
@@ -562,9 +628,12 @@ class ApiClient {
     final retryAfterSeconds = body['retryAfterSeconds'];
     return ApiException(
       code: body['error']?.toString() ?? 'HTTP_${response.statusCode}',
-      message: body['message']?.toString() ?? _defaultMessage(response.statusCode),
+      message:
+          body['message']?.toString() ?? _defaultMessage(response.statusCode),
       statusCode: response.statusCode,
-      retryAfterSeconds: retryAfterSeconds is num ? retryAfterSeconds.toInt() : null,
+      retryAfterSeconds: retryAfterSeconds is num
+          ? retryAfterSeconds.toInt()
+          : null,
     );
   }
 

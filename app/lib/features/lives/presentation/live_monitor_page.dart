@@ -18,6 +18,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/features/assistant_speaker/application/assistant_speaker_controller.dart';
 import 'package:starvoice_app/providers.dart';
 
 /// 现场直播工作台：真人出镜 + 后台 AI 语音主播的直播间控制台，
@@ -61,6 +62,9 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   int _localSeconds = 0;
   Timer? _ticker;
 
+  /// 助播机出声控制器实例缓存：dispose 阶段 ref 已失效，需用本实例收口出声。
+  AssistantSpeakerController? _speakerNotifier;
+
   /// 测试弹幕输入框（直播中可用，模拟观众提问触发 AI 语音回复）
   final TextEditingController _testController = TextEditingController();
 
@@ -93,6 +97,7 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     _danmakuTimer?.cancel();
     _ticker?.cancel();
     _testController.dispose();
+    _speakerNotifier?.stop();
     super.dispose();
   }
 
@@ -126,6 +131,10 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
       if (monitor.status == LiveStatus.ended ||
           monitor.status == LiveStatus.failed) {
         _stopPolling();
+      }
+      // 非直播中一律停用助播出声：直播结束 / 外部变更时自动收口
+      if (monitor.status != LiveStatus.live) {
+        ref.read(assistantSpeakerControllerProvider.notifier).stop();
       }
     } on ApiException catch (error) {
       if (!mounted) {
@@ -401,6 +410,10 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
           ],
           const SizedBox(height: 12),
           _buildAiHostCard(monitor),
+          if (monitor.status == LiveStatus.live) ...[
+            const SizedBox(height: 12),
+            _buildAssistantSpeakerCard(),
+          ],
           const SizedBox(height: 12),
           _buildTestDanmakuSection(monitor),
           const SizedBox(height: 12),
@@ -410,6 +423,109 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
         ],
       ),
     );
+  }
+
+  /// 助播机出声端开关卡（P1 手机线）：直播中可把本机当出声端，
+  /// 轮询远程出声队列并把 AI 语音经音频转接线送入开播手机。
+  Widget _buildAssistantSpeakerCard() {
+    final speaker = ref.watch(assistantSpeakerControllerProvider);
+    _speakerNotifier ??= ref.read(assistantSpeakerControllerProvider.notifier);
+    final enabled = speaker.enabled;
+    return Card(
+      key: const Key('liveMonitorSpeakerCard'),
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.speaker_phone_outlined,
+                  size: 18,
+                  color: enabled ? Colors.teal.shade700 : Colors.grey.shade500,
+                ),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    '助播机出声（手机线）',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Text(
+                  _speakerStatusLabel(speaker),
+                  key: const Key('liveMonitorSpeakerState'),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: enabled
+                        ? Colors.teal.shade700
+                        : Colors.grey.shade500,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '启用后本机轮询播报队列并出声，经音频转接线送入开播手机；'
+              '需服务端 LIVE_SPEAKER_OUTPUT=phone。',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade600,
+                height: 1.4,
+              ),
+            ),
+            if (enabled && speaker.status == AssistantSpeakerStatus.error) ...[
+              const SizedBox(height: 4),
+              Text(
+                speaker.lastError ?? '连接异常',
+                style: TextStyle(fontSize: 12, color: Colors.red.shade600),
+              ),
+            ],
+            Row(
+              children: [
+                const Expanded(child: Text('')),
+                Text(
+                  '累计播报 ${speaker.playedCount} 条',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                ),
+                const SizedBox(width: 4),
+                Switch(
+                  key: const Key('liveMonitorSpeakerSwitch'),
+                  value: enabled,
+                  activeThumbColor: Colors.teal,
+                  onChanged: (value) {
+                    final notifier = ref.read(
+                      assistantSpeakerControllerProvider.notifier,
+                    );
+                    if (value) {
+                      notifier.start();
+                    } else {
+                      notifier.stop();
+                    }
+                  },
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 出声端状态文案：未启用 / 监听中 / 播报中 / 连接异常。
+  String _speakerStatusLabel(AssistantSpeakerState speaker) {
+    switch (speaker.status) {
+      case AssistantSpeakerStatus.idle:
+        return '未启用';
+      case AssistantSpeakerStatus.waiting:
+        return speaker.enabled ? '监听中' : '未启用';
+      case AssistantSpeakerStatus.playing:
+        return '播报中';
+      case AssistantSpeakerStatus.error:
+        return '连接异常';
+    }
   }
 
   /// 开播前出声自检卡：就绪（ready）态提示直播画面与出声链路准备，

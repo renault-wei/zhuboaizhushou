@@ -4,14 +4,31 @@
 /// （直播中帧会持续刷新），统一用固定时长的 pump 并在收尾卸载页面取消定时器。
 library;
 
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:starvoice_app/core/network/api_client.dart';
+import 'package:starvoice_app/features/assistant_speaker/application/assistant_speaker_controller.dart';
+import 'package:starvoice_app/features/assistant_speaker/application/speech_out_player.dart';
 import 'package:starvoice_app/features/lives/presentation/live_monitor_page.dart';
 import 'package:starvoice_app/providers.dart';
 
 import 'fake_backend.dart';
+
+/// 出声卡测试用假播放器：不碰真实音频通道，仅记录启停。
+class _FakeSpeechOutPlayer implements SpeechOutPlayer {
+  @override
+  Future<void> play(Uint8List wavBytes) async {}
+
+  @override
+  Future<void> stop() async {}
+
+  @override
+  Future<void> dispose() async {}
+}
 
 Map<String, dynamic> _liveJson({
   required String id,
@@ -53,14 +70,21 @@ Map<String, dynamic> _danmakuJson({
 }
 
 /// 渲染现场直播工作台并等待首次 monitor / danmaku 返回。
-Future<void> _pumpMonitor(WidgetTester tester, FakeBackend backend) async {
+Future<void> _pumpMonitor(
+  WidgetTester tester,
+  FakeBackend backend, {
+  List<Override> overrides = const <Override>[],
+}) async {
   // 放大测试视口：让弹幕日志区也处于可视区（ListView 懒构建，默认视口可能不渲染）
   tester.view.physicalSize = const Size(1200, 2600);
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     ProviderScope(
-      overrides: [dioProvider.overrideWithValue(buildMockDio(backend))],
+      overrides: <Override>[
+        dioProvider.overrideWithValue(buildMockDio(backend)),
+        ...overrides,
+      ],
       child: const MaterialApp(home: LiveMonitorPage(liveId: 'live-001')),
     ),
   );
@@ -153,6 +177,53 @@ void main() {
     expect(find.text('这个套餐怎么卖？'), findsOneWidget);
 
     await _unmount(tester);
+  });
+
+  testWidgets('直播中助播机出声卡：开关启停驱动轮询并展示状态', (tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
+      ],
+    );
+    final speakerController = AssistantSpeakerController(
+      ApiClient(buildMockDio(backend)),
+      _FakeSpeechOutPlayer(),
+    );
+    await _pumpMonitor(
+      tester,
+      backend,
+      overrides: <Override>[
+        assistantSpeakerControllerProvider.overrideWith(
+          (ref) => speakerController,
+        ),
+      ],
+    );
+
+    // 直播中展示出声卡，初始未启用
+    expect(find.byKey(const Key('liveMonitorSpeakerCard')), findsOneWidget);
+    expect(find.text('助播机出声（手机线）'), findsOneWidget);
+    expect(find.text('未启用'), findsOneWidget);
+    final switchBefore = tester.widget<Switch>(
+      find.byKey(const Key('liveMonitorSpeakerSwitch')),
+    );
+    expect(switchBefore.value, isFalse);
+
+    // 打开开关：控制器进入监听态并展示状态
+    await tester.tap(find.byKey(const Key('liveMonitorSpeakerSwitch')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(speakerController.state.enabled, isTrue);
+    expect(find.text('监听中'), findsOneWidget);
+
+    // 关闭开关：回到未启用
+    await tester.tap(find.byKey(const Key('liveMonitorSpeakerSwitch')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(speakerController.state.enabled, isFalse);
+    expect(find.text('未启用'), findsOneWidget);
+
+    await _unmount(tester);
+    speakerController.dispose();
   });
 
   testWidgets('已结束：AI 播报停止，测试弹幕入口禁用并提示', (tester) async {

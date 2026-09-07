@@ -10,6 +10,8 @@ import 'package:starvoice_app/features/auth/application/auth_controller.dart';
 import 'package:starvoice_app/features/coupons/application/coupon_controller.dart';
 import 'package:starvoice_app/features/lives/application/live_form_controller.dart';
 import 'package:starvoice_app/features/lives/application/live_list_controller.dart';
+import 'package:starvoice_app/features/assistant_speaker/application/assistant_speaker_controller.dart';
+import 'package:starvoice_app/features/assistant_speaker/data/audioplayers_speech_out_player.dart';
 import 'package:starvoice_app/features/recording/application/recorder_controller.dart';
 import 'package:starvoice_app/features/scripts/application/script_controller.dart';
 import 'package:starvoice_app/features/voices/application/voice_library_controller.dart';
@@ -71,6 +73,19 @@ final apiClientProvider = Provider<ApiClient>((ref) {
   return ApiClient(ref.watch(dioProvider));
 });
 
+/// 助播机出声端控制器（P1 手机线）：工作台启用后轮询远程出声队列并本机播放。
+/// 全局单例（非 autoDispose）：直播中需持续出声，不随某个页面销毁而停；
+/// 停用与页面收尾由调用方（工作台）负责调 stop。
+final assistantSpeakerControllerProvider =
+    StateNotifierProvider<AssistantSpeakerController, AssistantSpeakerState>((
+      ref,
+    ) {
+      return AssistantSpeakerController(
+        ref.watch(apiClientProvider),
+        AudioplayersSpeechOutPlayer(),
+      );
+    });
+
 /// 认证控制器：登录态、会话恢复、登录/登出动作
 final authControllerProvider = StateNotifierProvider<AuthController, AuthState>(
   (ref) {
@@ -106,37 +121,38 @@ final recorderControllerProvider =
 
 /// 音色库控制器：音色列表 / 克隆状态轮询 / 删除。
 /// autoDispose：离开音色库页即销毁并停止轮询定时器，避免无谓请求。
-final voiceLibraryControllerProvider = StateNotifierProvider.autoDispose<
-    VoiceLibraryController, VoiceLibraryState>((ref) {
-  return VoiceLibraryController(ref.watch(apiClientProvider));
-});
+final voiceLibraryControllerProvider =
+    StateNotifierProvider.autoDispose<
+      VoiceLibraryController,
+      VoiceLibraryState
+    >((ref) {
+      return VoiceLibraryController(ref.watch(apiClientProvider));
+    });
 
 /// 话术库控制器：话术生成页使用（列表加载 + DeepSeek 生成）。
 /// autoDispose：离开话术页即销毁，避免页面级状态长期驻留。
-final scriptControllerProvider = StateNotifierProvider.autoDispose<
-    ScriptController, ScriptState>((ref) {
-  return ScriptController(ref.watch(apiClientProvider));
-});
+final scriptControllerProvider =
+    StateNotifierProvider.autoDispose<ScriptController, ScriptState>((ref) {
+      return ScriptController(ref.watch(apiClientProvider));
+    });
 
 /// 团购券控制器：团购券列表页使用。
 /// autoDispose：离开券列表页即销毁，避免页面级状态长期驻留。
-final couponControllerProvider = StateNotifierProvider.autoDispose<
-    CouponController, CouponState>((ref) {
-  return CouponController(ref.watch(apiClientProvider));
-});
+final couponControllerProvider =
+    StateNotifierProvider.autoDispose<CouponController, CouponState>((ref) {
+      return CouponController(ref.watch(apiClientProvider));
+    });
 
 /// 开播配置列表控制器：开播配置列表页使用（列表 + 引用资源名映射 + 删除）。
 /// autoDispose：离开开播配置页即销毁，避免页面级状态长期驻留。
-final liveListControllerProvider = StateNotifierProvider.autoDispose<
-    LiveListController, LiveListState>((ref) {
-  return LiveListController(ref.watch(apiClientProvider));
-});
+final liveListControllerProvider =
+    StateNotifierProvider.autoDispose<LiveListController, LiveListState>((ref) {
+      return LiveListController(ref.watch(apiClientProvider));
+    });
 
 /// 开播配置表单控制器：按 liveId 维度隔离（空串 = 新建，非空 = 编辑）。
 /// autoDispose：离开表单页即销毁；编辑页预填依赖 family 参数读取 /api/lives/:id。
-final liveFormControllerProvider =
-    StateNotifierProvider.autoDispose.family<LiveFormController, LiveFormState, String>(
-  (ref, liveId) {
-    return LiveFormController(ref.watch(apiClientProvider), liveId);
-  },
-);
+final liveFormControllerProvider = StateNotifierProvider.autoDispose
+    .family<LiveFormController, LiveFormState, String>((ref, liveId) {
+      return LiveFormController(ref.watch(apiClientProvider), liveId);
+    });
