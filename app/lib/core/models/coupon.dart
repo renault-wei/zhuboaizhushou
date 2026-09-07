@@ -53,13 +53,14 @@ class Coupon {
   String get salesText => '已售 $sales';
 
   /// 立省金额（元）；原价不高于售价时返回 0。
-  int get savedAmount =>
-      originalPrice > price ? originalPrice - price : 0;
+  int get savedAmount => originalPrice > price ? originalPrice - price : 0;
 
   /// 折扣文案，如「5.4折」；原价非法时返回空串。
   /// 折扣口径：折 = price / originalPrice * 10（如 128/238 → 5.4 折）。
   String get discountText {
-    if (originalPrice <= 0 || price < 0) {
+    // 无真实优惠（原价缺省、价格非法或并不比原价低）一律不展示折扣，
+    // 避免出现「10.0折」这类无意义文案（hasDiscount 口径保持一致）。
+    if (originalPrice <= 0 || price < 0 || originalPrice <= price) {
       return '';
     }
     final discount = price / originalPrice * 10;

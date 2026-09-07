@@ -6,6 +6,8 @@
 /// 「AI 智能直播」角标恒为 true，本页强制展示角标提示、无关闭入口。
 /// 一键开播入口收口在本页：就绪（ready）场次从列表页进入本工作台后，
 /// 点击「开始直播」开播并进入直播中监控，列表页不再单独提供开播按钮。
+/// 就绪（ready）态额外展示「开播前出声自检」引导卡，提示直播画面与
+/// 出声链路（电脑线虚拟声卡 / 手机线音频转接线）需先就位。
 library;
 
 import 'dart:async';
@@ -106,7 +108,9 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   /// 拉取监控快照：失败仅在首次（尚无数据）时置 error，轮询中失败静默保留旧值。
   Future<void> _loadMonitor() async {
     try {
-      final monitor = await ref.read(apiClientProvider).getLiveMonitor(widget.liveId);
+      final monitor = await ref
+          .read(apiClientProvider)
+          .getLiveMonitor(widget.liveId);
       if (!mounted) {
         return;
       }
@@ -139,7 +143,9 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   /// 拉取弹幕日志：失败静默保留旧列表，不打断观看体验。
   Future<void> _loadDanmaku() async {
     try {
-      final danmaku = await ref.read(apiClientProvider).getLiveDanmaku(widget.liveId);
+      final danmaku = await ref
+          .read(apiClientProvider)
+          .getLiveDanmaku(widget.liveId);
       if (!mounted) {
         return;
       }
@@ -305,9 +311,7 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
               style: FilledButton.styleFrom(
                 minimumSize: const Size.fromHeight(48),
               ),
-              child: _starting
-                  ? const Text('正在开播…')
-                  : const Text('开始直播'),
+              child: _starting ? const Text('正在开播…') : const Text('开始直播'),
             ),
           ),
         ),
@@ -378,8 +382,8 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     }
     final durationSeconds = monitor.status == LiveStatus.live
         ? (_localSeconds > monitor.durationSeconds
-            ? _localSeconds
-            : monitor.durationSeconds)
+              ? _localSeconds
+              : monitor.durationSeconds)
         : monitor.durationSeconds;
     return RefreshIndicator(
       onRefresh: () async {
@@ -391,6 +395,10 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
         padding: const EdgeInsets.all(16),
         children: [
           _buildStatusCard(monitor, durationSeconds),
+          if (monitor.status == LiveStatus.ready) ...[
+            const SizedBox(height: 12),
+            _buildPreflightCard(),
+          ],
           const SizedBox(height: 12),
           _buildAiHostCard(monitor),
           const SizedBox(height: 12),
@@ -401,6 +409,76 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
           _buildDanmakuSection(),
         ],
       ),
+    );
+  }
+
+  /// 开播前出声自检卡：就绪（ready）态提示直播画面与出声链路准备，
+  /// 覆盖电脑线（虚拟声卡 → 直播伴侣）与手机线（音频转接线接入开播手机）
+  /// 两种出声方式；开播后自动消失，不打扰直播中监控。
+  Widget _buildPreflightCard() {
+    return Card(
+      key: const Key('liveMonitorPreflight'),
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.fact_check_outlined,
+                  size: 18,
+                  color: Colors.blueGrey,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '开播前自检',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.blueGrey.shade700,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _buildPreflightItem('直播间画面已开播（直播伴侣 / 手机开播），真人出镜正常'),
+            const SizedBox(height: 8),
+            _buildPreflightItem(
+              '出声链路就位：电脑线 = 系统默认播放指向虚拟声卡、直播伴侣麦克风选 '
+              'CABLE Output；手机线 = 出声设备经音频转接线连到开播手机',
+            ),
+            const SizedBox(height: 8),
+            _buildPreflightItem('开播后在本页发一条测试弹幕，确认直播间能听到 AI 语音回复'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 自检卡单行条目：左侧对勾图标 + 说明文字。
+  Widget _buildPreflightItem(String text) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          Icons.check_circle_outline,
+          size: 16,
+          color: Colors.green.shade600,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(
+              fontSize: 13,
+              color: Colors.grey.shade700,
+              height: 1.4,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -437,8 +515,11 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                   ),
                 ),
                 const SizedBox(width: 10),
-                const Icon(Icons.fiber_manual_record,
-                    size: 10, color: Colors.red),
+                const Icon(
+                  Icons.fiber_manual_record,
+                  size: 10,
+                  color: Colors.red,
+                ),
                 const SizedBox(width: 4),
                 Text(
                   _phaseLabel(monitor.status),
@@ -494,7 +575,8 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   Widget _buildAiHostCard(LiveMonitor monitor) {
     final live = monitor.status == LiveStatus.live;
     final ready = monitor.status == LiveStatus.ready;
-    final finished = monitor.status == LiveStatus.ended ||
+    final finished =
+        monitor.status == LiveStatus.ended ||
         monitor.status == LiveStatus.failed;
     // 主播状态三档：播报中（直播中）/ 待开播（就绪）/ 已停止（终态）；
     // idle / processing 归为待机（尚未到可开播阶段）。
@@ -598,9 +680,8 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   /// 全链路联调；仅直播中可用（服务端非 live 返回 409）。
   Widget _buildTestDanmakuSection(LiveMonitor monitor) {
     final live = monitor.status == LiveStatus.live;
-    final canSend = live &&
-        !_sendingDanmaku &&
-        _testController.text.trim().isNotEmpty;
+    final canSend =
+        live && !_sendingDanmaku && _testController.text.trim().isNotEmpty;
     return Container(
       key: const Key('liveMonitorTestSection'),
       width: double.infinity,
@@ -614,8 +695,11 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
         children: [
           Row(
             children: [
-              Icon(Icons.science_outlined,
-                  size: 16, color: Colors.blueGrey.shade600),
+              Icon(
+                Icons.science_outlined,
+                size: 16,
+                color: Colors.blueGrey.shade600,
+              ),
               const SizedBox(width: 6),
               const Text(
                 '发送测试弹幕',
@@ -731,13 +815,13 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
             padding: const EdgeInsets.symmetric(vertical: 32),
             child: Column(
               children: [
-                Icon(Icons.chat_bubble_outline,
-                    size: 40, color: Colors.grey.shade400),
-                const SizedBox(height: 8),
-                Text(
-                  '暂无弹幕',
-                  style: TextStyle(color: Colors.grey.shade500),
+                Icon(
+                  Icons.chat_bubble_outline,
+                  size: 40,
+                  color: Colors.grey.shade400,
                 ),
+                const SizedBox(height: 8),
+                Text('暂无弹幕', style: TextStyle(color: Colors.grey.shade500)),
               ],
             ),
           )

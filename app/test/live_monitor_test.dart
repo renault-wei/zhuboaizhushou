@@ -96,15 +96,14 @@ void main() {
     // AI 语音主播卡：播报中（真人出镜 + 后台语音）
     expect(find.text('AI 语音主播'), findsOneWidget);
     expect(find.text('播报中'), findsOneWidget);
-    expect(
-      find.text('真人出镜现场，AI 语音主播在后台实时朗读弹幕、介绍产品并回复提问。'),
-      findsOneWidget,
-    );
+    expect(find.text('真人出镜现场，AI 语音主播在后台实时朗读弹幕、介绍产品并回复提问。'), findsOneWidget);
 
     // 测试弹幕入口 + 合规角标恒显
     expect(find.byKey(const Key('liveMonitorTestInput')), findsOneWidget);
     expect(find.byKey(const Key('liveMonitorTestSend')), findsOneWidget);
     expect(find.byKey(const Key('liveMonitorBadgeNote')), findsOneWidget);
+    // 直播中不再展示「开播前自检」引导卡（仅就绪态出现）
+    expect(find.byKey(const Key('liveMonitorPreflight')), findsNothing);
 
     // 既有弹幕日志
     expect(find.text('双人套餐多少钱？'), findsOneWidget);
@@ -173,10 +172,7 @@ void main() {
 
     expect(find.text('已停止'), findsOneWidget);
     expect(find.text('直播已结束，AI 语音播报已停止。'), findsOneWidget);
-    expect(
-      find.text('直播已结束，无法再发送测试弹幕。'),
-      findsOneWidget,
-    );
+    expect(find.text('直播已结束，无法再发送测试弹幕。'), findsOneWidget);
 
     final send = tester.widget<FilledButton>(
       find.byKey(const Key('liveMonitorTestSend')),
@@ -201,12 +197,11 @@ void main() {
     // 就绪态：主操作是「开始直播」，未开播不发弹幕、AI 待开播
     expect(find.byKey(const Key('liveMonitorStartButton')), findsOneWidget);
     expect(find.byKey(const Key('liveEndButton')), findsNothing);
-    expect(find.text('配置已就绪，点击下方「开始直播」后 AI 语音主播将上线播报。'),
-        findsOneWidget);
-    expect(
-      find.text('尚未开播，无法发送测试弹幕；点击「开始直播」进入直播后即可联调。'),
-      findsOneWidget,
-    );
+    // 就绪态展示「开播前自检」引导卡
+    expect(find.byKey(const Key('liveMonitorPreflight')), findsOneWidget);
+    expect(find.text('开播前自检'), findsOneWidget);
+    expect(find.text('配置已就绪，点击下方「开始直播」后 AI 语音主播将上线播报。'), findsOneWidget);
+    expect(find.text('尚未开播，无法发送测试弹幕；点击「开始直播」进入直播后即可联调。'), findsOneWidget);
 
     // 点击开始：后端转 live，工作台切入直播中监控
     await tester.tap(find.byKey(const Key('liveMonitorStartButton')));
@@ -218,6 +213,7 @@ void main() {
     expect(backend.lives.single['status'], 'live');
     expect(find.byKey(const Key('liveMonitorStartButton')), findsNothing);
     expect(find.byKey(const Key('liveEndButton')), findsOneWidget);
+    expect(find.byKey(const Key('liveMonitorPreflight')), findsNothing);
     expect(find.text('播报中'), findsOneWidget);
     expect(find.text('直播已开始，AI 语音主播已上线'), findsOneWidget);
 
