@@ -7,6 +7,8 @@ build/
 !.env.example
 *.log
 *.log.err
+*.apk
+*.aab
 .DS_Store
 Thumbs.db
 
