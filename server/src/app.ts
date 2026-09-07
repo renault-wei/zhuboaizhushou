@@ -8,6 +8,7 @@ import { douyinRoutes } from './routes/douyin';
 import { healthRoutes } from './routes/health';
 import { livesRoutes } from './routes/lives';
 import { scriptsRoutes } from './routes/scripts';
+import { speechOutRoutes } from './routes/speechOut';
 import { voicesRoutes } from './routes/voices';
 
 // 组装 Fastify 应用实例：集中注册插件与路由，便于后续测试复用
@@ -43,6 +44,7 @@ export function buildApp() {
   // 视频上传（multipart）：单文件上限 200MB，超出返回 413
   app.register(multipart, { limits: { fileSize: 200 * 1024 * 1024 } });
   app.register(livesRoutes);
+  app.register(speechOutRoutes);
 
   return app;
 }

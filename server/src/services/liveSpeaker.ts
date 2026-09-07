@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { env } from '../config/env';
 import { createVoicePlayer, type PlayOutcome, type VoicePlayer } from './voicePlayer';
 import { volcTtsSynth } from './volcTTS';
+import { createRemoteSpeechSink } from './remoteSpeechSink';
 
 // G5/P1 现场口播出口：TTS 合成 → 出声端（SpeechSink）→ 播放。
 // 本模块是 G4 `onReply` 的消费方：引擎产出的回复文字进来 → 合成 wav → 交给当前出声端排队播放；
@@ -254,4 +255,6 @@ export const liveSpeaker = createLiveSpeaker({
     env.liveSpeaker.ttsProvider === 'volc' && env.volcTTS.apiKey
       ? volcTtsSynth
       : undefined,
+  // 出声通道：LIVE_SPEAKER_OUTPUT=phone 时改交远程出声队列（助播机拉取）；默认 pc 保持本机播放
+  sink: env.liveSpeaker.output === 'phone' ? createRemoteSpeechSink() : undefined,
 });

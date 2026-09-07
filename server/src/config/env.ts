@@ -63,6 +63,8 @@ export const env = {
   liveSpeaker: {
     // 现场互动回复是否出声：默认开；非 Windows 平台自动不播（见 liveSpeaker.ts）
     enabled: optionalEnv('LIVE_SPEAKER_ENABLED') !== 'false',
+    // 出声通道：pc = 本机播放（默认，开发自测 / 音频转接线接开播手机）；phone = 交远程出声队列（助播机轮询拉取，需二期客户端配套）
+    output: optionalEnv('LIVE_SPEAKER_OUTPUT') ?? 'pc',
     // Windows 本机音色名（可选）：不填用内置默认女声
     localTtsVoice: optionalEnv('LOCAL_TTS_VOICE'),
     // TTS 通道：local = Windows 本机 SAPI（默认，保出声）；volc = 火山豆包语音（需账号已开通模型服务）
