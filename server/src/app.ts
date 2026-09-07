@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import multipart from '@fastify/multipart';
 import { env } from './config/env';
 import { authPlugin } from './plugins/auth';
+import { adminRoutes } from './routes/admin';
 import { agreementsRoutes } from './routes/agreements';
 import { authRoutes } from './routes/auth';
 import { douyinRoutes } from './routes/douyin';
@@ -36,6 +37,7 @@ export function buildApp() {
 
   // 鉴权插件先注册，auth 路由里才能用上 app.authenticate / app.jwt
   app.register(authPlugin);
+  app.register(adminRoutes);
   app.register(authRoutes);
   app.register(douyinRoutes);
   app.register(agreementsRoutes);

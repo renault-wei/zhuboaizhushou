@@ -10,6 +10,7 @@
     "dev": "tsx watch src/index.ts",
     "audio:smoke": "tsx scripts/audio-smoke.ts",
     "audio:volc": "tsx scripts/volc-tts-smoke.ts",
+    "admin:seed": "tsx scripts/admin-seed.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "lint": "eslint .",
@@ -23,6 +24,7 @@
   "dependencies": {
     "@fastify/jwt": "^9.1.0",
     "@fastify/multipart": "^10.1.1",
+    "bcryptjs": "^3.0.3",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.36.0",
     "fastify": "^5.0.0",

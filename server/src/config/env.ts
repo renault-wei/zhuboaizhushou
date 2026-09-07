@@ -30,6 +30,12 @@ function intEnv(name: string, fallback: number): number {
   return num;
 }
 
+// JWT 基础密钥（必填）：商家端默认命名空间使用
+const jwtSecret = requireEnv('JWT_SECRET');
+// 后台命名空间 JWT 独立密钥：生产建议显式配置 ADMIN_JWT_SECRET 强随机值；
+// 未配置时用商家端密钥派生一个独立子串，保证两端 token 无法互相冒用
+const adminJwtSecret = optionalEnv('ADMIN_JWT_SECRET') ?? `${jwtSecret}:admin`;
+
 export const env = {
   // 服务基础
   NODE_ENV: process.env.NODE_ENV ?? 'development',
@@ -37,7 +43,14 @@ export const env = {
   PORT: intEnv('PORT', 3000),
   LOG_LEVEL: process.env.LOG_LEVEL ?? 'info',
   // JWT：登录态签名密钥（必填；生产必须替换为强随机值，严禁硬编码）
-  JWT_SECRET: requireEnv('JWT_SECRET'),
+  JWT_SECRET: jwtSecret,
+  // 后台管理员命名空间 JWT 配置（内部运营工具，只允许预置账号登录）
+  admin: {
+    jwtSecret: adminJwtSecret,
+    // 初始管理员账号（npm run admin:seed 使用；口令只从环境变量读取，不留默认值）
+    initialUsername: optionalEnv('ADMIN_INITIAL_USERNAME'),
+    initialPassword: optionalEnv('ADMIN_INITIAL_PASSWORD'),
+  },
 
   // PostgreSQL（Drizzle ORM）
   DATABASE_URL: requireEnv('DATABASE_URL'),
