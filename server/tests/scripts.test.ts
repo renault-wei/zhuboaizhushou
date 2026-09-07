@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app';
 import { pool } from '../src/db/client';
+import { SENSITIVE_GUARD_PROMPT } from '../src/services/sensitive';
 
 const app: FastifyInstance = buildApp();
 
@@ -32,6 +33,8 @@ const PHONE_DETAIL_OWNER = '13900000028';
 const PHONE_DETAIL_OTHER = '13900000029';
 const PHONE_EDIT = '13900000030';
 const PHONE_FAIL = '13900000031';
+const PHONE_REWRITE_FALLBACK = '13900000032';
+const PHONE_GENERIC_FALLBACK = '13900000033';
 
 async function registerAndGetToken(phone: string): Promise<string> {
   const send = await app.inject({
@@ -197,11 +200,14 @@ dbIt('生成成功：真实调用被 mock，返回 201 且 status=ready、敏感
   expect(headers?.Authorization).toMatch(/^Bearer /);
 });
 
-dbIt('生成含敏感词：status=blocked，matchedWords 含「最」', async () => {
+dbIt('生成含敏感词：自动改写一版通过 → ready+pass 且附 generationNote', async () => {
   const token = await registerAndGetToken(PHONE_BLOCKED);
   await resetUserData(PHONE_BLOCKED);
   const dirtyContent = '这是全网最实惠的火锅套餐，快来抢购。';
-  vi.mocked(fetch).mockResolvedValue(fakeDeepSeekResponse(dirtyContent));
+  const cleanRewritten = '这是很实惠的火锅套餐，分量很足，快来抢购。';
+  vi.mocked(fetch)
+    .mockResolvedValueOnce(fakeDeepSeekResponse(dirtyContent))
+    .mockResolvedValue(fakeDeepSeekResponse(cleanRewritten));
 
   const res = await app.inject({
     method: 'POST',
@@ -211,9 +217,87 @@ dbIt('生成含敏感词：status=blocked，matchedWords 含「最」', async ()
   });
   expect(res.statusCode).toBe(201);
   const script = res.json();
-  expect(script.status).toBe('blocked');
-  expect(script.sensitiveCheckStatus).toBe('blocked');
-  expect(script.sensitiveMatchedWords).toContain('最');
+  expect(script.status).toBe('ready');
+  expect(script.sensitiveCheckStatus).toBe('pass');
+  expect(script.sensitiveMatchedWords).toEqual([]);
+  expect(script.content).toBe(cleanRewritten);
+  expect(script.generationNote).toContain('自动改写');
+
+  // 生成 + 1 次改写 = 2 次 DeepSeek 调用
+  expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+  // 改写请求携带被拦截初稿并说明命中词；system 提示词注入了禁用语清单
+  const [, secondCall] = vi.mocked(fetch).mock.calls[1] ?? [];
+  const secondBody = JSON.parse(String(secondCall?.body)) as {
+    messages: Array<{ role: string; content: string }>;
+  };
+  expect(secondBody.messages.map((message) => message.role)).toEqual([
+    'system',
+    'user',
+    'assistant',
+    'user',
+  ]);
+  expect(secondBody.messages[2]?.content).toBe(dirtyContent);
+  expect(secondBody.messages[3]?.content).toContain('最');
+  expect(secondBody.messages[0]?.content).toContain(SENSITIVE_GUARD_PROMPT);
+});
+
+dbIt('改写两版仍含敏感词 → 安全模板兜底：依旧 ready+pass', async () => {
+  const token = await registerAndGetToken(PHONE_REWRITE_FALLBACK);
+  await resetUserData(PHONE_REWRITE_FALLBACK);
+  const dirtyContent = '这是全网最低的火锅套餐，快来抢购。';
+  // 每次调用返回新的 Response：fetch Response body 只能读一次，复用会解析失败
+  vi.mocked(fetch).mockImplementation(() =>
+    Promise.resolve(fakeDeepSeekResponse(dirtyContent)),
+  );
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/scripts/generate',
+    headers: bearer(token),
+    payload: { industry: 'restaurant', product: hotpotProduct },
+  });
+  expect(res.statusCode).toBe(201);
+  const script = res.json();
+  expect(script.status).toBe('ready');
+  expect(script.sensitiveCheckStatus).toBe('pass');
+  expect(script.sensitiveMatchedWords).toEqual([]);
+  // 商品字面量干净 → 兜底稿带商品信息且可开播
+  expect(script.content).toContain('双人火锅套餐');
+  expect(script.generationNote).toContain('安全模板');
+  // 生成 + 2 次改写均被拦截 = 3 次调用后兜底
+  expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3);
+});
+
+dbIt('商品字面量本身含极限词 → 兜底回退纯通用文案且不含该词', async () => {
+  const token = await registerAndGetToken(PHONE_GENERIC_FALLBACK);
+  await resetUserData(PHONE_GENERIC_FALLBACK);
+  const dirtyContent = '这是最顶级的火锅套餐，快来抢购。';
+  vi.mocked(fetch).mockImplementation(() =>
+    Promise.resolve(fakeDeepSeekResponse(dirtyContent)),
+  );
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/scripts/generate',
+    headers: bearer(token),
+    payload: {
+      industry: 'restaurant',
+      product: {
+        name: '全网最低火锅套餐',
+        package: '锅底+毛肚，两人份',
+        price: '99 元',
+      },
+    },
+  });
+  expect(res.statusCode).toBe(201);
+  const script = res.json();
+  expect(script.status).toBe('ready');
+  expect(script.sensitiveCheckStatus).toBe('pass');
+  expect(script.sensitiveMatchedWords).toEqual([]);
+  // 商品名含极限词 → 带商品字面量的兜底稿也被拦，回退到纯通用文案
+  expect(script.content).toContain('招牌套餐');
+  expect(script.content).not.toContain('全网最低');
+  expect(script.generationNote).toContain('安全模板');
 });
 
 dbIt('DeepSeek 调用失败：非 2xx / 网络异常 → 502 GENERATION_FAILED', async () => {

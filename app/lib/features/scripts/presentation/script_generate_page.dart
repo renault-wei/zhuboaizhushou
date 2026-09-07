@@ -147,10 +147,15 @@ class _ScriptGeneratePageState extends ConsumerState<ScriptGeneratePage> {
       return;
     }
     try {
-      await ref.read(scriptControllerProvider.notifier).generate(
+      final created = await ref.read(scriptControllerProvider.notifier).generate(
             industry: _industry,
             product: product,
           );
+      final note = created.generationNote;
+      if (note != null && note.isNotEmpty) {
+        // 初稿被自动改写/兜底时一次性告知，成品本身可直接开播
+        _showSnack(note);
+      }
     } on ApiException catch (error) {
       _showSnack('生成失败：${error.message}');
     }

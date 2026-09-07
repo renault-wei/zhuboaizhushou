@@ -10,6 +10,7 @@ class Script {
     required this.sensitiveCheckStatus,
     required this.sensitiveMatchedWords,
     required this.createdAt,
+    this.generationNote,
   });
 
   factory Script.fromJson(Map<String, dynamic> json) {
@@ -30,6 +31,7 @@ class Script {
       sensitiveCheckStatus: json['sensitiveCheckStatus']?.toString(),
       sensitiveMatchedWords: matchedWords,
       createdAt: json['createdAt']?.toString() ?? '',
+      generationNote: json['generationNote']?.toString(),
     );
   }
 
@@ -51,6 +53,9 @@ class Script {
 
   /// 创建时间（ISO8601 字符串）
   final String createdAt;
+
+  /// 生成时的一次性说明（仅生成接口返回：自动改写/安全模板兜底时透传，不入库、刷新后为空）
+  final String? generationNote;
 
   /// 展示用标题：未填时回退为「未命名话术」
   String get displayTitle {

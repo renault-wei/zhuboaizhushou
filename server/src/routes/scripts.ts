@@ -3,7 +3,12 @@ import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { scripts as scriptsTable } from '../db/schema';
 import { scanSensitive } from '../services/sensitive';
-import { isScriptIndustry, ScriptError, scriptService } from '../services/script';
+import {
+  buildSafeScriptFallback,
+  isScriptIndustry,
+  ScriptError,
+  scriptService,
+} from '../services/script';
 
 // ---------- 常量与类型 ----------
 
@@ -97,7 +102,8 @@ function titleTooLongResponse(reply: FastifyReply) {
  * 敏感词扫描为合规红线：生成后、编辑保存后都必须重新扫描。
  */
 export const scriptsRoutes: FastifyPluginAsync = async (app) => {
-  // 生成话术：真实调 DeepSeek → 敏感词扫描 → 落库 → 201
+  // 生成话术：真实调 DeepSeek → 敏感词扫描 → 命中自动改写（最多 2 次）→ 仍不过用安全模板兜底
+  // 成品入库必然 ready+pass（合规红线不变：入库内容都经过拦截级扫描）
   app.post('/api/scripts/generate', { preHandler: app.authenticate }, async (request, reply) => {
     const { industry, title, product } = readGenerateBody(request.body);
     if (!industry || !isScriptIndustry(industry)) {
@@ -110,37 +116,63 @@ export const scriptsRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: 'PRODUCT_INVALID', message: '商品信息不能为空' });
     }
 
+    const MAX_GENERATE_REWRITES = 2;
     let content: string;
+    let generationNote: string | undefined;
+    let rewriteAttempts = 0;
     try {
       content = await scriptService.generateScript({ industry, product });
+      let scanned = scanSensitive(content);
+      while (scanned.status === 'blocked' && rewriteAttempts < MAX_GENERATE_REWRITES) {
+        rewriteAttempts += 1;
+        content = await scriptService.rewriteScript({
+          industry,
+          product,
+          draft: content,
+          matchedWords: scanned.matchedWords,
+        });
+        scanned = scanSensitive(content);
+      }
+      if (scanned.status === 'blocked') {
+        content = buildSafeScriptFallback(industry, product);
+        scanned = scanSensitive(content);
+        if (scanned.status === 'blocked') {
+          // 兜底文案已逐字避开拦截词表，走到这里说明词表/模板回归，属内部错误
+          throw new Error('安全兜底文案未通过敏感词扫描（内部错误）');
+        }
+        generationNote =
+          'AI 多次生成仍含违规表述，已自动替换为安全模板话术（可直接开播），建议打开查看后润色';
+      } else if (rewriteAttempts > 0) {
+        generationNote = 'AI 初稿含违规表述，已自动改写为合规版本（可直接开播）';
+      }
+
+      const inserted = await db
+        .insert(scriptsTable)
+        .values({
+          userId: request.user.userId,
+          industry,
+          title,
+          productSnapshot: product,
+          content,
+          status: 'ready',
+          sensitiveCheckStatus: 'pass',
+          sensitiveMatchedWords: [],
+          sensitiveScannedAt: new Date(),
+        })
+        .returning();
+      const created = inserted[0];
+      if (!created) {
+        // 理论上插入成功必有返回，此处兜底避免静默失败
+        throw new Error('保存话术失败');
+      }
+      // generationNote 仅在发生自动改写/兜底时随响应下发（不入库，刷新后不保留）
+      return reply.code(201).send({ ...created, ...(generationNote ? { generationNote } : {}) });
     } catch (err) {
       if (err instanceof ScriptError && err.code === 'GENERATION_FAILED') {
         return reply.code(502).send({ error: err.code, message: err.message });
       }
       throw err;
     }
-
-    const scanned = scanSensitive(content);
-    const inserted = await db
-      .insert(scriptsTable)
-      .values({
-        userId: request.user.userId,
-        industry,
-        title,
-        productSnapshot: product,
-        content,
-        status: scanned.status === 'blocked' ? 'blocked' : 'ready',
-        sensitiveCheckStatus: scanned.status,
-        sensitiveMatchedWords: scanned.matchedWords,
-        sensitiveScannedAt: new Date(),
-      })
-      .returning();
-    const created = inserted[0];
-    if (!created) {
-      // 理论上插入成功必有返回，此处兜底避免静默失败
-      throw new Error('保存话术失败');
-    }
-    return reply.code(201).send(created);
   });
 
   // 我的话术列表：仅当前用户，按创建时间倒序

@@ -1,4 +1,5 @@
 import { env } from '../config/env';
+import { scanSensitive, SENSITIVE_GUARD_PROMPT } from './sensitive';
 
 // ---------- 行业模板常量（导出，供路由校验与客户端复用）----------
 
@@ -80,12 +81,22 @@ export interface GenerateScriptInput {
   product: Record<string, string>;
 }
 
+/** 改写入参：携带被拦截的初稿与命中词，让 AI 知道要绕开哪些表述 */
+export interface RewriteScriptInput extends GenerateScriptInput {
+  /** 上一版被拦截的话术初稿 */
+  draft: string;
+  /** 初稿命中的拦截用语 */
+  matchedWords: string[];
+}
+
 /**
  * DeepSeek 话术生成服务接口。
  * T7 起必须真实调用 DeepSeek，不提供 mock 降级；未来换其他模型时保持接口不变。
  */
 export interface DeepSeekScriptService {
   generateScript(input: GenerateScriptInput): Promise<string>;
+  /** 针对被拦截初稿的整段改写（命中 → 重写 → 复扫，供路由重试链路使用） */
+  rewriteScript(input: RewriteScriptInput): Promise<string>;
 }
 
 // ---------- 真实实现（DeepSeek chat/completions）----------
@@ -93,6 +104,13 @@ export interface DeepSeekScriptService {
 /** DeepSeek 兼容响应中需要的最小结构 */
 interface DeepSeekChatCompletion {
   choices?: Array<{ message?: { content?: unknown } }>;
+}
+
+type DeepSeekChatRole = 'system' | 'user' | 'assistant';
+
+interface DeepSeekChatMessage {
+  role: DeepSeekChatRole;
+  content: string;
 }
 
 export class DeepSeekScriptServiceImpl implements DeepSeekScriptService {
@@ -107,11 +125,42 @@ export class DeepSeekScriptServiceImpl implements DeepSeekScriptService {
   }
 
   async generateScript(input: GenerateScriptInput): Promise<string> {
-    const template = scriptTemplates[input.industry];
-    if (!template) {
-      throw new ScriptError('GENERATION_FAILED', `未知行业：${input.industry}`);
-    }
+    return this.complete(this.buildMessages(input.industry, input.product));
+  }
 
+  async rewriteScript(input: RewriteScriptInput): Promise<string> {
+    const messages = this.buildMessages(input.industry, input.product);
+    messages.push({ role: 'assistant', content: input.draft });
+    messages.push({
+      role: 'user',
+      content:
+        `你上一版话术被平台敏感词扫描拦截（命中：${input.matchedWords.join('、')}），不能开播。` +
+        '请整段重写一版：保持行业风格、商品信息与大致字数不变，只把违规表述替换成合规的自然口播，' +
+        '并确保全文不含上述任何被拦截用语。只输出重写后的话术正文，不要解释。',
+    });
+    return this.complete(messages);
+  }
+
+  /** 组装对话前缀：system = 行业模板 + 禁用语清单，user = 商品信息 */
+  private buildMessages(
+    industry: string,
+    product: Record<string, string>,
+  ): DeepSeekChatMessage[] {
+    const template = scriptTemplates[industry];
+    if (!template) {
+      throw new ScriptError('GENERATION_FAILED', `未知行业：${industry}`);
+    }
+    return [
+      {
+        role: 'system',
+        content: `${template.systemPrompt}\n\n${SENSITIVE_GUARD_PROMPT}`,
+      },
+      { role: 'user', content: `商品信息：${JSON.stringify(product)}` },
+    ];
+  }
+
+  /** 统一发起 chat/completions 并解析为非空纯文本 */
+  private async complete(messages: DeepSeekChatMessage[]): Promise<string> {
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}/chat/completions`, {
@@ -122,10 +171,7 @@ export class DeepSeekScriptServiceImpl implements DeepSeekScriptService {
         },
         body: JSON.stringify({
           model: this.model,
-          messages: [
-            { role: 'system', content: template.systemPrompt },
-            { role: 'user', content: `商品信息：${JSON.stringify(input.product)}` },
-          ],
+          messages,
           temperature: 0.7,
           max_tokens: 1024,
         }),
@@ -151,6 +197,60 @@ export class DeepSeekScriptServiceImpl implements DeepSeekScriptService {
     }
     return content.trim();
   }
+}
+
+// ---------- 安全兜底文案（改写仍失败时的最后防线）----------
+
+/**
+ * 各行业纯通用兜底文案：不含任何商品字面量，逐字避开拦截词表，
+ * 仅在「带商品字面量的拼接稿仍被拦截」时使用（例如商品名/价格本身含极限词）。
+ */
+const SAFE_FALLBACK_TEXT = {
+  restaurant:
+    '欢迎来到直播间，今天给大家介绍店里的招牌套餐，菜品新鲜实在、分量很足，价格也很有诚意。想吃的朋友点击下方团购入口下单，到店出示团购券就能使用，期待大家的光临！',
+  local_service:
+    '欢迎来到直播间，今天给大家推荐店里的人气服务，服务专业细致、流程顺畅，价格也很实惠。感兴趣的朋友点击下方团购入口下单，到店出示团购券就能核销，期待大家的体验！',
+  retail:
+    '欢迎来到直播间，今天给大家推荐店里的热卖商品，品质有保障、性价比高，用起来很省心。喜欢的家人们点击下方购物车下单，优惠活动进行中，收到货不满意也能安心退换！',
+} as const;
+
+/** 拼接带商品字面量的兜底稿（name / package / price 逐段带入） */
+function buildFallbackProductCopy(product: Record<string, string>): string {
+  const name = product['name']?.trim();
+  const pkg = product['package']?.trim();
+  const price = product['price']?.trim();
+  const parts: string[] = [];
+  if (name) {
+    parts.push(`今天给大家介绍的是「${name}」`);
+  }
+  if (pkg) {
+    parts.push(pkg);
+  }
+  if (price) {
+    parts.push(`现在只要${price}`);
+  }
+  const body = parts.length > 0 ? `，${parts.join('，')}。` : '。';
+  return (
+    `欢迎来到直播间${body}喜欢的家人们点击下方团购入口下单，` +
+    '到店出示团购券即可使用，期待大家的光临！'
+  );
+}
+
+/**
+ * 生成 AI 多次未过审后的服务端兜底文案：
+ * 先尝试带商品字面量的通用稿，扫描仍不过则退回纯通用文案（保证最终内容必过扫描）。
+ */
+export function buildSafeScriptFallback(
+  industry: string,
+  product: Record<string, string>,
+): string {
+  const withProduct = buildFallbackProductCopy(product);
+  if (scanSensitive(withProduct).status === 'pass') {
+    return withProduct;
+  }
+  // industry 已在路由层校验落在 3 个模板内，未知行业退回餐饮通用文案
+  const key = industry as keyof typeof SAFE_FALLBACK_TEXT;
+  return SAFE_FALLBACK_TEXT[key] ?? SAFE_FALLBACK_TEXT.restaurant;
 }
 
 // ---------- 工厂 + 单例 ----------

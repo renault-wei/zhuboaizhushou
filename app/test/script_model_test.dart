@@ -19,7 +19,8 @@ void main() {
         'sensitiveMatchedWords': <dynamic>['最', '顶级'],
         'sensitiveScannedAt': '2026-09-04T10:00:00.000Z',
         'createdAt': '2026-09-04T10:00:00.000Z',
-        // 服务端多下发的字段应被忽略，不参与解析
+        'generationNote': 'AI 初稿含违规表述，已自动改写为合规版本（可直接开播）',
+        // 服务端多下发的其他字段应被忽略，不参与解析
         'userId': 'user-001',
       });
 
@@ -31,6 +32,7 @@ void main() {
       expect(script.sensitiveCheckStatus, 'blocked');
       expect(script.sensitiveMatchedWords, <String>['最', '顶级']);
       expect(script.createdAt, '2026-09-04T10:00:00.000Z');
+      expect(script.generationNote, 'AI 初稿含违规表述，已自动改写为合规版本（可直接开播）');
       expect(script.isBlocked, isTrue);
       expect(script.isReady, isFalse);
       expect(script.displayTitle, '火锅套餐话术');
