@@ -41,10 +41,12 @@ class FakeBackend implements HttpClientAdapter {
     this.failScriptsList = false,
     this.failScriptGenerate = false,
     this.failCouponsList = false,
+    this.failLoopScriptsList = false,
     List<Map<String, dynamic>>? voices,
     List<Map<String, dynamic>>? scripts,
     List<Map<String, dynamic>>? coupons,
     List<Map<String, dynamic>>? lives,
+    List<Map<String, dynamic>>? loopScripts,
     List<Map<String, dynamic>>? danmaku,
     List<Uint8List>? speechOut,
     this.failSpeechOut = false,
@@ -52,6 +54,7 @@ class FakeBackend implements HttpClientAdapter {
        scripts = scripts ?? <Map<String, dynamic>>[],
        coupons = coupons ?? _defaultCoupons(),
        lives = lives ?? <Map<String, dynamic>>[],
+       loopScripts = loopScripts ?? <Map<String, dynamic>>[],
        danmaku = danmaku ?? <Map<String, dynamic>>[],
        speechOut = speechOut ?? <Uint8List>[];
 
@@ -82,6 +85,12 @@ class FakeBackend implements HttpClientAdapter {
   /// 我的开播配置（内存）：结构与服务端 /api/lives 返回保持一致。
   final List<Map<String, dynamic>> lives;
 
+  /// 我的循环台本（内存）：结构与服务端 /api/loop-scripts 返回保持一致；
+  /// 列表接口返回摘要（无 items，itemCount 为服务端统计条数），
+  /// 详情 / 新建 / 整体替换返回整本（items 带 id 与 seq）。
+  final List<Map<String, dynamic>> loopScripts;
+  int _loopScriptSeq = 0;
+
   /// 我的直播弹幕日志（内存）：结构与服务端 /api/lives/:id/danmaku 返回保持一致；
   /// 弹幕网关写入（G3）后条目带 liveId，供按场次过滤与计数。
   final List<Map<String, dynamic>> danmaku;
@@ -109,6 +118,9 @@ class FakeBackend implements HttpClientAdapter {
 
   /// 模拟团购券列表接口 500（测试加载失败分支）。
   final bool failCouponsList;
+
+  /// 模拟循环台本列表接口 500（测试加载失败分支）。
+  final bool failLoopScriptsList;
 
   @override
   Future<ResponseBody> fetch(
@@ -216,6 +228,28 @@ class FakeBackend implements HttpClientAdapter {
     }
     if (scriptItem != null && options.method == 'PUT') {
       return _updateScript(options, scriptItem.group(1)!);
+    }
+    // 循环台本域：generate 子路径须先于单段正则匹配，避免被 :id 规则吞掉
+    if (options.method == 'POST' &&
+        path.endsWith('/api/loop-scripts/generate')) {
+      return _generateLoopScript(options);
+    }
+    final loopScriptItem =
+        RegExp(r'^/api/loop-scripts/([^/]+)$').firstMatch(path);
+    if (loopScriptItem != null && options.method == 'GET') {
+      return _getLoopScript(loopScriptItem.group(1)!);
+    }
+    if (loopScriptItem != null && options.method == 'PUT') {
+      return _replaceLoopScript(options, loopScriptItem.group(1)!);
+    }
+    if (loopScriptItem != null && options.method == 'DELETE') {
+      return _deleteLoopScript(loopScriptItem.group(1)!);
+    }
+    if (options.method == 'GET' && path.endsWith('/api/loop-scripts')) {
+      return _listLoopScripts();
+    }
+    if (options.method == 'POST' && path.endsWith('/api/loop-scripts')) {
+      return _createLoopScript(options);
     }
     if (options.method == 'GET' && path.endsWith('/api/voices')) {
       return _jsonResponse(List<Map<String, dynamic>>.from(voices));
@@ -339,6 +373,14 @@ class FakeBackend implements HttpClientAdapter {
         'message': '话术不存在或不属于当前用户',
       }, 400);
     }
+    final loopScriptId = _liveNullable(body['loopScriptId']);
+    if (loopScriptId != null &&
+        loopScripts.indexWhere((script) => script['id'] == loopScriptId) < 0) {
+      return _jsonResponse({
+        'error': 'LOOP_SCRIPT_NOT_OWNED',
+        'message': '循环台本不存在或不属于当前用户',
+      }, 400);
+    }
     final id = _nextLiveId();
     final now = DateTime.now().toUtc();
     final live = <String, dynamic>{
@@ -349,6 +391,7 @@ class FakeBackend implements HttpClientAdapter {
       'rtmpUrl': null,
       'voiceId': voiceId,
       'scriptId': scriptId,
+      'loopScriptId': loopScriptId,
       'status': 'idle',
       'aiBadgeShown': true,
       'startedAt': null,
@@ -402,6 +445,18 @@ class FakeBackend implements HttpClientAdapter {
         }, 400);
       }
       updated['scriptId'] = scriptId;
+    }
+    if (body.containsKey('loopScriptId')) {
+      final loopScriptId = _liveNullable(body['loopScriptId']);
+      if (loopScriptId != null &&
+          loopScripts.indexWhere((script) => script['id'] == loopScriptId) <
+              0) {
+        return _jsonResponse({
+          'error': 'LOOP_SCRIPT_NOT_OWNED',
+          'message': '循环台本不存在或不属于当前用户',
+        }, 400);
+      }
+      updated['loopScriptId'] = loopScriptId;
     }
     if (body.containsKey('couponId')) {
       updated['couponId'] = _liveNullable(body['couponId']);
@@ -955,6 +1010,377 @@ class FakeBackend implements HttpClientAdapter {
       }
     }
     return null;
+  }
+
+  // ---------- 循环台本域（镜像 /api/loop-scripts）----------
+
+  /// 我的循环台本列表：镜像服务端按 updatedAt desc、最多 50 条，返回摘要（无 items）。
+  ResponseBody _listLoopScripts() {
+    if (failLoopScriptsList) {
+      return _serverError('循环台本列表服务暂不可用');
+    }
+    final summaries = <Map<String, dynamic>>[
+      for (final script in loopScripts) _loopScriptSummaryOf(script),
+    ];
+    summaries.sort((a, b) {
+      final aAt = DateTime.tryParse(a['updatedAt']?.toString() ?? '');
+      final bAt = DateTime.tryParse(b['updatedAt']?.toString() ?? '');
+      return (bAt ?? DateTime.fromMillisecondsSinceEpoch(0)).compareTo(
+        aAt ?? DateTime.fromMillisecondsSinceEpoch(0),
+      );
+    });
+    return _jsonResponse(summaries);
+  }
+
+  /// 列表摘要视图：id / title / sourceScriptId / itemCount / 时间戳。
+  Map<String, dynamic> _loopScriptSummaryOf(Map<String, dynamic> script) {
+    final items = script['items'];
+    return <String, dynamic>{
+      'id': script['id'],
+      'title': script['title'],
+      'sourceScriptId': script['sourceScriptId'],
+      'itemCount': items is List ? items.length : (script['itemCount'] ?? 0),
+      'createdAt': script['createdAt'],
+      'updatedAt': script['updatedAt'],
+    };
+  }
+
+  /// 单查循环台本：找不到统一返回 404（FakeBackend 仅模拟单一用户，等同归属隔离）。
+  ResponseBody _getLoopScript(String id) {
+    final script = _findLoopScript(id);
+    if (script == null) {
+      return _jsonResponse({
+        'error': 'LOOP_SCRIPT_NOT_FOUND',
+        'message': '循环台本不存在',
+      }, 404);
+    }
+    return _jsonResponse(script);
+  }
+
+  Map<String, dynamic>? _findLoopScript(String id) {
+    for (final script in loopScripts) {
+      if (script['id'] == id) {
+        return script;
+      }
+    }
+    return null;
+  }
+
+  /// 生成不与预置用例冲突的循环台本 id：预置为 loop-001 时自动顺延，避免覆盖。
+  String _nextLoopScriptId() {
+    var maxSeq = 0;
+    for (final script in loopScripts) {
+      final match = RegExp(r'^loop-(\d+)$')
+          .firstMatch(script['id']?.toString() ?? '');
+      final seq = int.tryParse(match?.group(1) ?? '') ?? 0;
+      if (seq > maxSeq) {
+        maxSeq = seq;
+      }
+    }
+    if (_loopScriptSeq <= maxSeq) {
+      _loopScriptSeq = maxSeq + 1;
+    }
+    final id = 'loop-${_loopScriptSeq.toString().padLeft(3, '0')}';
+    _loopScriptSeq += 1;
+    return id;
+  }
+
+  /// 归一化台本条目（镜像服务端 normalizeItems）：条数 1-12、文本 1-200 字、
+  /// kind 落白名单否则 null、间隔 0-60 否则 null；非法返回 null + 错误。
+  (List<Map<String, dynamic>>?, ({String code, String message})?)
+  _normalizeLoopItems(Object? raw) {
+    if (raw is! List) {
+      return (
+        null,
+        (code: 'ITEMS_INVALID', message: '台本条目必须是非空数组'),
+      );
+    }
+    if (raw.isEmpty || raw.length > 12) {
+      return (
+        null,
+        (code: 'ITEMS_INVALID', message: '台本条目数需在 1-12 条之间'),
+      );
+    }
+    const kinds = <String>[
+      'opening',
+      'product',
+      'coupon',
+      'warmup',
+      'closing',
+      'custom',
+    ];
+    final items = <Map<String, dynamic>>[];
+    for (var index = 0; index < raw.length; index += 1) {
+      final element = raw[index];
+      if (element is! Map) {
+        return (
+          null,
+          (code: 'ITEMS_INVALID', message: '第 ${index + 1} 条台本格式不正确'),
+        );
+      }
+      final text = element['text']?.toString().trim() ?? '';
+      if (text.isEmpty) {
+        return (
+          null,
+          (code: 'ITEM_TEXT_REQUIRED', message: '第 ${index + 1} 条台词不能为空'),
+        );
+      }
+      if (text.length > 200) {
+        return (
+          null,
+          (
+            code: 'ITEM_TEXT_TOO_LONG',
+            message: '第 ${index + 1} 条台词不能超过 200 字',
+          ),
+        );
+      }
+      final rawKind = element['kind'];
+      final kind = rawKind is String && kinds.contains(rawKind) ? rawKind : null;
+      int? gapAfterSeconds;
+      final rawGap = element['gapAfterSeconds'];
+      if (rawGap is num &&
+          rawGap == rawGap.roundToDouble() &&
+          rawGap >= 0 &&
+          rawGap <= 60) {
+        gapAfterSeconds = rawGap.toInt();
+      }
+      items.add(<String, dynamic>{
+        'kind': kind,
+        'text': text,
+        'gapAfterSeconds': gapAfterSeconds,
+      });
+    }
+    return (items, null);
+  }
+
+  /// 逐条扫敏感词：命中任一 → 汇总去重命中词（镜像服务端 scanItems）。
+  List<String> _scanLoopItems(List<Map<String, dynamic>> items) {
+    final matched = <String>[];
+    for (final item in items) {
+      final scan = _scanSensitive(item['text']?.toString() ?? '');
+      final words = scan['matchedWords'];
+      if (words is List) {
+        for (final word in words) {
+          final value = word.toString();
+          if (!matched.contains(value)) {
+            matched.add(value);
+          }
+        }
+      }
+    }
+    return matched;
+  }
+
+  /// 落库形状：给归一化条目补 id 与 seq（seq 从 1 起，镜像服务端 replaceItemsTx）。
+  List<Map<String, dynamic>> _seedLoopItems(
+    String headerId,
+    List<Map<String, dynamic>> items,
+  ) {
+    return <Map<String, dynamic>>[
+      for (var index = 0; index < items.length; index += 1)
+        <String, dynamic>{
+          'id': '$headerId-item-${index + 1}',
+          'seq': index + 1,
+          'kind': items[index]['kind'],
+          'text': items[index]['text'],
+          'gapAfterSeconds': items[index]['gapAfterSeconds'],
+        },
+    ];
+  }
+
+  /// 新建循环台本：标题 1-100 字、条目逐条过敏感词（命中 400 不落库）；
+  /// sourceScriptId 可选但须归属当前用户。
+  ResponseBody _createLoopScript(RequestOptions options) {
+    final body = _readBody(options);
+    final title = body['title']?.toString().trim() ?? '';
+    if (title.isEmpty || title.length > 100) {
+      return _jsonResponse({
+        'error': 'TITLE_INVALID',
+        'message': '台本标题不能为空且不超过 100 字',
+      }, 400);
+    }
+    final normalized = _normalizeLoopItems(body['items']);
+    final items = normalized.$1;
+    final itemError = normalized.$2;
+    if (items == null) {
+      return _jsonResponse(
+        {'error': itemError!.code, 'message': itemError.message},
+        400,
+      );
+    }
+    final sourceScriptId = _liveNullable(body['sourceScriptId']);
+    if (sourceScriptId != null && _findScript(sourceScriptId) == null) {
+      return _jsonResponse({
+        'error': 'SCRIPT_NOT_FOUND',
+        'message': '话术不存在或不属于当前用户',
+      }, 404);
+    }
+    final matched = _scanLoopItems(items);
+    if (matched.isNotEmpty) {
+      return _jsonResponse({
+        'error': 'SENSITIVE_BLOCKED',
+        'message': '台本包含被拦截用语，请修改后再保存',
+        'matchedWords': matched,
+      }, 400);
+    }
+    final id = _nextLoopScriptId();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    final script = <String, dynamic>{
+      'id': id,
+      'title': title,
+      'sourceScriptId': sourceScriptId,
+      'createdAt': nowIso,
+      'updatedAt': nowIso,
+      'items': _seedLoopItems(id, items),
+    };
+    loopScripts.insert(0, script);
+    return _jsonResponse(script, 201);
+  }
+
+  /// 整体替换循环台本：标题与条目全量重写（引用它的场次待下次开播生效）。
+  ResponseBody _replaceLoopScript(RequestOptions options, String id) {
+    final index = loopScripts.indexWhere((script) => script['id'] == id);
+    if (index < 0) {
+      return _jsonResponse({
+        'error': 'LOOP_SCRIPT_NOT_FOUND',
+        'message': '循环台本不存在',
+      }, 404);
+    }
+    final body = _readBody(options);
+    final title = body['title']?.toString().trim() ?? '';
+    if (title.isEmpty || title.length > 100) {
+      return _jsonResponse({
+        'error': 'TITLE_INVALID',
+        'message': '台本标题不能为空且不超过 100 字',
+      }, 400);
+    }
+    final normalized = _normalizeLoopItems(body['items']);
+    final items = normalized.$1;
+    final itemError = normalized.$2;
+    if (items == null) {
+      return _jsonResponse(
+        {'error': itemError!.code, 'message': itemError.message},
+        400,
+      );
+    }
+    final matched = _scanLoopItems(items);
+    if (matched.isNotEmpty) {
+      return _jsonResponse({
+        'error': 'SENSITIVE_BLOCKED',
+        'message': '台本包含被拦截用语，请修改后再保存',
+        'matchedWords': matched,
+      }, 400);
+    }
+    final existing = loopScripts[index];
+    final updated = <String, dynamic>{
+      ...existing,
+      'title': title,
+      'items': _seedLoopItems(id, items),
+      'updatedAt': DateTime.now().toUtc().toIso8601String(),
+    };
+    loopScripts[index] = updated;
+    return _jsonResponse(updated);
+  }
+
+  /// 删除循环台本：先解除引用它的开播配置（loopScriptId 置 null），再删除。
+  ResponseBody _deleteLoopScript(String id) {
+    final index = loopScripts.indexWhere((script) => script['id'] == id);
+    if (index < 0) {
+      return _jsonResponse({
+        'error': 'LOOP_SCRIPT_NOT_FOUND',
+        'message': '循环台本不存在',
+      }, 404);
+    }
+    for (var i = 0; i < lives.length; i += 1) {
+      if (lives[i]['loopScriptId'] == id) {
+        lives[i] = <String, dynamic>{...lives[i], 'loopScriptId': null};
+      }
+    }
+    loopScripts.removeAt(index);
+    return _jsonResponse({'ok': true});
+  }
+
+  /// 模拟 DeepSeek 生成循环台本草稿（M2，不落库）：seed 文案固定合规，
+  /// 命中拦截词才触发整组改写；返回 items 供「预览后保存」。
+  ResponseBody _generateLoopScript(RequestOptions options) {
+    final body = _readBody(options);
+    final sourceScriptId = _liveNullable(body['sourceScriptId']);
+    if (sourceScriptId == null) {
+      return _jsonResponse({
+        'error': 'SCRIPT_REQUIRED',
+        'message': '必须指定来源话术才能生成循环台本',
+      }, 400);
+    }
+    var itemCount = 6;
+    final rawCount = body['itemCount'];
+    if (rawCount != null) {
+      final parsed = num.tryParse(rawCount.toString());
+      if (parsed == null ||
+          parsed != parsed.roundToDouble() ||
+          parsed < 1 ||
+          parsed > 12) {
+        return _jsonResponse({
+          'error': 'ITEM_COUNT_INVALID',
+          'message': '期望条目数需在 1-12 之间',
+        }, 400);
+      }
+      itemCount = parsed.toInt();
+    }
+    final source = _findScript(sourceScriptId);
+    if (source == null) {
+      return _jsonResponse({
+        'error': 'SCRIPT_NOT_FOUND',
+        'message': '话术不存在或不属于当前用户',
+      }, 404);
+    }
+    if (source['status'] != 'ready' || source['sensitiveCheckStatus'] != 'pass') {
+      return _jsonResponse({
+        'error': 'SCRIPT_REQUIRED',
+        'message': '仅支持敏感词扫描通过且已就绪的正式话术生成循环台本',
+      }, 422);
+    }
+    final rawCoupon = body['couponText'];
+    final hasCoupon = rawCoupon is String && rawCoupon.trim().isNotEmpty;
+    const seeds = <String>[
+      '欢迎来到直播间，今天给您介绍几款人气好物。',
+      '这款招牌套餐份量足、口味稳定，回头客很多。',
+      '现在下单还有限时优惠，到手价非常划算。',
+      '套餐里的配菜都可以按口味替换，下单时备注即可。',
+      '喜欢的朋友可以点击下方团购链接直接购买。',
+      '感谢您的停留，有任何问题欢迎在弹幕里告诉我。',
+    ];
+    var generationNote = '';
+    final texts = <String>[];
+    for (var index = 0; texts.length < itemCount; index += 1) {
+      final seed = seeds[index % seeds.length];
+      final scan = _scanSensitive(seed);
+      if (scan['status'] == 'blocked' && generationNote.isEmpty) {
+        generationNote = 'AI 初稿含违规表述，已自动改写为合规版本（预览后可保存）';
+      }
+      texts.add(seed);
+    }
+    final draft = <Map<String, dynamic>>[];
+    for (var index = 0; index < itemCount; index += 1) {
+      String kind;
+      if (index == 0) {
+        kind = 'opening';
+      } else if (hasCoupon && index % 3 == 0) {
+        kind = 'coupon';
+      } else if (index % 4 == 0) {
+        kind = 'warmup';
+      } else {
+        kind = 'product';
+      }
+      draft.add(<String, dynamic>{
+        'kind': kind,
+        'text': texts[index],
+        'gapAfterSeconds': 6,
+      });
+    }
+    return _jsonResponse(<String, dynamic>{
+      'items': draft,
+      if (generationNote.isNotEmpty) 'generationNote': generationNote,
+    });
   }
 
   /// 内置拦截级敏感词（与服务端 sensitive.ts 保持一致），命中即 blocked。

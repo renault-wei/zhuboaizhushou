@@ -1,6 +1,7 @@
 /// 开播配置表单页：/lives/new（新建）与 /lives/:id（编辑）共用同一页面。
 /// 商家绑定：音色（来自我的音色，仅 ready 可选）+ 话术（仅 ready 可选）+
-/// 团购券（push /coupons 点选后 pop 回券 id）+ 直播标题。
+/// 循环台本（push /loop-scripts?select=1 点选后 pop 回整本）+ 团购券
+/// （push /coupons 点选后 pop 回券 id）+ 直播标题。
 /// T11 点亮实景视频区：上传实景视频（MVP 简化为本机 mp4 路径输入）+「生成直播视频」合成，
 /// 产物为本地文件、不推流（推流 T12）；新建草稿先保存、再从列表进入编辑后操作。
 /// 「AI 智能直播」角标由服务端强制叠加为 true，本页面没有任何关闭入口。
@@ -12,6 +13,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:starvoice_app/core/models/coupon.dart';
 import 'package:starvoice_app/core/models/live.dart';
+import 'package:starvoice_app/core/models/loop_script.dart';
 import 'package:starvoice_app/core/models/script.dart';
 import 'package:starvoice_app/core/models/voice.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
@@ -37,6 +39,16 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   String? _voiceId;
   String? _scriptId;
   String? _couponId;
+
+  /// 已绑定的循环台本 id（null = 未绑定，仅弹幕回复模式）。
+  String? _loopScriptId;
+
+  /// 已绑定台本的摘要（标题 + 条数）：绑定后或编辑页预填后从台本列表匹配；
+  /// 同步失败降级为 id 展示，可手动重试。
+  LoopScript? _loopScriptSummary;
+
+  /// 正在同步已绑定台本摘要。
+  bool _loopSummarySyncing = false;
 
   /// 服务端回填的实景视频源：上传 → /uploads/videos/...，合成成功 → /uploads/lives/...
   String _videoSourceUrl = '';
@@ -110,8 +122,78 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       _titleController.text = initial.title;
       _voiceId = initial.voiceId;
       _scriptId = initial.scriptId;
+      _loopScriptId = initial.loopScriptId;
       _couponId = initial.couponId;
       _videoSourceUrl = initial.videoSourceUrl;
+    });
+    if (initial.loopScriptId != null) {
+      _refreshLoopSummary();
+    }
+  }
+
+  /// 拉取我的循环台本列表，匹配已绑定 id 的标题与条数摘要（尽力而为，
+  /// 失败不阻塞表单，摘要区显示降级文案 + 重试按钮）。
+  Future<void> _refreshLoopSummary() async {
+    final id = _loopScriptId;
+    if (id == null) {
+      if (mounted) {
+        setState(() {
+          _loopScriptSummary = null;
+          _loopSummarySyncing = false;
+        });
+      }
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _loopSummarySyncing = true;
+      });
+    }
+    try {
+      final scripts = await ref.read(apiClientProvider).listLoopScripts();
+      if (!mounted) {
+        return;
+      }
+      LoopScript? matched;
+      for (final script in scripts) {
+        if (script.id == id) {
+          matched = script;
+          break;
+        }
+      }
+      setState(() {
+        _loopScriptSummary = matched;
+        _loopSummarySyncing = false;
+      });
+    } on ApiException {
+      if (mounted) {
+        setState(() {
+          _loopSummarySyncing = false;
+        });
+      }
+    }
+  }
+
+  /// 绑定循环台本：push /loop-scripts?select=1，台本库页点选后 pop 返回整本台本，
+  /// 用其 id 落库、对象直接做摘要展示（无需再拉一次列表）。
+  Future<void> _openLoopScriptLibrary() async {
+    final picked = await context.push<LoopScript>('/loop-scripts?select=1');
+    if (!mounted || picked == null) {
+      return;
+    }
+    setState(() {
+      _loopScriptId = picked.id;
+      _loopScriptSummary = picked;
+      _loopSummarySyncing = false;
+    });
+  }
+
+  /// 解绑循环台本：回到仅弹幕回复模式（后续可随时换绑）。
+  void _unbindLoopScript() {
+    setState(() {
+      _loopScriptId = null;
+      _loopScriptSummary = null;
+      _loopSummarySyncing = false;
     });
   }
 
@@ -128,6 +210,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
             title: title,
             voiceId: _voiceId,
             scriptId: _scriptId,
+            loopScriptId: _loopScriptId,
             couponId: _couponId,
           );
       if (!mounted) {
@@ -292,6 +375,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         const SizedBox(height: 12),
         _buildScriptPicker(state, script),
         const SizedBox(height: 12),
+        _buildLoopScriptSection(state.saving),
+        const SizedBox(height: 12),
         _buildCouponPicker(state, coupon),
         const SizedBox(height: 12),
         _buildVideoSources(state),
@@ -357,6 +442,121 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       trailing: const Icon(Icons.chevron_right),
       onTap: state.saving ? null : () => _pickScript(state),
     );
+  }
+
+  /// 循环台词区块（M3 §7.2，位于「绑定话术」下方）：未绑 → 副文案 +
+  /// 「去新建/去生成」；已绑 → 标题 + 条数摘要 + 换绑/解绑。允许不绑保存
+  /// （仅弹幕回复模式）；绑定值随保存写入 loopScriptId。
+  Widget _buildLoopScriptSection(bool saving) {
+    return Container(
+      key: const Key('liveLoopScriptSection'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.teal.withValues(alpha: 0.04),
+        border: Border.all(color: Colors.teal.shade100),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Row(
+            children: <Widget>[
+              Icon(Icons.playlist_play_rounded, size: 18),
+              SizedBox(width: 6),
+              Text(
+                '循环台词',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '绑定一条循环台本后，开播会按节奏循环口播商品与团购券；'
+            '不绑定则本场仅弹幕回复。',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 8),
+          if (_loopScriptId == null)
+            _buildLoopScriptEmptyRow(saving)
+          else
+            _buildLoopScriptBoundRow(saving),
+        ],
+      ),
+    );
+  }
+
+  /// 未绑台本：副文案 + 「去新建/去生成」（跳台本库选择模式，可先新建再点选）。
+  Widget _buildLoopScriptEmptyRow(bool saving) {
+    return Row(
+      children: <Widget>[
+        Expanded(
+          child: Text(
+            '循环口播需绑定一条循环台本',
+            key: Key('liveLoopScriptEmptyText'),
+            style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+          ),
+        ),
+        OutlinedButton.icon(
+          key: const Key('liveLoopScriptBindButton'),
+          onPressed: saving ? null : _openLoopScriptLibrary,
+          icon: const Icon(Icons.add, size: 18),
+          label: const Text('去新建/去生成'),
+        ),
+      ],
+    );
+  }
+
+  /// 已绑台本：标题 + 条数摘要 + 换绑/解绑；摘要同步失败时降级显示 id 并可重试。
+  Widget _buildLoopScriptBoundRow(bool saving) {
+    return Row(
+      key: const Key('liveLoopScriptBoundRow'),
+      children: <Widget>[
+        Expanded(
+          child: _loopSummarySyncing
+              ? const SizedBox(
+                  key: Key('liveLoopScriptSyncing'),
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Text(
+                  _loopSummaryLabel(),
+                  key: const Key('liveLoopScriptValue'),
+                  style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+        ),
+        if (!_loopSummarySyncing && _loopScriptSummary == null)
+          TextButton(
+            key: const Key('liveLoopScriptRetryButton'),
+            onPressed: saving ? null : _refreshLoopSummary,
+            child: const Text('重试'),
+          ),
+        TextButton(
+          key: const Key('liveLoopScriptChangeButton'),
+          onPressed: saving ? null : _openLoopScriptLibrary,
+          child: const Text('换绑'),
+        ),
+        TextButton(
+          key: const Key('liveLoopScriptUnbindButton'),
+          onPressed: saving ? null : _unbindLoopScript,
+          child: const Text('解绑'),
+        ),
+      ],
+    );
+  }
+
+  /// 已绑台本的摘要文案：标题 + 条数；同步失败降级为 id（可点「重试」）。
+  String _loopSummaryLabel() {
+    final summary = _loopScriptSummary;
+    if (summary != null) {
+      final title = summary.hasEmptyTitle ? '（未命名台本）' : summary.title;
+      return '$title · ${summary.itemCount} 条';
+    }
+    final id = _loopScriptId;
+    return id == null ? '' : '台本 $id（摘要同步失败，可重试）';
   }
 
   /// 团购券选择：直接进入 /coupons?select=1，点选后 pop 回券 id。

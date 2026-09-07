@@ -111,6 +111,7 @@ class LiveFormController extends StateNotifier<LiveFormState> {
     required String title,
     String? voiceId,
     String? scriptId,
+    String? loopScriptId,
     String? couponId,
   }) async {
     state = state.copyWith(saving: true, clearError: true);
@@ -121,6 +122,7 @@ class LiveFormController extends StateNotifier<LiveFormState> {
           title: title,
           voiceId: voiceId,
           scriptId: scriptId,
+          loopScriptId: loopScriptId,
           couponId: couponId,
         );
       }
@@ -128,6 +130,7 @@ class LiveFormController extends StateNotifier<LiveFormState> {
         title: title,
         voiceId: voiceId,
         scriptId: scriptId,
+        loopScriptId: loopScriptId,
         couponId: couponId,
       );
     } on ApiException {

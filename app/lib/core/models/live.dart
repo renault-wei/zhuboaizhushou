@@ -39,6 +39,7 @@ class Live {
     required this.rtmpUrl,
     required this.voiceId,
     required this.scriptId,
+    this.loopScriptId,
     required this.status,
     required this.aiBadgeShown,
     required this.startedAt,
@@ -56,6 +57,7 @@ class Live {
       rtmpUrl: _nullableString(json['rtmpUrl']),
       voiceId: _nullableString(json['voiceId']),
       scriptId: _nullableString(json['scriptId']),
+      loopScriptId: _nullableString(json['loopScriptId']),
       status: LiveStatus.fromWire(json['status']?.toString()),
       // 合规：服务端写死 true；字段缺失按 true 处理，避免误把角标当作可关闭项
       aiBadgeShown: json['aiBadgeShown'] != false,
@@ -86,6 +88,9 @@ class Live {
 
   /// 绑定的话术 id
   final String? scriptId;
+
+  /// 绑定的循环台本 id（循环口播用；null = 仅弹幕回复模式）
+  final String? loopScriptId;
 
   /// 直播状态：idle / processing / ready / live / ended / failed
   final LiveStatus status;

@@ -10,6 +10,7 @@ import 'package:starvoice_app/features/auth/application/auth_controller.dart';
 import 'package:starvoice_app/features/coupons/application/coupon_controller.dart';
 import 'package:starvoice_app/features/lives/application/live_form_controller.dart';
 import 'package:starvoice_app/features/lives/application/live_list_controller.dart';
+import 'package:starvoice_app/features/loop_scripts/application/loop_script_controller.dart';
 import 'package:starvoice_app/features/assistant_speaker/application/assistant_speaker_controller.dart';
 import 'package:starvoice_app/features/assistant_speaker/data/audioplayers_speech_out_player.dart';
 import 'package:starvoice_app/features/recording/application/recorder_controller.dart';
@@ -134,6 +135,15 @@ final voiceLibraryControllerProvider =
 final scriptControllerProvider =
     StateNotifierProvider.autoDispose<ScriptController, ScriptState>((ref) {
       return ScriptController(ref.watch(apiClientProvider));
+    });
+
+/// 循环台本库控制器：循环台本列表页使用（列表加载 + 删除，删除后由服务端解绑引用场次）。
+/// autoDispose：离开台本库页即销毁，避免页面级状态长期驻留。
+final loopScriptControllerProvider =
+    StateNotifierProvider.autoDispose<LoopScriptController, LoopScriptState>((
+      ref,
+    ) {
+      return LoopScriptController(ref.watch(apiClientProvider));
     });
 
 /// 团购券控制器：团购券列表页使用。

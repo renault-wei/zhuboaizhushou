@@ -10,6 +10,7 @@ import 'package:starvoice_app/core/models/user_profile.dart';
 import 'package:starvoice_app/core/models/voice.dart';
 import 'package:starvoice_app/core/models/voice_agreement.dart';
 import 'package:starvoice_app/core/models/script.dart';
+import 'package:starvoice_app/core/models/loop_script.dart';
 import 'package:starvoice_app/core/models/speech_out_item.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 
@@ -330,6 +331,108 @@ class ApiClient {
     }
   }
 
+  /// 生成循环台本草稿（M2，不落库）：必须指定我的 ready+pass 正式话术；
+  /// 返回草稿条目供「预览后保存」。复用一次过审链路：初稿含违规表述时服务端
+  /// 自动改写，成品条目必然不含敏感词；仍失败返回 502 GENERATION_FAILED。
+  Future<LoopScriptDraft> generateLoopScriptDraft({
+    required String sourceScriptId,
+    String? couponText,
+    int? itemCount,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/loop-scripts/generate',
+        data: <String, dynamic>{
+          'sourceScriptId': sourceScriptId,
+          'couponText': ?couponText,
+          'itemCount': ?itemCount,
+        },
+      );
+      return LoopScriptDraft.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 我的循环台本列表：服务端按 updatedAt 倒序返回（带条数摘要）。
+  Future<List<LoopScript>> listLoopScripts() async {
+    try {
+      final response = await _dio.get<List<dynamic>>('/api/loop-scripts');
+      final data = response.data;
+      if (data is List) {
+        return data
+            .whereType<Map>()
+            .map((item) => LoopScript.fromJson(Map<String, dynamic>.from(item)))
+            .toList();
+      }
+      return <LoopScript>[];
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 查询单个循环台本（含归属校验，非本人或不存在返回 404），items 按 seq 升序。
+  Future<LoopScript> getLoopScript(String id) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/api/loop-scripts/$id',
+      );
+      return LoopScript.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 新建循环台本：标题 + 有序条目整体落库；条目逐个过敏感词扫描，
+  /// 命中返回 400 SENSITIVE_BLOCKED + matchedWords。成功返回 201 + 整本。
+  Future<LoopScript> createLoopScript({
+    required String title,
+    required List<Map<String, dynamic>> items,
+    String? sourceScriptId,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/loop-scripts',
+        data: <String, dynamic>{
+          'title': title,
+          'items': items,
+          'sourceScriptId': ?sourceScriptId,
+        },
+      );
+      return LoopScript.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 整体替换台本标题与条目（seq = 下标+1）：引用它的场次待下次开播生效，
+  /// 不做热更新。命中敏感词同样返回 400 SENSITIVE_BLOCKED + matchedWords。
+  Future<LoopScript> updateLoopScript(
+    String id, {
+    required String title,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    try {
+      final response = await _dio.put<Map<String, dynamic>>(
+        '/api/loop-scripts/$id',
+        data: <String, dynamic>{'title': title, 'items': items},
+      );
+      return LoopScript.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 删除循环台本：服务端先把引用它的开播配置解绑（loopScriptId 置 null），
+  /// 再级联删除条目；正在直播的场次内存快照不受影响。
+  Future<void> deleteLoopScript(String id) async {
+    try {
+      await _dio.delete<Map<String, dynamic>>('/api/loop-scripts/$id');
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
   /// 我的开播配置列表：服务端按 updatedAt desc 返回、最多 50 条，支持 ?status= 过滤。
   Future<List<Live>> listLives({String? status}) async {
     try {
@@ -366,6 +469,7 @@ class ApiClient {
     required String title,
     String? voiceId,
     String? scriptId,
+    String? loopScriptId,
     String? couponId,
     String? videoSourceUrl,
   }) async {
@@ -376,6 +480,7 @@ class ApiClient {
           'title': title,
           'voiceId': voiceId,
           'scriptId': scriptId,
+          'loopScriptId': loopScriptId,
           'couponId': couponId,
           'videoSourceUrl': ?videoSourceUrl,
         },
@@ -393,6 +498,7 @@ class ApiClient {
     String? title,
     String? voiceId,
     String? scriptId,
+    String? loopScriptId,
     String? couponId,
     String? videoSourceUrl,
   }) async {
@@ -404,6 +510,7 @@ class ApiClient {
           // 显式带 null：编辑页整体提交当前绑定，null 表示未绑定（服务端置空该列）
           'voiceId': voiceId,
           'scriptId': scriptId,
+          'loopScriptId': loopScriptId,
           'couponId': couponId,
           'videoSourceUrl': ?videoSourceUrl,
         },
@@ -626,6 +733,13 @@ class ApiClient {
       body = Map<String, dynamic>.from(response.data as Map);
     }
     final retryAfterSeconds = body['retryAfterSeconds'];
+    final rawMatchedWords = body['matchedWords'];
+    final matchedWords = rawMatchedWords is List
+        ? rawMatchedWords
+              .map((item) => item?.toString() ?? '')
+              .where((word) => word.isNotEmpty)
+              .toList()
+        : const <String>[];
     return ApiException(
       code: body['error']?.toString() ?? 'HTTP_${response.statusCode}',
       message:
@@ -634,6 +748,7 @@ class ApiClient {
       retryAfterSeconds: retryAfterSeconds is num
           ? retryAfterSeconds.toInt()
           : null,
+      matchedWords: matchedWords,
     );
   }
 

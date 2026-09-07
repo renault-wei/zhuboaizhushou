@@ -70,6 +70,8 @@ class HomePage extends ConsumerWidget {
               const SizedBox(height: 16),
               const _ScriptLibraryCard(),
               const SizedBox(height: 16),
+              const _LoopScriptLibraryCard(),
+              const SizedBox(height: 16),
               const _CouponEntryCard(),
               const SizedBox(height: 16),
               const _LiveEntryCard(),
@@ -968,6 +970,130 @@ class _ScriptLibraryCardState extends ConsumerState<_ScriptLibraryCard> {
                 minimumSize: const Size.fromHeight(44),
               ),
               child: const Text('去生成话术'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 「循环台本」入口卡片：位于「话术生成」卡片下方。
+/// 展示已有循环台本数量，点击进入台本库 /loop-scripts（开播前绑定循环口播）。
+class _LoopScriptLibraryCard extends ConsumerStatefulWidget {
+  const _LoopScriptLibraryCard();
+
+  @override
+  ConsumerState<_LoopScriptLibraryCard> createState() =>
+      _LoopScriptLibraryCardState();
+}
+
+class _LoopScriptLibraryCardState
+    extends ConsumerState<_LoopScriptLibraryCard> {
+  bool _loading = true;
+  bool _busy = false;
+  String? _error;
+  int _count = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // 首帧后再拉取台本数量，避免在 build 阶段发起网络请求
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
+  }
+
+  Future<void> _refresh() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    try {
+      final scripts = await ref.read(apiClientProvider).listLoopScripts();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _count = scripts.length;
+        _loading = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = error.message;
+        _loading = false;
+      });
+    }
+  }
+
+  /// 点击入口：进入台本库页，返回后刷新数量（可能已新建/编辑台本）。
+  Future<void> _handleTap() async {
+    if (_loading || _busy) {
+      return;
+    }
+    setState(() {
+      _busy = true;
+    });
+    await context.push('/loop-scripts');
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _busy = false;
+    });
+    await _refresh();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hint = _error ??
+        (_loading ? '正在同步循环台本…' : '已有 $_count 本循环台本，绑定后开播自动循环口播');
+    return Card(
+      key: const Key('loopScriptEntryCard'),
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                const Icon(Icons.playlist_play_rounded, size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  '循环台本',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                Text(
+                  _loading && _error == null ? '同步中' : '$_count 本',
+                  key: const Key('loopScriptEntryCountLabel'),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _error != null
+                        ? Theme.of(context).colorScheme.error
+                        : Colors.grey.shade600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              hint,
+              key: const Key('loopScriptEntryHint'),
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonal(
+              key: const Key('loopScriptEntryOpenButton'),
+              onPressed: _loading || _busy ? null : _handleTap,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(44),
+              ),
+              child: const Text('去管理台本'),
             ),
           ],
         ),
