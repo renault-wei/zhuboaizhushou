@@ -6,6 +6,8 @@ import { adminRoutes } from './routes/admin';
 import { agreementsRoutes } from './routes/agreements';
 import { atmosphereTemplatesRoutes } from './routes/atmosphereTemplates';
 import { authRoutes } from './routes/auth';
+import { billingAdminRoutes } from './routes/billingAdmin';
+import { billingRoutes } from './routes/billing';
 import { douyinRoutes } from './routes/douyin';
 import { healthRoutes } from './routes/health';
 import { livesRoutes } from './routes/lives';
@@ -51,6 +53,9 @@ export function buildApp() {
   app.register(livesRoutes);
   app.register(loopScriptsRoutes);
   app.register(speechOutRoutes);
+  // 商业化账本（v0.3 M5）：扫码直充 mock / 卡密核销 / 系统开关；卡密批次后台同批注册
+  app.register(billingRoutes);
+  app.register(billingAdminRoutes);
 
   return app;
 }

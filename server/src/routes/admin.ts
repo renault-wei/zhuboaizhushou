@@ -4,6 +4,7 @@ import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { adminUsers } from '../db/schema';
 import { JWT_TOKEN_TTL_SECONDS } from '../plugins/auth';
+import { LEDGER_SOURCE, toLedgerExecutor, topUpMinutes } from '../services/ledger';
 import { QUOTA_TIERS, SUBSCRIPTION_PLAN } from '../services/quotaTiers';
 
 // 内部运营工具只读口径：分页上限与默认值
@@ -477,7 +478,9 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  // 订单人工确权（模拟支付回调）：pending → paid + 订阅顺延 + 当月额度按付费档刷新；重复确权 409
+  // 订单人工确权（模拟支付回调）：
+  // subscription → paid + 订阅顺延 + 当月额度按付费档刷新；
+  // recharge（v0.3 M5 扫码充值单）→ paid + 按订单分钟入时长账本，不碰订阅 / 免费额度；重复确权 409
   app.post(
     '/api/admin/orders/:id/confirm',
     { preHandler: app.adminAuthenticate },
@@ -499,17 +502,32 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
         `);
         const order = locked.rows[0] as Record<string, unknown> | undefined;
         if (!order) {
-          return { notFound: true };
+          return { notFound: true, kind: 'missing' as const };
         }
         if (order.status === 'paid') {
-          return { conflict: 'ALREADY_CONFIRMED' };
+          return { conflict: 'ALREADY_CONFIRMED', kind: 'dup' as const };
         }
         if (order.status !== 'pending') {
-          return { conflict: 'CANNOT_CONFIRM' };
+          return { conflict: 'CANNOT_CONFIRM', kind: 'state' as const };
         }
         await tx.execute(sql`
           UPDATE orders SET status = 'paid', paid_at = now(), updated_at = now() WHERE id = ${orderId}
         `);
+        // 充值单：置 paid 后按订单精确分钟入账，不改变订阅状态 / 当月免费额度
+        if (order.kind === 'recharge') {
+          const minutes = (order.minutes as number | null) ?? 0;
+          if (!Number.isInteger(minutes) || minutes <= 0) {
+            return { conflict: 'CANNOT_CONFIRM', kind: 'recharge-no-minutes' as const };
+          }
+          const topUp = await topUpMinutes(toLedgerExecutor(tx), {
+            userId: order.user_id as string,
+            minutes,
+            sourceKind: LEDGER_SOURCE.RECHARGE_ORDER,
+            sourceId: orderId,
+            remark: `充值扫码单运营确权：${order.order_no as string}`,
+          });
+          return { notFound: false, branch: 'recharge' as const, order, topUp };
+        }
         const userRows = await tx.execute(sql`
           UPDATE users
           SET subscription_status = 'paid',
@@ -529,7 +547,13 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
             updated_at = now()
           RETURNING *
         `);
-        return { notFound: false, order, user: userRows.rows[0], quota: quotaRows.rows[0] };
+        return {
+          notFound: false,
+          branch: 'subscription' as const,
+          order,
+          user: userRows.rows[0],
+          quota: quotaRows.rows[0],
+        };
       });
       if (outcome.notFound) {
         return reply.code(404).send({ error: 'ORDER_NOT_FOUND', message: '订单不存在' });
@@ -540,6 +564,39 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
           error: outcome.conflict,
           message: alreadyPaid ? '订单已确权，请勿重复操作' : '当前订单状态不可确权',
         });
+      }
+      if (outcome.branch === 'recharge') {
+        const order = outcome.order as Record<string, unknown>;
+        const topUp = outcome.topUp as { creditedMinutes: number; balanceMinutes: number };
+        await writeAuditLog({
+          adminUserId: admin.id,
+          userId: order.user_id as string,
+          action: 'order.confirm',
+          resourceType: 'order',
+          resourceId: orderId,
+          detail: {
+            orderNo: order.order_no,
+            kind: 'recharge',
+            amountCents: order.amount_cents,
+            creditedMinutes: topUp.creditedMinutes,
+            balanceMinutes: topUp.balanceMinutes,
+          },
+          ip: request.ip,
+        });
+        return {
+          order: {
+            id: orderId,
+            orderNo: order.order_no,
+            kind: 'recharge',
+            amountCents: order.amount_cents,
+            status: 'paid',
+            paidAt: order.paid_at,
+          },
+          recharge: {
+            creditedMinutes: topUp.creditedMinutes,
+            balanceMinutes: topUp.balanceMinutes,
+          },
+        };
       }
       const order = outcome.order as Record<string, unknown>;
       const user = outcome.user as Record<string, unknown>;
