@@ -77,10 +77,15 @@ describe('D2.2 simulatorAdapter 模拟弹幕源', () => {
     };
     const handle = await collect(script);
     await waitUntil(() => handle.events.length >= 6, 500);
-    const keys = new Set(handle.events.map((event) => event.msgKey as string));
-    expect(keys.size).toBe(handle.events.length);
-    expect(handle.events.filter((event) => event.msgType === 'chat')).toHaveLength(3);
+    // 命中阈值后先停流再断言：轮询(5ms)与步进(1-8ms)存在竞态，
+    // 不等停稳直接数 chat 会因第 7 条(第 4 条 chat)是否已入列而抖动。
     await handle.stop();
+    const keys = new Set(handle.events.map((event) => event.msgKey as string));
+    // ≥6 条 = 至少 3 个整轮；msgKey 跨轮依旧唯一，chat 至少 3 条
+    expect(handle.events.length).toBeGreaterThanOrEqual(6);
+    expect(keys.size).toBe(handle.events.length);
+    expect(handle.events.filter((event) => event.msgType === 'chat').length).toBeGreaterThanOrEqual(3);
+    expect(handle.events.filter((event) => event.msgType === 'like').length).toBeGreaterThanOrEqual(3);
   });
 
   it('heartbeatOk=false → heartbeat 判死（供断线重连用例）；close 幂等', async () => {
