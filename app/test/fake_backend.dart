@@ -50,13 +50,27 @@ class FakeBackend implements HttpClientAdapter {
     List<Map<String, dynamic>>? danmaku,
     List<Uint8List>? speechOut,
     this.failSpeechOut = false,
+    this.balanceMinutes = 120,
+    this.monthlyQuotaMinutes = 600,
+    this.monthlyUsedMinutes = 120,
+    this.showCharge = true,
+    this.notice = '',
+    this.failWalletLoad = false,
+    List<Map<String, dynamic>>? pricePacks,
+    List<Map<String, dynamic>>? walletTransactions,
+    List<Map<String, dynamic>>? rechargeOrders,
+    Map<String, int>? redeemableCards,
   }) : voices = voices ?? <Map<String, dynamic>>[],
        scripts = scripts ?? <Map<String, dynamic>>[],
        coupons = coupons ?? _defaultCoupons(),
        lives = lives ?? <Map<String, dynamic>>[],
        loopScripts = loopScripts ?? <Map<String, dynamic>>[],
        danmaku = danmaku ?? <Map<String, dynamic>>[],
-       speechOut = speechOut ?? <Uint8List>[];
+       speechOut = speechOut ?? <Uint8List>[],
+       pricePacks = pricePacks ?? _defaultPricePacks(),
+       walletTransactions = walletTransactions ?? _defaultWalletTransactions(),
+       rechargeOrders = rechargeOrders ?? _defaultRechargeOrders(),
+       redeemableCards = redeemableCards ?? <String, int>{'TESTCARD0001': 600};
 
   final String userId;
   final String phone;
@@ -121,6 +135,44 @@ class FakeBackend implements HttpClientAdapter {
 
   /// 模拟循环台本列表接口 500（测试加载失败分支）。
   final bool failLoopScriptsList;
+
+  /// —— 收银台（M7）内存账本：钱包 / 扫码单 / 卡密 ——
+
+  /// 时长余额（分钟，跨月不清零）：卡密核销 / 扫码确权会累加。
+  int balanceMinutes;
+
+  /// 当月免费直播分钟账本（quota）。
+  int monthlyQuotaMinutes;
+  int monthlyUsedMinutes;
+
+  /// 充值入口是否展示（服务端开关下发）。
+  final bool showCharge;
+
+  /// 公告文案（空串 = 不弹）。
+  final String notice;
+
+  /// 服务端下发的时长档位 [{hours, amountCents}]。
+  final List<Map<String, dynamic>> pricePacks;
+
+  /// 时长流水（内存）：GET /api/wallet 原样返回。
+  final List<Map<String, dynamic>> walletTransactions;
+
+  /// 充值订单（内存）：默认 1 条已到账单，扫码下单会追加。
+  final List<Map<String, dynamic>> rechargeOrders;
+
+  /// 扫码单（内存）：POST /api/recharge/scan 追加；poll 只读状态。
+  final List<Map<String, dynamic>> scanOrders = <Map<String, dynamic>>[];
+
+  /// 可核销卡密：归一化卡号 → 时长分钟；核销后移入 [redeemedCards]。
+  final Map<String, int> redeemableCards;
+
+  /// 已核销卡密集合（幂等：重复核销返回 409）。
+  final Set<String> redeemedCards = <String>{};
+  int _orderSeq = 0;
+  int _txnSeq = 0;
+
+  /// 模拟钱包接口 500（测试加载失败分支）。
+  bool failWalletLoad;
 
   @override
   Future<ResponseBody> fetch(
@@ -234,8 +286,8 @@ class FakeBackend implements HttpClientAdapter {
         path.endsWith('/api/loop-scripts/generate')) {
       return _generateLoopScript(options);
     }
-    final loopScriptItem =
-        RegExp(r'^/api/loop-scripts/([^/]+)$').firstMatch(path);
+    final loopScriptItem = RegExp(r'^/api/loop-scripts/([^/]+)$')
+        .firstMatch(path);
     if (loopScriptItem != null && options.method == 'GET') {
       return _getLoopScript(loopScriptItem.group(1)!);
     }
@@ -312,6 +364,25 @@ class FakeBackend implements HttpClientAdapter {
     }
     if (options.method == 'POST' && path.endsWith('/api/lives')) {
       return _createLive(options);
+    }
+    // —— 收银台（M7）：服务端开关 / 钱包总览 / 扫码 / 轮询 / 卡密 ——
+    if (options.method == 'GET' && path.endsWith('/api/app/config')) {
+      return _jsonResponse({'config': _appConfigPayload()});
+    }
+    if (options.method == 'GET' && path.endsWith('/api/wallet')) {
+      if (failWalletLoad) {
+        return _serverError('钱包服务暂不可用');
+      }
+      return _jsonResponse(_walletPayload());
+    }
+    if (options.method == 'POST' && path.endsWith('/api/recharge/scan')) {
+      return _createRechargeScan(options);
+    }
+    if (options.method == 'POST' && path.endsWith('/api/recharge/poll')) {
+      return _pollRecharge(options);
+    }
+    if (options.method == 'POST' && path.endsWith('/api/cards/redeem')) {
+      return _redeemCard(options);
     }
     return _jsonResponse({'error': 'NOT_FOUND', 'message': '接口不存在'}, 404);
   }
@@ -1094,16 +1165,10 @@ class FakeBackend implements HttpClientAdapter {
   (List<Map<String, dynamic>>?, ({String code, String message})?)
   _normalizeLoopItems(Object? raw) {
     if (raw is! List) {
-      return (
-        null,
-        (code: 'ITEMS_INVALID', message: '台本条目必须是非空数组'),
-      );
+      return (null, (code: 'ITEMS_INVALID', message: '台本条目必须是非空数组'));
     }
     if (raw.isEmpty || raw.length > 12) {
-      return (
-        null,
-        (code: 'ITEMS_INVALID', message: '台本条目数需在 1-12 条之间'),
-      );
+      return (null, (code: 'ITEMS_INVALID', message: '台本条目数需在 1-12 条之间'));
     }
     const kinds = <String>[
       'opening',
@@ -1132,14 +1197,13 @@ class FakeBackend implements HttpClientAdapter {
       if (text.length > 200) {
         return (
           null,
-          (
-            code: 'ITEM_TEXT_TOO_LONG',
-            message: '第 ${index + 1} 条台词不能超过 200 字',
-          ),
+          (code: 'ITEM_TEXT_TOO_LONG', message: '第 ${index + 1} 条台词不能超过 200 字'),
         );
       }
       final rawKind = element['kind'];
-      final kind = rawKind is String && kinds.contains(rawKind) ? rawKind : null;
+      final kind = rawKind is String && kinds.contains(rawKind)
+          ? rawKind
+          : null;
       int? gapAfterSeconds;
       final rawGap = element['gapAfterSeconds'];
       if (rawGap is num &&
@@ -1207,10 +1271,10 @@ class FakeBackend implements HttpClientAdapter {
     final items = normalized.$1;
     final itemError = normalized.$2;
     if (items == null) {
-      return _jsonResponse(
-        {'error': itemError!.code, 'message': itemError.message},
-        400,
-      );
+      return _jsonResponse({
+        'error': itemError!.code,
+        'message': itemError.message,
+      }, 400);
     }
     final sourceScriptId = _liveNullable(body['sourceScriptId']);
     if (sourceScriptId != null && _findScript(sourceScriptId) == null) {
@@ -1262,10 +1326,10 @@ class FakeBackend implements HttpClientAdapter {
     final items = normalized.$1;
     final itemError = normalized.$2;
     if (items == null) {
-      return _jsonResponse(
-        {'error': itemError!.code, 'message': itemError.message},
-        400,
-      );
+      return _jsonResponse({
+        'error': itemError!.code,
+        'message': itemError.message,
+      }, 400);
     }
     final matched = _scanLoopItems(items);
     if (matched.isNotEmpty) {
@@ -1337,7 +1401,8 @@ class FakeBackend implements HttpClientAdapter {
         'message': '话术不存在或不属于当前用户',
       }, 404);
     }
-    if (source['status'] != 'ready' || source['sensitiveCheckStatus'] != 'pass') {
+    if (source['status'] != 'ready' ||
+        source['sensitiveCheckStatus'] != 'pass') {
       return _jsonResponse({
         'error': 'SCRIPT_REQUIRED',
         'message': '仅支持敏感词扫描通过且已就绪的正式话术生成循环台本',
@@ -1418,6 +1483,237 @@ class FakeBackend implements HttpClientAdapter {
       'status': matchedWords.isEmpty ? 'pass' : 'blocked',
       'matchedWords': matchedWords,
     };
+  }
+
+  /// 模拟运营后台把扫码单确权为 paid（本地验收 mock 通道：收款由人工确权）。
+  /// 与 /api/recharge/poll 行为一致：置 paid、补 paidAt 并累加时长余额。
+  void confirmScanOrder(String orderId) {
+    final orderIndex = scanOrders.indexWhere((item) => item['id'] == orderId);
+    if (orderIndex < 0 || scanOrders[orderIndex]['status'] == 'paid') {
+      return;
+    }
+    final order = scanOrders[orderIndex];
+    order['status'] = 'paid';
+    order['paidAt'] = DateTime.now().toUtc().toIso8601String();
+    final minutes = (order['minutes'] as num?)?.toInt() ?? 0;
+    _creditBalance(
+      minutes: minutes,
+      sourceKind: 'recharge_order',
+      sourceId: orderId,
+      remark: '扫码充值 ${order['hours']} 小时',
+    );
+  }
+
+  Map<String, dynamic> _appConfigPayload() {
+    return <String, dynamic>{
+      'showCharge': showCharge,
+      'pricePacks': List<Map<String, dynamic>>.from(pricePacks),
+      'notice': notice,
+      'quotaPriority': <String>['balance', 'quota'],
+    };
+  }
+
+  Map<String, dynamic> _walletPayload() {
+    return <String, dynamic>{
+      'balanceMinutes': balanceMinutes,
+      'monthlyLive': <String, dynamic>{
+        'quotaMinutes': monthlyQuotaMinutes,
+        'usedMinutes': monthlyUsedMinutes,
+        'remainingMinutes': _remainingQuota(),
+      },
+      'transactions': List<Map<String, dynamic>>.from(walletTransactions),
+      'rechargeOrders': List<Map<String, dynamic>>.from(rechargeOrders),
+    };
+  }
+
+  int _remainingQuota() {
+    final remaining = monthlyQuotaMinutes - monthlyUsedMinutes;
+    return remaining > 0 ? remaining : 0;
+  }
+
+  ResponseBody _createRechargeScan(RequestOptions options) {
+    final body = _readBody(options);
+    final hours = (body['hours'] as num?)?.toInt();
+    if (hours == null || hours <= 0) {
+      return _jsonResponse({
+        'error': 'HOURS_INVALID',
+        'message': '请选择有效充值时长档位',
+      }, 400);
+    }
+    Map<String, dynamic>? pack;
+    for (final item in pricePacks) {
+      if ((item['hours'] as num?)?.toInt() == hours) {
+        pack = item;
+        break;
+      }
+    }
+    if (pack == null) {
+      return _jsonResponse({
+        'error': 'PACK_INVALID',
+        'message': '所选时长不在服务端下发的档位中',
+        'packs': List<Map<String, dynamic>>.from(pricePacks),
+      }, 400);
+    }
+    _orderSeq += 1;
+    final orderNo = 'rn-mock-2026${_orderSeq.toString().padLeft(4, '0')}';
+    final minutes = hours * 60;
+    final order = <String, dynamic>{
+      'id': 'scan-order-$_orderSeq',
+      'orderNo': orderNo,
+      'kind': 'recharge',
+      'channel': 'alipay_scan',
+      'hours': hours,
+      'minutes': minutes,
+      'amountCents': pack['amountCents'],
+      'status': 'pending',
+      'paidAt': null,
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+    };
+    scanOrders.add(order);
+    rechargeOrders.insert(0, order);
+    return _jsonResponse({
+      'order': order,
+      'qrcodeUrl': 'mock://alipay-scan/$orderNo',
+      'mockChannel': true,
+      'message': '扫码单已创建（mock 通道）：暂未产生真实收款，请运营在后台人工确权后入账',
+    });
+  }
+
+  ResponseBody _pollRecharge(RequestOptions options) {
+    final body = _readBody(options);
+    final orderId = body['orderId']?.toString() ?? '';
+    final orderIndex = scanOrders.indexWhere((item) => item['id'] == orderId);
+    if (orderIndex < 0) {
+      return _jsonResponse({
+        'error': 'ORDER_NOT_FOUND',
+        'message': '扫码单不存在',
+      }, 404);
+    }
+    final order = scanOrders[orderIndex];
+    final paid = order['status'] == 'paid';
+    return _jsonResponse({
+      'orderId': order['id'],
+      'orderNo': order['orderNo'],
+      'status': order['status'],
+      'paidAt': paid ? order['paidAt'] : null,
+      'amountCents': order['amountCents'],
+      'hours': order['hours'],
+      if (paid) 'balanceMinutes': balanceMinutes,
+    });
+  }
+
+  ResponseBody _redeemCard(RequestOptions options) {
+    final body = _readBody(options);
+    final raw = body['code']?.toString() ?? '';
+    final code = raw.replaceAll(RegExp(r'[\s-]'), '').toUpperCase();
+    if (code.isEmpty || !redeemableCards.containsKey(code)) {
+      return _jsonResponse({
+        'error': 'CARD_NOT_FOUND',
+        'message': '卡密不存在或已失效',
+      }, 404);
+    }
+    if (redeemedCards.contains(code)) {
+      return _jsonResponse({
+        'error': 'CARD_REDEEMED',
+        'message': '该卡密已被使用，请勿重复提交',
+      }, 409);
+    }
+    redeemedCards.add(code);
+    _orderSeq += 1;
+    final creditedMinutes = redeemableCards[code] ?? 0;
+    final orderId = 'card-order-$_orderSeq';
+    final orderNo = 'cd-mock-2026${_orderSeq.toString().padLeft(4, '0')}';
+    rechargeOrders.insert(0, <String, dynamic>{
+      'id': orderId,
+      'orderNo': orderNo,
+      'channel': 'card',
+      'hours': creditedMinutes ~/ 60,
+      'minutes': creditedMinutes,
+      'amountCents': 0,
+      'status': 'paid',
+      'paidAt': DateTime.now().toUtc().toIso8601String(),
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+    });
+    _creditBalance(
+      minutes: creditedMinutes,
+      sourceKind: 'card_redeem',
+      sourceId: orderId,
+      remark: '卡密核销 $code',
+    );
+    return _jsonResponse({
+      'status': 'redeemed',
+      'batchId': 'batch-mock',
+      'orderId': orderId,
+      'orderNo': orderNo,
+      'creditedMinutes': creditedMinutes,
+      'balanceMinutes': balanceMinutes,
+    });
+  }
+
+  /// 时长余额入账 + 在流水头部追加一行（与 mapLedgerRow 响应结构一致）。
+  void _creditBalance({
+    required int minutes,
+    required String sourceKind,
+    required String sourceId,
+    required String remark,
+  }) {
+    balanceMinutes += minutes;
+    _txnSeq += 1;
+    walletTransactions.insert(0, <String, dynamic>{
+      'id': 'wallet-tx-$_txnSeq',
+      'deltaMinutes': minutes,
+      'balanceAfterMinutes': balanceMinutes,
+      'sourceKind': sourceKind,
+      'sourceId': sourceId,
+      'remark': remark,
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+    });
+  }
+
+  static List<Map<String, dynamic>> _defaultPricePacks() {
+    return <Map<String, dynamic>>[
+      <String, dynamic>{'hours': 1, 'amountCents': 990},
+      <String, dynamic>{'hours': 10, 'amountCents': 8990},
+    ];
+  }
+
+  static List<Map<String, dynamic>> _defaultRechargeOrders() {
+    return <Map<String, dynamic>>[
+      <String, dynamic>{
+        'id': 'order-paid-001',
+        'orderNo': 'rn-20260908-001',
+        'channel': 'alipay_scan',
+        'hours': 1,
+        'minutes': 60,
+        'amountCents': 990,
+        'status': 'paid',
+        'paidAt': '2026-09-08T08:50:00.000Z',
+        'createdAt': '2026-09-08T08:00:00.000Z',
+      },
+    ];
+  }
+
+  static List<Map<String, dynamic>> _defaultWalletTransactions() {
+    return <Map<String, dynamic>>[
+      <String, dynamic>{
+        'id': 'wallet-tx-001',
+        'deltaMinutes': -5,
+        'balanceAfterMinutes': 115,
+        'sourceKind': 'live_deduct',
+        'sourceId': null,
+        'remark': '直播在线扣减',
+        'createdAt': '2026-09-08T10:00:00.000Z',
+      },
+      <String, dynamic>{
+        'id': 'wallet-tx-000',
+        'deltaMinutes': 60,
+        'balanceAfterMinutes': 120,
+        'sourceKind': 'recharge_order',
+        'sourceId': 'order-paid-001',
+        'remark': '扫码充值 1 小时',
+        'createdAt': '2026-09-08T09:00:00.000Z',
+      },
+    ];
   }
 
   /// 模拟服务端 500 错误响应（测试错误分支用）。
