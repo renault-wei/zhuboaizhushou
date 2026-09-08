@@ -230,7 +230,7 @@ dbIt('新建/替换含敏感词的台本返回 400 SENSITIVE_BLOCKED，且不落
   const blocked = dirty.json();
   expect(blocked.error).toBe('SENSITIVE_BLOCKED');
   expect(blocked.matchedWords).toContain('顶级');
-  expect(blocked.matchedWords).toContain('最');
+  expect(blocked.matchedWords).toContain('最优惠');
 
   const list = await app.inject({ method: 'GET', url: '/api/loop-scripts', headers: bearer(token) });
   expect(list.statusCode).toBe(200);
