@@ -16,6 +16,7 @@
 > - 更新时间：2026-09-08（doc-only 定位定稿：产品收敛为「平台无关 AI 语音助播」— 商家任选直播平台开播，App 只做后台 AI 语音（循环台本 + 弹幕问答）；声音出口天然跨平台，平台相关只剩弹幕源（外挂弹幕助手适配）；商业模式 = 直播期间 AI 在线时长 / 轮播计费。新增 docs/PLATFORM-NEUTRAL-VOICE.md）
 > - 更新时间：2026-09-08（D 系列结项：真实平台弹幕采集需求关闭（用户拍板），D1/D2.1~D2.3/D5.2 离线交付与调查归档后 D3~D6 不再推进；弹幕源回到「测试弹幕注入优先 + 外挂 / 人工补位」口径，决策见 §6 第 31 条）
 > - 更新时间：2026-09-08（P-M5 App 循环播报状态接线：AI 主播卡直播中展示「循环播报中 · 第 x 条 / 第 y 轮」胶囊，未绑台本提示仅弹幕回复；flutter analyze 0 issue、App 测试 103/103，见 §6 第 32 条）
+> - 更新时间：2026-09-08（doc-only：公司端计费模型 v0.3 定稿 — 借鉴竞品形态切换为「服务端扫码直充 + 卡密批次核销 + 服务端开关下发」，替换 ¥99/月订阅主路径；docs/console-roadmap.md 增 §1.5 与 §6（M5~M8 批次）；决策见 §6 第 33 条）
 
 ## 0. 当前大局
 
@@ -165,9 +166,10 @@
 24. ✅ M2 运营写操作（2026-09-07，c2e2b91）：`PUT /api/admin/quotas/:userId` 额度幂等调整 + `POST /api/admin/orders/:id/confirm` 人工确权（订阅顺延 30 天 / 当月付费档刷新），均落 audit_logs 留痕；档位常量独立 `quotaTiers.ts` 供 M4 复用；admin 套件扩至 24 例、全仓 169 例。
 25. ✅ M3 管理后台真实接口页面（2026-09-07，aa88983）：React（Vite + AntD）登录页接 `/api/admin/login` + 登录守卫；数据看板 / 商家管理（额度调整抽屉，used 只读保底）/ 算力用量 / 订单订阅（人工确权 Popconfirm）/ 内容审核（三档案 Tab）五页接通真实接口；api.ts 统一 Bearer + 401 登出、adjustQuota 对齐后端局部可空；build / lint 0 issue。
 26. ✅ M4 商业化配额接线（2026-09-07，69b3924）：话术生成前按「免费试用档」自动建档 + 预检，额度耗尽 402 `QUOTA_EXCEEDED` 不触发 AI；生成成功才把 `script_generations_used` +1（原子守门）并落一条 usage_logs（category=script_generation / deepseek-chat / costCents=0），失败 502 不扣不记；`server/src/services/quota.ts` 月度账本供后续 TTS / 直播分钟复用；服务端 171/171。
-27. ⏳ 公司端后续队列：真实支付（微信证书 / 收银台 UI）、TTS / 直播分钟扣减接线（依赖手机线稳定 user 上下文）、云部署 / SaaS 谈单 — 见 docs/console-roadmap.md §5；UI-3 全 App 真机视觉走查随手机线内录转换器批次执行。
+27. ⏳ 公司端后续队列（v0.3 更新）：M5~M8（服务端账本与卡密/扫码单 API、后台卡密批次与开关页、商家端收银台、支付宝当面付真调 — 阻塞）见 docs/console-roadmap.md §6；TTS / 直播分钟扣减接线（复用「时长余额 + quota」账本）排手机线批次；云部署 / SaaS 白标谈单；UI-3 全 App 真机视觉走查随手机线内录转换器批次执行。
 28. ✅ 平台无关定位定稿（doc-only，2026-09-08）：定位从「抖音专属」收敛为「平台无关 AI 语音助播」——商家在自选平台开播，App 提供后台 AI 语音（循环台本口播 + 弹幕问答）；声音出口天然跨平台，平台相关只剩「弹幕源」一处（用弹幕助手类成品 / 开源适配转发网关，不自研采集）；商业模式按 AI 在线直播时长 / 轮播量计费，与平台解耦。边界：仍不做多平台推流、不替商家开播，AGENTS 红线不变。新增 docs/PLATFORM-NEUTRAL-VOICE.md，本次不动代码。
 29. ✅ D2.5 合规门解锁 + AIOBS 官方 Key 探针（2026-09-08）：用户拍板「开始开发」解锁真实平台采集自研（观众身份、只采自己直播间口径不变）；用官方试用 Key（GUID）真调 `api.aiobs.cn/Douyin/Douyin/SignWss`，服务端返回 `Code:-1 ApiKey is invalid` → 该 GUID 不是 SignWss 可用 ApiKey（预计为桌面端「畅播」试用卡密，详见 docs/COMPETITOR-XCAI.md §6.4）。签名链路需有效 `apikey-dy-*` Web API Key（零售版 Web API 对接 ¥50/月起 / 合伙人档）或改走桌面客户端试用 + helperAdapter 转发路线。
 30. ✅ D2.3 抖音采集适配器离线交付（2026-09-08）：纯 TS PushFrame/Response/protobuf 解码（`douyinWire.ts`）+ 可注入签名服务的 wss 适配器（心跳 / ack / 断线 / 归一化 chat·like·enter·gift，`douyinLiveAdapter.ts`）+ 报文字节级 fixture；`createDouyinHttpSigner` 请求体与竞品同构、错误信息带服务端返回体便于排障；新增 `npm run sign:smoke` 手动探针（不烧自动化测试额度）。douyin 适配器单测 18 例全绿，服务端全量 168 passed / 117 skipped；真实链路待有效签名 Key 或桌面客户端路线（见 29）。
 31. ✅ D 系列结项（doc-only，2026-09-08）：真实平台弹幕采集需求关闭（用户拍板「弹幕抓取先关闭，其余收尾 / 结项」）。D1 / D2.1~D2.3 / D5.2 离线交付与 AIOBS 调查已归档（797cae9，douyin 适配器单测 35 例全绿），D3~D6 不再推进；对外口径回到「测试弹幕注入优先 + 外挂 / 人工补位、不自研平台采集」，同步 docs/DANMAKU-COLLECTOR-PLAN.md（标记已结项）与 docs/PLATFORM-NEUTRAL-VOICE.md（补落点注记）。自研离线采集代码保留为技术储备。
 32. ✅ P-M5 App 工作台循环播报状态（2026-09-08，9b91b0e）：LiveMonitor 补齐 `loopRunning / loopRound / loopCurrentSeq / loopMissing` 解析（服务端 monitor 早已返回）；AI 语音主播卡直播中 = 循环播报中展示「循环播报中 · 第 x 条 / 第 y 轮」胶囊（maxLines 2 防溢出），未绑台本提示「未绑定循环台本（仅弹幕回复）」；fake_backend monitor 补 4 字段 + 新增 2 条 widget 冒烟；`flutter analyze` 0 issue、App 测试 103/103。
+33. ✅ 公司端计费模型 v0.3 定稿（doc-only，2026-09-08）：借鉴竞品 xcai1618 形态（服务端收款码 + 轮询对账、卡密批次分销核销、服务端开关下发、无 App 内支付 SDK），商业化主路径从「¥99/月订阅 + 人工确权」切换为「服务端扫码直充 + 卡密批次核销 + 服务端开关下发」；「时长余额 + 月度免费试用档」两本账共存，直播在线分钟先扣余额、回落免费档、再尽 402；真实支付宝收款由 M8 持运营主体凭证接入（红线：本地不真调支付、凭证不硬编码）。docs/console-roadmap.md 增 §1.5 与 §6；AGENTS「不做多档套餐」口径随同批提交同步修订。本次未动业务代码。
