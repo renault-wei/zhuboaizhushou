@@ -15,6 +15,7 @@ import { resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { streamingService } from '../services/streaming';
 import { endLive, getLiveMonitor, listDanmaku, startLive } from '../services/liveSession';
+import { settleLiveSession } from '../services/liveBilling';
 import { danmakuGateway, DanmakuError } from '../services/danmaku';
 import { loopCaster } from '../services/loopCaster';
 
@@ -397,6 +398,24 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       }
       // M5：结束直播 = 循环播报唯一停止入口（正在播的当前句播完即止，不打断真人接管）
       loopCaster.stop(live.id);
+      // v0.3 结算接线：结束即按已播整分钟欠费式结算（先余额后免费分钟，缺额仅告警不阻断）
+      try {
+        const billing = await settleLiveSession({
+          userId: request.user.userId,
+          liveId: live.id,
+          startedAt: live.startedAt,
+          endedAt: live.endedAt,
+        });
+        if (billing.settledMinutes > 0) {
+          console.info(
+            `[liveBilling] 场次 ${live.id} 结算 ${billing.settledMinutes} 分钟（余额 ${billing.drawnFromBalance} / 免费 ${billing.drawnFromQuota}${billing.shortfallMinutes > 0 ? `，缺额 ${billing.shortfallMinutes}` : ''}）`,
+          );
+        }
+      } catch (err) {
+        console.warn(
+          `[liveBilling] 场次 ${live.id} 结算失败：${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
       return { live };
     } catch (err) {
       if (err instanceof LiveError) {

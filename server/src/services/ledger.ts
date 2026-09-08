@@ -223,3 +223,122 @@ export async function deductLiveMinutes(
     };
   });
 }
+
+// ---------- 直播结束结算（缺额式，M5 之后接线批）----------
+// 与 deductLiveMinutes 的差异：结算发生在直播**结束之后**（欠费式，服务已发生），
+// 因此不整体拒绝 —— 把当前可用（时长余额 → 免费直播分钟，按 quotaPriority）扣光，
+// 扣不完的部分以 shortfallMinutes 返回（本批只记日志，债务口径留运营后续拍板）。
+// 幂等由场次状态机保证：ended 为终态，结束路由只会对同一场结算一次。
+
+export interface DrainLiveMinutesInput {
+  userId: string;
+  /** 本次应结算的整分钟数（正整数） */
+  minutes: number;
+  /** 扣减优先级：只允许出现 balance / quota，默认先余额后免费直播分钟 */
+  priority?: ReadonlyArray<'balance' | 'quota'>;
+  remark?: string | null;
+}
+
+export interface DrainLiveMinutesResult {
+  userId: string;
+  /** 请求结算的分钟数 */
+  requestedMinutes: number;
+  /** 实际从时长余额扣掉的分钟数 */
+  drawnFromBalance: number;
+  /** 实际从当月免费直播分钟扣掉的分钟数 */
+  drawnFromQuota: number;
+  /** 未能扣到的分钟数（余额 + 免费分钟都尽后的缺额） */
+  shortfallMinutes: number;
+  /** 结算后时长余额（分钟） */
+  balanceMinutes: number;
+  /** 结算后当月免费直播剩余（分钟） */
+  monthlyQuotaRemaining: number;
+}
+
+/** 直播结束欠费式结算：有多少可供给扣多少，不整体拒绝；返回缺额供运营对账。 */
+export async function drainLiveMinutes(
+  input: DrainLiveMinutesInput,
+): Promise<DrainLiveMinutesResult> {
+  const minutes = Math.floor(input.minutes);
+  if (!Number.isInteger(minutes) || minutes <= 0) {
+    throw new Error('LEDGER_INVALID:结算分钟数必须为正整数');
+  }
+  const priority = input.priority ?? DEFAULT_QUOTA_PRIORITY;
+  const free = QUOTA_TIERS.free;
+  return db.transaction(async (tx) => {
+    const exec = toLedgerExecutor(tx);
+    const account = await exec.execute(sql`
+      SELECT balance_minutes FROM hour_balance_accounts
+      WHERE user_id = ${input.userId} FOR UPDATE
+    `);
+    const balance = (account.rows[0]?.balance_minutes as number | undefined) ?? 0;
+    const periodRows = await exec.execute(sql`SELECT to_char(now(), 'YYYY-MM') AS period`);
+    const period = periodRows.rows[0]?.period as string;
+    await exec.execute(sql`
+      INSERT INTO quotas
+        (user_id, period, tts_chars_quota, script_generations_quota, live_minutes_quota, updated_at)
+      VALUES
+        (${input.userId}, ${period}, ${free.ttsCharsQuota}, ${free.scriptGenerationsQuota},
+         ${free.liveMinutesQuota}, now())
+      ON CONFLICT (user_id, period) DO NOTHING
+    `);
+    const quota = await exec.execute(sql`
+      SELECT live_minutes_quota, live_minutes_used FROM quotas
+      WHERE user_id = ${input.userId} AND period = ${period} FOR UPDATE
+    `);
+    const quotaRow = quota.rows[0] as Record<string, unknown> | undefined;
+    const liveQuota = (quotaRow?.live_minutes_quota as number | undefined) ?? 0;
+    const liveUsed = (quotaRow?.live_minutes_used as number | undefined) ?? 0;
+    const quotaRemaining = Math.max(liveQuota - liveUsed, 0);
+
+    // 缺额式：按优先级把可供给的扣光；remaining 结算不完的部分即 shortfall
+    let remaining = minutes;
+    let drawnFromBalance = 0;
+    let drawnFromQuota = 0;
+    for (const step of priority) {
+      if (remaining <= 0) {
+        break;
+      }
+      if (step === 'balance') {
+        drawnFromBalance = Math.min(balance, remaining);
+        remaining -= drawnFromBalance;
+      } else if (step === 'quota') {
+        drawnFromQuota = Math.min(quotaRemaining, remaining);
+        remaining -= drawnFromQuota;
+      }
+    }
+    const shortfallMinutes = remaining;
+
+    const balanceAfter = balance - drawnFromBalance;
+    if (drawnFromBalance > 0) {
+      await exec.execute(sql`
+        UPDATE hour_balance_accounts
+        SET balance_minutes = balance_minutes - ${drawnFromBalance}, updated_at = now()
+        WHERE user_id = ${input.userId}
+      `);
+      await exec.execute(sql`
+        INSERT INTO hour_balance_ledger
+          (user_id, delta_minutes, balance_after_minutes, source_kind, source_id, remark)
+        VALUES
+          (${input.userId}, ${-drawnFromBalance}, ${balanceAfter}, ${LEDGER_SOURCE.LIVE_DEDUCT},
+           ${input.userId}, ${input.remark ?? null})
+      `);
+    }
+    if (drawnFromQuota > 0) {
+      await exec.execute(sql`
+        UPDATE quotas
+        SET live_minutes_used = live_minutes_used + ${drawnFromQuota}, updated_at = now()
+        WHERE user_id = ${input.userId} AND period = ${period}
+      `);
+    }
+    return {
+      userId: input.userId,
+      requestedMinutes: minutes,
+      drawnFromBalance,
+      drawnFromQuota,
+      shortfallMinutes,
+      balanceMinutes: balanceAfter,
+      monthlyQuotaRemaining: quotaRemaining - drawnFromQuota,
+    };
+  });
+}
