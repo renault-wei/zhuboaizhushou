@@ -86,6 +86,8 @@ GoRouter createAppRouter(AuthController authController) {
         builder: (context, state) => LoopScriptNewPage(
           // copy=<id>：把现有台本复制为新草稿编辑，保存后生成新台本
           copySourceId: state.uri.queryParameters['copy'],
+          // samples=<sampleId>：套用谈单演示内置示例，预填编辑器后保存生成新台本
+          sampleSourceId: state.uri.queryParameters['samples'],
         ),
       ),
       GoRoute(

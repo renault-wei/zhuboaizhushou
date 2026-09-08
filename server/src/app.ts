@@ -11,6 +11,7 @@ import { billingRoutes } from './routes/billing';
 import { douyinRoutes } from './routes/douyin';
 import { healthRoutes } from './routes/health';
 import { livesRoutes } from './routes/lives';
+import { loopScriptSamplesRoutes } from './routes/loopScriptSamples';
 import { loopScriptsRoutes } from './routes/loopScripts';
 import { scriptsRoutes } from './routes/scripts';
 import { speechOutRoutes } from './routes/speechOut';
@@ -51,6 +52,8 @@ export function buildApp() {
   // 视频上传（multipart）：单文件上限 200MB，超出返回 413
   app.register(multipart, { limits: { fileSize: 200 * 1024 * 1024 } });
   app.register(livesRoutes);
+  // 谈单演示：只读示例循环台本（套用后走 /api/loop-scripts 落库链路）
+  app.register(loopScriptSamplesRoutes);
   app.register(loopScriptsRoutes);
   app.register(speechOutRoutes);
   // 商业化账本（v0.3 M5）：扫码直充 mock / 卡密核销 / 系统开关；卡密批次后台同批注册

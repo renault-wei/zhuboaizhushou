@@ -30,10 +30,13 @@ String _industryLabel(String code) {
 
 /// 循环台本新建页。
 class LoopScriptNewPage extends ConsumerStatefulWidget {
-  const LoopScriptNewPage({super.key, this.copySourceId});
+  const LoopScriptNewPage({super.key, this.copySourceId, this.sampleSourceId});
 
   /// `?copy=<id>`：把现有台本复制为新草稿编辑，保存后生成新台本
   final String? copySourceId;
+
+  /// `?samples=<sampleId>`：套用谈单演示内置示例，预填编辑器后保存生成新台本
+  final String? sampleSourceId;
 
   @override
   ConsumerState<LoopScriptNewPage> createState() => _LoopScriptNewPageState();
@@ -51,6 +54,8 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
   late final TextEditingController _couponController;
   String? _sourceScriptId;
   String? _generationNote;
+  bool _sampleApplying = false;
+  bool _fromSample = false;
   String _draftTitle = '';
   List<LoopScriptItem> _draftItems = <LoopScriptItem>[];
 
@@ -63,6 +68,14 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
     if (copySourceId != null && copySourceId.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => _loadCopy(copySourceId),
+      );
+      return;
+    }
+    // 套用谈单演示示例：拉取内置示例并预填编辑器（示例不落库，保存才入库）
+    final sampleId = widget.sampleSourceId;
+    if (sampleId != null && sampleId.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _loadSample(sampleId),
       );
     }
   }
@@ -92,6 +105,55 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
           ..clearSnackBars()
           ..showSnackBar(SnackBar(content: Text('复制失败：${error.message}')));
       }
+    }
+  }
+
+  /// 套用谈单演示示例：拉取内置示例（只读、不落库），成功后一次性带入编辑器。
+  /// 等待期间显示加载态，避免编辑器以空初值先建、示例回来后不生效。
+  Future<void> _loadSample(String sampleId) async {
+    if (mounted) {
+      setState(() {
+        _sampleApplying = true;
+      });
+    }
+    try {
+      final samples =
+          await ref.read(apiClientProvider).fetchLoopScriptSamples();
+      if (!mounted) {
+        return;
+      }
+      LoopScriptSample? matched;
+      for (final sample in samples) {
+        if (sample.sampleId == sampleId) {
+          matched = sample;
+          break;
+        }
+      }
+      if (matched == null) {
+        setState(() {
+          _sampleApplying = false;
+        });
+        _showSnack('示例不存在或已更新，请返回台本库重选');
+        context.pop();
+        return;
+      }
+      final selectedSample = matched;
+      setState(() {
+        _draftTitle = selectedSample.title;
+        _draftItems = selectedSample.items;
+        _fromSample = true;
+        _stage = 'editor';
+        _sampleApplying = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _sampleApplying = false;
+      });
+      _showSnack('示例加载失败：${error.message}');
+      context.pop();
     }
   }
 
@@ -134,6 +196,7 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
   void _pickGenerateWay() {
     setState(() {
       _stage = 'source';
+      _fromSample = false;
     });
     _loadScripts();
   }
@@ -144,6 +207,7 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
       _draftTitle = '';
       _draftItems = <LoopScriptItem>[];
       _sourceScriptId = null;
+      _fromSample = false;
     });
   }
 
@@ -184,6 +248,7 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
         _draftTitle = source == null ? '' : '${source.displayTitle} · 循环';
         _stage = 'editor';
         _generating = false;
+        _fromSample = false;
       });
     } on ApiException catch (error) {
       if (mounted) {
@@ -215,6 +280,9 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
 
   String get _appBarTitle {
     if (_stage == 'editor') {
+      if (_fromSample) {
+        return '套用示例 · 编辑预览';
+      }
       return _sourceScriptId != null ? '生成结果预览' : '新建循环台本';
     }
     if (_stage == 'source') {
@@ -228,7 +296,13 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
     return Scaffold(
       key: const Key('loopScriptNewPage'),
       appBar: AppBar(title: Text(_appBarTitle)),
-      body: _stage == 'editor'
+      body: _sampleApplying
+          ? const Center(
+              child: CircularProgressIndicator(
+                key: Key('loopScriptSamplePrefillLoading'),
+              ),
+            )
+          : _stage == 'editor'
           ? LoopScriptEditorPanel(
               initialTitle: _draftTitle,
               initialItems: _draftItems,

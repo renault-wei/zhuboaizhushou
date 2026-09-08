@@ -26,6 +26,65 @@ const String fakeVoiceAgreementContent = '''
 平台仅在必要期限内保存相关数据，申请删除或服务终止后依法销毁。
 ''';
 
+/// 内置「示例台本（谈单演示）」假数据：镜像服务端 /api/loop-script-samples 载荷，
+/// 供台本库「示例台本」区展示与「套用示例 → 新建编辑器预填 → 保存落库」链路测试使用。
+const List<Map<String, dynamic>> fakeLoopScriptSamples = <Map<String, dynamic>>[
+  <String, dynamic>{
+    'sampleId': 'hotpot-set-a',
+    'title': '午市双人火锅套餐 · 示例一',
+    'subtitle': '双人餐讲解 + 团购券引导',
+    'items': <Map<String, dynamic>>[
+      <String, dynamic>{
+        'kind': 'opening',
+        'text': '欢迎来到直播间，今天给大家介绍我们家的午市双人火锅套餐。',
+        'gapAfterSeconds': 6,
+      },
+      <String, dynamic>{
+        'kind': 'product',
+        'text': '锅底现炒，配菜新鲜，两个人吃刚刚好。',
+        'gapAfterSeconds': 8,
+      },
+      <String, dynamic>{
+        'kind': 'coupon',
+        'text': '左下角团购有优惠券，先领券再下单更划算。',
+        'gapAfterSeconds': 6,
+      },
+      <String, dynamic>{
+        'kind': 'closing',
+        'text': '套餐数量有限，喜欢的朋友抓紧去看看。',
+        'gapAfterSeconds': 6,
+      },
+    ],
+  },
+  <String, dynamic>{
+    'sampleId': 'hotpot-set-b',
+    'title': '四人家庭火锅餐 · 示例二',
+    'subtitle': '家庭聚餐讲解 + 赠饮引导',
+    'items': <Map<String, dynamic>>[
+      <String, dynamic>{
+        'kind': 'opening',
+        'text': '一家四口来聚餐，可以看看我们的四人家庭火锅套餐。',
+        'gapAfterSeconds': 6,
+      },
+      <String, dynamic>{
+        'kind': 'product',
+        'text': '荤素搭配菜量足，还有孩子爱吃的虾滑和酥肉。',
+        'gapAfterSeconds': 8,
+      },
+      <String, dynamic>{
+        'kind': 'coupon',
+        'text': '今天下单送两份饮品，团购页面就能看到。',
+        'gapAfterSeconds': 6,
+      },
+      <String, dynamic>{
+        'kind': 'closing',
+        'text': '趁活动还在，记得约上家人一起来。',
+        'gapAfterSeconds': 6,
+      },
+    ],
+  },
+];
+
 /// 内存版假后端：覆盖登录、抖音绑定与声音授权协议相关接口，
 /// 测试全程不发起真实网络请求，响应形状与服务端保持一致。
 class FakeBackend implements HttpClientAdapter {
@@ -42,6 +101,7 @@ class FakeBackend implements HttpClientAdapter {
     this.failScriptGenerate = false,
     this.failCouponsList = false,
     this.failLoopScriptsList = false,
+    this.failLoopScriptSamples = false,
     List<Map<String, dynamic>>? voices,
     List<Map<String, dynamic>>? scripts,
     List<Map<String, dynamic>>? coupons,
@@ -135,6 +195,9 @@ class FakeBackend implements HttpClientAdapter {
 
   /// 模拟循环台本列表接口 500（测试加载失败分支）。
   final bool failLoopScriptsList;
+
+  /// 模拟内置示例循环台本接口 500（测试加载失败分支）。
+  bool failLoopScriptSamples;
 
   /// —— 收银台（M7）内存账本：钱包 / 扫码单 / 卡密 ——
 
@@ -280,6 +343,11 @@ class FakeBackend implements HttpClientAdapter {
     }
     if (scriptItem != null && options.method == 'PUT') {
       return _updateScript(options, scriptItem.group(1)!);
+    }
+    // 示例循环台本（谈单演示）：只读内置，先于 /api/loop-scripts 段匹配
+    if (options.method == 'GET' &&
+        path.endsWith('/api/loop-script-samples')) {
+      return _listLoopScriptSamples();
     }
     // 循环台本域：generate 子路径须先于单段正则匹配，避免被 :id 规则吞掉
     if (options.method == 'POST' &&
@@ -1137,6 +1205,14 @@ class FakeBackend implements HttpClientAdapter {
       );
     });
     return _jsonResponse(summaries);
+  }
+
+  /// 内置「示例台本（谈单演示）」列表：只读返回整本（含 items），套用不落库。
+  ResponseBody _listLoopScriptSamples() {
+    if (failLoopScriptSamples) {
+      return _serverError('示例台本服务暂不可用');
+    }
+    return _jsonResponse(<String, dynamic>{'samples': fakeLoopScriptSamples});
   }
 
   /// 列表摘要视图：id / title / sourceScriptId / itemCount / 时间戳。

@@ -116,6 +116,52 @@ class LoopScript {
   bool get hasEmptyTitle => title.trim().isEmpty;
 }
 
+/// 示例循环台本（谈单演示用，G7）：服务端内置只读预设，不落库、不算用户数据。
+/// 客户端「套用示例」把 [items] 带入新建台本编辑器（条目同草稿：无 id/seq），
+/// 保存仍走 /api/loop-scripts 落库链路，合规红线不变。
+class LoopScriptSample {
+  const LoopScriptSample({
+    required this.sampleId,
+    required this.title,
+    this.subtitle = '',
+    this.items = const <LoopScriptItem>[],
+  });
+
+  factory LoopScriptSample.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    final items = <LoopScriptItem>[];
+    if (rawItems is List) {
+      for (final raw in rawItems) {
+        if (raw is Map) {
+          items.add(LoopScriptItem.fromJson(Map<String, dynamic>.from(raw)));
+        }
+      }
+    }
+    return LoopScriptSample(
+      sampleId: json['sampleId']?.toString() ?? '',
+      title: json['title']?.toString() ?? '',
+      subtitle: json['subtitle']?.toString() ?? '',
+      items: items,
+    );
+  }
+
+  /// 稳定示例 id（服务端内置，客户端套用预填用）
+  final String sampleId;
+
+  /// 示例标题（套用后作为草稿标题，可再改）
+  final String title;
+
+  /// 一句话场景说明（台本库示例区选择用）
+  final String subtitle;
+
+  /// 整本条目（顺序即播放顺序；套用后进入编辑器可增删改）
+  final List<LoopScriptItem> items;
+
+  /// 示例是否可用：无 id / 空标题 / 空条目均为异常数据，不可套用
+  bool get isUsable =>
+      sampleId.isNotEmpty && title.trim().isNotEmpty && items.isNotEmpty;
+}
+
 /// 生成台本草稿（M2 generate 不落库）：返回条目供「预览后保存」，
 /// 与一次性说明（自动改写时透传，不入库、刷新后为空）。
 class LoopScriptDraft {

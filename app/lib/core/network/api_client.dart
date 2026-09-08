@@ -501,6 +501,31 @@ class ApiClient {
       throw _toApiException(error);
     }
   }
+  /// 示例循环台本（谈单演示用）：登录即可读，服务端内置只读返回整本。
+  /// 套用示例不落库、不扣生成配额；客户端把内容带入新建编辑器后，
+  /// 保存仍走 /api/loop-scripts 的落库前敏感词扫描链路，合规红线不变。
+  Future<List<LoopScriptSample>> fetchLoopScriptSamples() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/api/loop-script-samples',
+      );
+      final data = response.data ?? <String, dynamic>{};
+      final raw = data['samples'];
+      if (raw is List) {
+        return raw
+            .whereType<Map>()
+            .map(
+              (item) => LoopScriptSample.fromJson(
+                Map<String, dynamic>.from(item),
+              ),
+            )
+            .toList();
+      }
+      return <LoopScriptSample>[];
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
 
   /// 我的开播配置列表：服务端按 updatedAt desc 返回、最多 50 条，支持 ?status= 过滤。
   Future<List<Live>> listLives({String? status}) async {

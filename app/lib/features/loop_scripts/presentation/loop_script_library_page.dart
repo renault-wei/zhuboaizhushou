@@ -40,17 +40,60 @@ class LoopScriptLibraryPage extends ConsumerStatefulWidget {
 }
 
 class _LoopScriptLibraryPageState extends ConsumerState<LoopScriptLibraryPage> {
+  bool _samplesLoading = false;
+  String? _samplesError;
+  List<LoopScriptSample> _samples = <LoopScriptSample>[];
+
   @override
   void initState() {
     super.initState();
     // 首帧后再拉取列表，避免在 build 阶段发起网络请求
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(loopScriptControllerProvider.notifier).load();
+      _loadSamples();
     });
   }
 
   Future<void> _reload() async {
     await ref.read(loopScriptControllerProvider.notifier).load();
+  }
+
+  /// 拉取内置「示例台本（谈单演示）」：只读展示；套用走新建编辑器，保存才落库。
+  Future<void> _loadSamples() async {
+    if (mounted) {
+      setState(() {
+        _samplesLoading = true;
+        _samplesError = null;
+      });
+    }
+    try {
+      final samples =
+          await ref.read(apiClientProvider).fetchLoopScriptSamples();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _samplesLoading = false;
+        _samples = samples;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _samplesLoading = false;
+        _samplesError = error.message;
+      });
+    }
+  }
+
+  /// 套用示例：跳到新建页「编辑预览」（sampleId 由新建页自行拉取匹配预填），返回后刷新。
+  Future<void> _openSample(LoopScriptSample sample) async {
+    await context.push('/loop-scripts/new?samples=${sample.sampleId}');
+    if (!mounted) {
+      return;
+    }
+    await _reload();
   }
 
   void _showSnack(String message) {
@@ -155,6 +198,7 @@ class _LoopScriptLibraryPageState extends ConsumerState<LoopScriptLibraryPage> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: <Widget>[
+        ..._buildSampleSection(),
         Row(
           children: <Widget>[
             Expanded(
@@ -212,6 +256,86 @@ class _LoopScriptLibraryPageState extends ConsumerState<LoopScriptLibraryPage> {
           ..._buildScriptCards(state),
       ],
     );
+  }
+
+  /// 「示例台本（谈单演示）」区块：服务端内置只读示例，套用后进入新建编辑器，
+  /// 保存才生成自己的新台本；接口异常可重试，后端旧版本无示例时静默隐藏。
+  List<Widget> _buildSampleSection() {
+    if (_samplesLoading && _samples.isEmpty) {
+      return const <Widget>[
+        Padding(
+          padding: EdgeInsets.symmetric(vertical: 24),
+          child: Center(
+            child: CircularProgressIndicator(
+              key: Key('loopScriptSampleSectionLoading'),
+            ),
+          ),
+        ),
+      ];
+    }
+    if (_samplesError != null && _samples.isEmpty) {
+      return <Widget>[
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            children: <Widget>[
+              Text('示例台本加载失败：$_samplesError'),
+              const SizedBox(height: 8),
+              OutlinedButton(
+                key: const Key('loopScriptSamplesRetryButton'),
+                onPressed: _loadSamples,
+                child: const Text('重试'),
+              ),
+            ],
+          ),
+        ),
+      ];
+    }
+    if (_samples.isEmpty) {
+      return const <Widget>[];
+    }
+    return <Widget>[
+      Text(
+        '示例台本（谈单演示）',
+        style: Theme.of(context)
+            .textTheme
+            .titleMedium
+            ?.copyWith(fontWeight: FontWeight.bold),
+      ),
+      const SizedBox(height: 4),
+      Text(
+        '内置火锅团购循环示例 · 套用后先在编辑器里调整，保存生成你自己的新台本',
+        style: TextStyle(fontSize: 12, color: context.tokenTextHint),
+      ),
+      for (final sample in _samples)
+        Card(
+          key: Key('loopScriptSampleCard_${sample.sampleId}'),
+          margin: const EdgeInsets.symmetric(vertical: 6),
+          child: ListTile(
+            contentPadding: const EdgeInsets.only(left: 16, right: 4),
+            leading: const Icon(Icons.auto_awesome_outlined),
+            title: Text(
+              sample.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            subtitle: Text(
+              '${sample.subtitle.isEmpty ? '' : '${sample.subtitle} · '}'
+              '${sample.items.length} 条台词',
+              style: TextStyle(fontSize: 12, color: context.tokenTextBody),
+            ),
+            trailing: TextButton(
+              key: Key('loopScriptSampleApply_${sample.sampleId}'),
+              onPressed: () => _openSample(sample),
+              child: const Text('套用'),
+            ),
+            onTap: () => _openSample(sample),
+          ),
+        ),
+      const SizedBox(height: 4),
+      const Divider(),
+      const SizedBox(height: 8),
+    ];
   }
 
   List<Widget> _buildScriptCards(LoopScriptState state) {
