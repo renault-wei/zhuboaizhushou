@@ -41,6 +41,18 @@ export const liveStatusEnum = pgEnum('live_status', [
 // 订单状态：pending = 待支付，paid = 已支付，refunded = 已退款，closed = 已关闭
 export const orderStatusEnum = pgEnum('order_status', ['pending', 'paid', 'refunded', 'closed']);
 
+// 订单类型（v0.3 商业化）：subscription = 订阅（历史），recharge = 充值（扫码直充 / 卡密核销）
+export const orderKindEnum = pgEnum('order_kind', ['subscription', 'recharge']);
+
+// 订单渠道（v0.3 商业化）：manual = 运营人工确权，alipay_scan = 服务端扫码直充，card = 卡密核销
+export const orderChannelEnum = pgEnum('order_channel', ['manual', 'alipay_scan', 'card']);
+
+// 卡密批次状态：active = 可核销，disabled = 停用（停用后存量卡密拒绝核销）
+export const cardBatchStatusEnum = pgEnum('card_batch_status', ['active', 'disabled']);
+
+// 卡密状态：unused = 未核销，redeemed = 已核销，revoked = 已作废
+export const cardCodeStatusEnum = pgEnum('card_code_status', ['unused', 'redeemed', 'revoked']);
+
 // 用量流水类别：每次 AI 调用一条记录
 export const usageCategoryEnum = pgEnum('usage_category', [
   'voice_clone',
@@ -281,7 +293,7 @@ export const liveDanmaku = pgTable(
   ],
 );
 
-// ---------- orders：订单（微信支付单号 / 金额 / 状态）----------
+// ---------- orders：订单（微信支付单号 / 金额 / 状态；v0.3 增 kind/channel/hours/minutes）----------
 export const orders = pgTable(
   'orders',
   {
@@ -293,8 +305,16 @@ export const orders = pgTable(
     orderNo: varchar('order_no', { length: 64 }).notNull(),
     // 微信支付单号（回调返回后回填）
     wxTransactionId: varchar('wx_transaction_id', { length: 64 }),
+    // 订单类型：subscription = 订阅（历史），recharge = 充值（v0.3 起）
+    kind: orderKindEnum('kind').notNull().default('subscription'),
+    // 订单渠道：manual = 运营人工确权 / alipay_scan = 服务端扫码直充 / card = 卡密核销
+    channel: orderChannelEnum('channel').notNull().default('manual'),
     // 订阅档位
     plan: varchar('plan', { length: 20 }).notNull().default('monthly'),
+    // 充值档位展示小时数（kind=recharge；卡密不足 1 小时按 0 展示，精确入账看 minutes）
+    hours: integer('hours'),
+    // 精确充值分钟数（kind=recharge 入账依据：扫码单 = hours*60，卡密单 = 批次单张分钟）
+    minutes: integer('minutes'),
     // 金额，单位：分（避免浮点误差）
     amountCents: integer('amount_cents').notNull(),
     status: orderStatusEnum('status').notNull().default('pending'),
@@ -305,6 +325,49 @@ export const orders = pgTable(
     uniqueIndex('orders_order_no_unique').on(table.orderNo),
     uniqueIndex('orders_wx_transaction_id_unique').on(table.wxTransactionId),
     index('orders_user_id_idx').on(table.userId),
+  ],
+);
+
+// ---------- hour_balance_accounts：时长余额账户（v0.3：预充时长，跨月不清零）----------
+// 每用户一行（懒创建：首次入账时建档）；按「AI 在线 / 轮播分钟」扣减，
+// 余额耗尽后回落当月免费直播分钟（口径见 services/ledger.ts）
+export const hourBalanceAccounts = pgTable(
+  'hour_balance_accounts',
+  {
+    userId: uuid('user_id')
+      .primaryKey()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // 剩余时长，单位：分钟
+    balanceMinutes: integer('balance_minutes').notNull().default(0),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+);
+
+// ---------- hour_balance_ledger：时长余额流水（每次入账 / 扣减一条，含变动后余额）----------
+export const hourBalanceLedger = pgTable(
+  'hour_balance_ledger',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // 变动分钟数：正 = 入账，负 = 扣减
+    deltaMinutes: integer('delta_minutes').notNull(),
+    // 变动后余额（分钟），便于对账与审计
+    balanceAfterMinutes: integer('balance_after_minutes').notNull(),
+    // 来源：recharge_order = 充值单入账，card_redeem = 卡密核销，live_deduct = 直播扣减，admin_adjust = 运营调整
+    sourceKind: varchar('source_kind', { length: 30 }).notNull(),
+    // 来源对象 id（订单 / 卡密批次等）
+    sourceId: text('source_id'),
+    remark: varchar('remark', { length: 200 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('hour_balance_ledger_user_created_idx').on(table.userId, table.createdAt),
+    index('hour_balance_ledger_source_idx').on(table.sourceKind, table.sourceId),
   ],
 );
 
@@ -398,4 +461,61 @@ export const auditLogs = pgTable(
     index('audit_logs_created_at_idx').on(table.createdAt),
     index('audit_logs_admin_user_id_idx').on(table.adminUserId),
   ],
+);
+
+// ---------- card_batches：卡密批次（v0.3：线下 / 渠道分发，每张 = N 分钟时长）----------
+export const cardBatches = pgTable(
+  'card_batches',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: varchar('name', { length: 100 }).notNull(),
+    // 本批次生成的卡密总张数（生成后不再变动）
+    totalCount: integer('total_count').notNull(),
+    // 单张卡密可核销的时长，单位：分钟
+    minutesPerCard: integer('minutes_per_card').notNull(),
+    status: cardBatchStatusEnum('status').notNull().default('active'),
+    remark: varchar('remark', { length: 200 }),
+    // 创建人（后台运营）；运营账号删除时保留批次
+    createdBy: uuid('created_by').references(() => adminUsers.id, { onDelete: 'set null' }),
+    ...timestamps(),
+  },
+  (table) => [index('card_batches_created_by_idx').on(table.createdBy)],
+);
+
+// ---------- card_codes：卡密（批次外键 / 唯一卡密 / 核销状态）----------
+export const cardCodes = pgTable(
+  'card_codes',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    batchId: uuid('batch_id')
+      .notNull()
+      .references(() => cardBatches.id, { onDelete: 'cascade' }),
+    // 卡密原文（含分组短横线），核销时统一大写归一后比对
+    code: varchar('code', { length: 40 }).notNull(),
+    status: cardCodeStatusEnum('status').notNull().default('unused'),
+    // 核销商家与时间（status=redeemed 时回填）
+    redeemedByUserId: uuid('redeemed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    redeemedAt: timestamp('redeemed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('card_codes_code_unique').on(table.code),
+    index('card_codes_batch_id_idx').on(table.batchId),
+    index('card_codes_status_idx').on(table.status),
+  ],
+);
+
+// ---------- app_config：服务端开关（key→jsonb，v0.3：充值入口显隐 / 时长档位 / 公告 / 扣减优先级）----------
+// 本期只做全局开关；Key 结构预留 merchant 维度（OEM 谈单后另立白标隔离）。
+export const appConfig = pgTable(
+  'app_config',
+  {
+    key: varchar('key', { length: 64 }).primaryKey(),
+    value: jsonb('value').notNull(),
+    updatedBy: uuid('updated_by').references(() => adminUsers.id, { onDelete: 'set null' }),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
 );
