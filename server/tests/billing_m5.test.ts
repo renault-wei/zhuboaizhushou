@@ -433,6 +433,86 @@ describe('卡密批次生成与核销（M5 服务端账本）', () => {
   });
 });
 
+describe('商家钱包总览（M7 收银台前置）', () => {
+  dbIt('GET /api/wallet：零余额起步，核销后余额/流水/充值单同步可见，含 pending 扫码单', async () => {
+    const merchant = await registerMerchant(randomPhone());
+    const hdrs = { authorization: `Bearer ${merchant.token}` };
+
+    // 空钱包：余额 0、无流水、无充值单；当月免费直播额度行尚未建档也可读
+    const empty = await app.inject({ method: 'GET', url: '/api/wallet', headers: hdrs });
+    expect(empty.statusCode).toBe(200);
+    const emptyBody = empty.json() as {
+      balanceMinutes: number;
+      monthlyLive: { remainingMinutes: number; usedMinutes: number };
+      transactions: unknown[];
+      rechargeOrders: unknown[];
+    };
+    expect(emptyBody.balanceMinutes).toBe(0);
+    expect(emptyBody.transactions).toEqual([]);
+    expect(emptyBody.rechargeOrders).toEqual([]);
+    expect(emptyBody.monthlyLive.usedMinutes).toBeGreaterThanOrEqual(0);
+    expect(emptyBody.monthlyLive.remainingMinutes).toBeGreaterThanOrEqual(0);
+
+    // 卡密核销 90 分钟：流水 +1、余额 +90、充值单为 paid
+    const adminUser = `adm-m7-wallet-${Date.now().toString(36)}`;
+    await createAdmin(adminUser);
+    const adminHdrs = await adminHeaders(adminUser);
+    const { codes } = await createCardBatch(adminHdrs);
+    const redeem = await app.inject({
+      method: 'POST',
+      url: '/api/cards/redeem',
+      headers: hdrs,
+      payload: { code: codes[0].code },
+    });
+    expect(redeem.statusCode).toBe(200);
+    const afterRedeem = await app.inject({
+      method: 'GET',
+      url: '/api/wallet',
+      headers: hdrs,
+    });
+    expect(afterRedeem.statusCode).toBe(200);
+    const body = afterRedeem.json() as {
+      balanceMinutes: number;
+      transactions: Array<{
+        deltaMinutes: number;
+        balanceAfterMinutes: number;
+        sourceKind: string;
+      }>;
+      rechargeOrders: Array<{ status: string; amountCents: number }>;
+    };
+    expect(body.balanceMinutes).toBe(90);
+    expect(body.transactions[0]).toMatchObject({
+      deltaMinutes: 90,
+      balanceAfterMinutes: 90,
+      sourceKind: 'card_redeem',
+    });
+    expect(body.rechargeOrders[0]).toMatchObject({ status: 'paid', amountCents: 0 });
+
+    // 再下一笔 10h 扫码 mock 单：钱包里出现 pending 待确认充值单
+    const scan = await app.inject({
+      method: 'POST',
+      url: '/api/recharge/scan',
+      headers: hdrs,
+      payload: { hours: 10 },
+    });
+    expect(scan.statusCode).toBe(200);
+    const withScan = await app.inject({
+      method: 'GET',
+      url: '/api/wallet',
+      headers: hdrs,
+    });
+    const scanBody = withScan.json() as {
+      rechargeOrders: Array<{ status: string; amountCents: number; hours: number | null }>;
+    };
+    expect(scanBody.rechargeOrders).toHaveLength(2);
+    expect(scanBody.rechargeOrders[0]).toMatchObject({ status: 'pending', amountCents: 8990, hours: 10 });
+
+    // 未登录访问被拒
+    const anon = await app.inject({ method: 'GET', url: '/api/wallet' });
+    expect(anon.statusCode).toBe(401);
+  });
+});
+
 describe('时长扣减（services/ledger）', () => {
   dbIt('余额优先，余额不足回落当月免费直播分钟', async () => {
     const merchant = await registerMerchant(randomPhone());

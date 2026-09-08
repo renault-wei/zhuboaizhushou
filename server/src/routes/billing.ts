@@ -21,6 +21,34 @@ function genOrderNo(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${rand}`;
 }
 
+/** 流水行 → 响应结构（snake 库列名收敛为 camel 对外字段） */
+function mapLedgerRow(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    deltaMinutes: row.delta_minutes as number,
+    balanceAfterMinutes: row.balance_after_minutes as number,
+    sourceKind: row.source_kind as string,
+    sourceId: row.source_id ?? null,
+    remark: row.remark ?? null,
+    createdAt: row.created_at,
+  };
+}
+
+/** 充值订单行 → 响应结构（只暴露商家端所需字段） */
+function mapRechargeOrderRow(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    orderNo: row.order_no as string,
+    channel: row.channel as string,
+    hours: row.hours ?? null,
+    minutes: row.minutes ?? null,
+    amountCents: row.amount_cents as number,
+    status: row.status as string,
+    paidAt: row.paid_at ?? null,
+    createdAt: row.created_at,
+  };
+}
+
 /** 卡密归一：去掉空白 / 短横线并转大写（与入库的规范卡密比对） */
 function normalizeCardCode(raw: unknown): string {
   if (typeof raw !== 'string') {
@@ -34,6 +62,7 @@ function normalizeCardCode(raw: unknown): string {
  * POST /api/recharge/scan 服务端扫码下单（mock 通道）
  * POST /api/recharge/poll 轮询确认（mock 通道只读，paid 由运营确权置位）
  * POST /api/cards/redeem 卡密核销入账（幂等：重复提交不重复入账）
+ * GET  /api/wallet       钱包总览（余额 / 当月免费直播剩余 / 流水 / 最近充值单）
  * GET  /api/app/config   服务端开关下发（商家端读取）
  */
 export const billingRoutes: FastifyPluginAsync = async (app) => {
@@ -205,6 +234,47 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
       orderNo: outcome.orderNo,
       creditedMinutes: outcome.creditedMinutes,
       balanceMinutes: outcome.balanceMinutes,
+    };
+  });
+
+  // 钱包总览（M7 收银台前置）：时长余额 + 当月免费直播剩余 + 时长流水 + 最近充值单，
+  // 一次取齐供收银台首页渲染；流水与订单只返回最近 N 条，避免移动端全量拉取。
+  app.get('/api/wallet', { preHandler: app.authenticate }, async (request) => {
+    const userId = request.user.userId;
+    const periodRows = await db.execute(sql`SELECT to_char(now(), 'YYYY-MM') AS period`);
+    const period = periodRows.rows[0]?.period as string;
+    const quotaRows = await db.execute(sql`
+      SELECT live_minutes_quota, live_minutes_used
+      FROM quotas
+      WHERE user_id = ${userId} AND period = ${period}
+      LIMIT 1
+    `);
+    const quotaRow = quotaRows.rows[0] as Record<string, unknown> | undefined;
+    const liveQuota = (quotaRow?.live_minutes_quota as number | undefined) ?? 0;
+    const liveUsed = (quotaRow?.live_minutes_used as number | undefined) ?? 0;
+    const txRows = await db.execute(sql`
+      SELECT id, delta_minutes, balance_after_minutes, source_kind, source_id, remark, created_at
+      FROM hour_balance_ledger
+      WHERE user_id = ${userId}
+      ORDER BY created_at DESC
+      LIMIT 50
+    `);
+    const orderRows = await db.execute(sql`
+      SELECT id, order_no, channel, hours, minutes, amount_cents, status, paid_at, created_at
+      FROM orders
+      WHERE user_id = ${userId} AND kind = 'recharge'
+      ORDER BY created_at DESC
+      LIMIT 20
+    `);
+    return {
+      balanceMinutes: await readBalanceMinutes(userId),
+      monthlyLive: {
+        quotaMinutes: liveQuota,
+        usedMinutes: liveUsed,
+        remainingMinutes: Math.max(liveQuota - liveUsed, 0),
+      },
+      transactions: (txRows.rows as Record<string, unknown>[]).map(mapLedgerRow),
+      rechargeOrders: (orderRows.rows as Record<string, unknown>[]).map(mapRechargeOrderRow),
     };
   });
 
