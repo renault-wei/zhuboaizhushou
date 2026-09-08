@@ -130,10 +130,89 @@ export interface OrderRow {
   plan: string;
   amount_cents: number;
   status: 'pending' | 'paid' | 'refunded' | 'closed';
+  kind?: 'subscription' | 'recharge' | null;
+  channel?: 'manual' | 'alipay_scan' | 'card' | null;
+  hours?: number | null;
+  minutes?: number | null;
   paid_at?: string | null;
   created_at: string;
   phone: string;
   nickname?: string | null;
+}
+
+export type OrderKind = NonNullable<OrderRow['kind']>;
+export type OrderChannel = NonNullable<OrderRow['channel']>;
+
+export interface CardBatchRow {
+  id: string;
+  name: string;
+  total_count: number;
+  minutes_per_card: number;
+  status: 'active' | 'disabled';
+  remark: string | null;
+  created_at: string;
+  issued_count: number;
+  redeemed_count: number;
+}
+
+export interface CardCodeRow {
+  id: string;
+  code: string;
+  displayCode: string;
+  status: 'unused' | 'redeemed' | 'revoked';
+  redeemedPhone: string | null;
+  redeemedNickname: string | null;
+  redeemedAt: string | null;
+  createdAt: string;
+}
+
+export interface CardBatchDetail {
+  batch: {
+    id: string;
+    name: string;
+    totalCount: number;
+    minutesPerCard: number;
+    status: 'active' | 'disabled';
+    remark: string | null;
+    createdAt: string;
+  };
+  codes: CardCodeRow[];
+}
+
+export interface CreateCardBatchInput {
+  name: string;
+  count: number;
+  minutesPerCard: number;
+  remark?: string;
+}
+
+export interface CreateCardBatchResult {
+  batch: CardBatchDetail['batch'];
+  codes: { code: string; displayCode: string }[];
+}
+
+export interface PricePack {
+  hours: number;
+  amountCents: number;
+}
+
+export interface PublicAppConfig {
+  showCharge: boolean;
+  pricePacks: PricePack[];
+  notice: string;
+  quotaPriority: Array<'balance' | 'quota'>;
+}
+
+export interface AppConfigRow {
+  key: string;
+  value: unknown;
+  updatedBy: string | null;
+  updatedAt: string;
+}
+
+export interface AppConfigResponse {
+  config: PublicAppConfig;
+  rows: AppConfigRow[];
 }
 
 export interface BlockedScriptRow {
@@ -239,12 +318,53 @@ export async function listOrders(params: {
   page: number;
   pageSize: number;
   status?: string;
+  kind?: OrderKind;
+  channel?: OrderChannel;
 }): Promise<PageResult<OrderRow>> {
   return request<PageResult<OrderRow>>(`/api/admin/orders${buildQuery(params)}`);
 }
 
 export async function confirmOrder(orderId: string): Promise<unknown> {
   return request(`/api/admin/orders/${orderId}/confirm`, { method: 'POST' });
+}
+
+// ---------- 卡密批次 / 系统开关（v0.3 商业化 M6 后台页）----------
+
+export async function listCardBatches(params: {
+  page: number;
+  pageSize: number;
+  status?: string;
+}): Promise<PageResult<CardBatchRow>> {
+  return request<PageResult<CardBatchRow>>(
+    `/api/admin/card-batches${buildQuery(params)}`,
+  );
+}
+
+export async function createCardBatch(
+  body: CreateCardBatchInput,
+): Promise<CreateCardBatchResult> {
+  return request<CreateCardBatchResult>('/api/admin/card-batches', {
+    method: 'POST',
+    body,
+  });
+}
+
+export async function fetchCardBatch(batchId: string): Promise<CardBatchDetail> {
+  return request<CardBatchDetail>(`/api/admin/card-batches/${batchId}`);
+}
+
+export async function fetchAppConfig(): Promise<AppConfigResponse> {
+  return request<AppConfigResponse>('/api/admin/app-config');
+}
+
+export async function updateAppConfigKey(
+  key: string,
+  value: unknown,
+): Promise<{ key: string; value: unknown; updatedAt: string }> {
+  return request(`/api/admin/app-config/${key}`, {
+    method: 'PUT',
+    body: { value },
+  });
 }
 
 export async function listBlockedScripts(params: {
