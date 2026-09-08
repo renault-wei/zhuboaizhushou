@@ -16,6 +16,7 @@ import 'package:starvoice_app/features/assistant_speaker/data/audioplayers_speec
 import 'package:starvoice_app/features/recording/application/recorder_controller.dart';
 import 'package:starvoice_app/features/scripts/application/script_controller.dart';
 import 'package:starvoice_app/features/voices/application/voice_library_controller.dart';
+import 'package:starvoice_app/features/wallet/application/wallet_controller.dart';
 import 'package:starvoice_app/router/app_router.dart';
 
 /// 本地会话存储
@@ -151,6 +152,13 @@ final loopScriptControllerProvider =
 final couponControllerProvider =
     StateNotifierProvider.autoDispose<CouponController, CouponState>((ref) {
       return CouponController(ref.watch(apiClientProvider));
+    });
+
+/// 收银台控制器：钱包总览 + 服务端开关 + 扫码 / 卡密核销动作。
+/// autoDispose：离开收银台页即销毁，避免页面级状态长期驻留。
+final walletControllerProvider =
+    StateNotifierProvider.autoDispose<WalletController, WalletState>((ref) {
+      return WalletController(ref.watch(apiClientProvider));
     });
 
 /// 开播配置列表控制器：开播配置列表页使用（列表 + 引用资源名映射 + 删除）。
