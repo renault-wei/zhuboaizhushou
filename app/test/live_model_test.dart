@@ -75,7 +75,10 @@ void main() {
     expect(Live.fromJson(_liveJson(status: 'ready')).status, LiveStatus.ready);
     expect(Live.fromJson(_liveJson(status: 'live')).status, LiveStatus.live);
     expect(Live.fromJson(_liveJson(status: 'ended')).status, LiveStatus.ended);
-    expect(Live.fromJson(_liveJson(status: 'failed')).status, LiveStatus.failed);
+    expect(
+      Live.fromJson(_liveJson(status: 'failed')).status,
+      LiveStatus.failed,
+    );
     expect(
       Live.fromJson(_liveJson(status: 'unknown')).status,
       LiveStatus.failed,
@@ -130,5 +133,72 @@ void main() {
       expect(finished.isFinished, isTrue);
       expect(finished.isDeleteProtected, isFalse);
     }
+  });
+
+  group('LiveEndSummary / LiveBilling：解析与结算文案', () {
+    Map<String, dynamic> billingJson({
+      int settledMinutes = 0,
+      int drawnFromBalance = 0,
+      int drawnFromQuota = 0,
+      int shortfallMinutes = 0,
+    }) {
+      return <String, dynamic>{
+        'settledMinutes': settledMinutes,
+        'drawnFromBalance': drawnFromBalance,
+        'drawnFromQuota': drawnFromQuota,
+        'shortfallMinutes': shortfallMinutes,
+      };
+    }
+
+    test('endLive 响应：live + billing 完整映射', () {
+      final summary = LiveEndSummary.fromJson(<String, dynamic>{
+        'live': _liveJson(status: 'ended'),
+        'billing': billingJson(
+          settledMinutes: 10,
+          drawnFromBalance: 6,
+          drawnFromQuota: 4,
+        ),
+      });
+      expect(summary.live.status, LiveStatus.ended);
+      final billing = summary.billing;
+      expect(billing, isNotNull);
+      expect(billing!.settledMinutes, 10);
+      expect(billing.drawnFromBalance, 6);
+      expect(billing.drawnFromQuota, 4);
+      expect(billing.shortfallMinutes, 0);
+    });
+
+    test('endLive 响应：billing 缺失（结算未启用 / 服务端降级）不报错', () {
+      final summary = LiveEndSummary.fromJson(<String, dynamic>{
+        'live': _liveJson(status: 'ended'),
+      });
+      expect(summary.live.status, LiveStatus.ended);
+      expect(summary.billing, isNull);
+    });
+
+    test('LiveBilling.summaryText：不足 1 分钟不计费提示', () {
+      final billing = LiveBilling.fromJson(billingJson());
+      expect(billing.summaryText, '本场直播不足 1 分钟，未产生时长扣费');
+    });
+
+    test('LiveBilling.summaryText：余额 + 免费时长抵扣分行展示', () {
+      final billing = LiveBilling.fromJson(
+        billingJson(settledMinutes: 10, drawnFromBalance: 6, drawnFromQuota: 4),
+      );
+      expect(billing.summaryText, contains('共结算 10 分钟'));
+      expect(billing.summaryText, contains('时长余额抵扣 6 分钟'));
+      expect(billing.summaryText, contains('免费直播时长抵扣 4 分钟'));
+      expect(billing.summaryText, isNot(contains('可用时长不足')));
+    });
+
+    test('LiveBilling.summaryText：双耗尽缺额行展示、未命中抵扣不出现', () {
+      final billing = LiveBilling.fromJson(
+        billingJson(settledMinutes: 25, shortfallMinutes: 25),
+      );
+      expect(billing.summaryText, contains('共结算 25 分钟'));
+      expect(billing.summaryText, contains('可用时长不足 25 分钟'));
+      expect(billing.summaryText, isNot(contains('时长余额抵扣')));
+      expect(billing.summaryText, isNot(contains('免费直播时长抵扣')));
+    });
   });
 }

@@ -275,3 +275,82 @@ String? _nullableString(Object? raw) {
   final value = raw?.toString() ?? '';
   return value.isEmpty ? null : value;
 }
+
+/// 直播结束的按分钟结算摘要：对应 POST /api/lives/:id/end 响应中的 billing。
+/// 服务端口径 =「先扣时长余额 → 回落当月免费直播分钟」的缺额式结算；不足 1
+/// 分钟 settledMinutes=0（不扣费）。billing 缺失 = 结算未启用或服务端异常降级
+/// （结束本身不阻断），客户端只做展示、不参与金额计算。
+class LiveBilling {
+  const LiveBilling({
+    required this.settledMinutes,
+    required this.drawnFromBalance,
+    required this.drawnFromQuota,
+    required this.shortfallMinutes,
+  });
+
+  factory LiveBilling.fromJson(Map<String, dynamic> json) {
+    int intOf(Object? raw) => (raw is num) ? raw.toInt() : 0;
+    return LiveBilling(
+      settledMinutes: intOf(json['settledMinutes']),
+      drawnFromBalance: intOf(json['drawnFromBalance']),
+      drawnFromQuota: intOf(json['drawnFromQuota']),
+      shortfallMinutes: intOf(json['shortfallMinutes']),
+    );
+  }
+
+  /// 结算到的整分钟数（不足 1 分钟 = 0，不产生任何扣减）
+  final int settledMinutes;
+
+  /// 本次从「时长余额」抵扣的分钟数
+  final int drawnFromBalance;
+
+  /// 本次从「当月免费直播分钟」抵扣的分钟数
+  final int drawnFromQuota;
+
+  /// 余额与免费分钟都尽后的缺额分钟数（>0 = 欠费式结算，系统已记录）
+  final int shortfallMinutes;
+
+  /// 结束弹层用结算文案：不足 1 分钟给出「未计费」提示；有结算时逐项列出
+  /// 抵扣与缺额（无缺额不展示缺额行）。
+  String get summaryText {
+    if (settledMinutes <= 0) {
+      return '本场直播不足 1 分钟，未产生时长扣费';
+    }
+    final lines = <String>['本场按直播分钟计费，共结算 $settledMinutes 分钟'];
+    if (drawnFromBalance > 0) {
+      lines.add('· 时长余额抵扣 $drawnFromBalance 分钟');
+    }
+    if (drawnFromQuota > 0) {
+      lines.add('· 免费直播时长抵扣 $drawnFromQuota 分钟');
+    }
+    if (shortfallMinutes > 0) {
+      lines.add('· 可用时长不足 $shortfallMinutes 分钟，系统已记录待对账');
+    }
+    return lines.join('\n');
+  }
+}
+
+/// 结束直播响应：POST /api/lives/:id/end 返回 live + 可选 billing。
+/// 客户端只在结束成功后读取一次做展示，不参与计费计算。
+class LiveEndSummary {
+  const LiveEndSummary({required this.live, this.billing});
+
+  factory LiveEndSummary.fromJson(Map<String, dynamic> json) {
+    final liveJson = json['live'];
+    final billingJson = json['billing'];
+    return LiveEndSummary(
+      live: Live.fromJson(
+        liveJson is Map ? Map<String, dynamic>.from(liveJson) : json,
+      ),
+      billing: billingJson is Map
+          ? LiveBilling.fromJson(Map<String, dynamic>.from(billingJson))
+          : null,
+    );
+  }
+
+  /// 结束后的最新开播配置（status = ended）
+  final Live live;
+
+  /// 按分钟结算摘要；结算未启用 / 服务端降级时为 null
+  final LiveBilling? billing;
+}

@@ -731,7 +731,39 @@ class FakeBackend implements HttpClientAdapter {
       'updatedAt': now,
     };
     lives[index] = updated;
-    return _jsonResponse({'live': updated});
+    // 镜像服务端 /end 结算：按已播整分钟先扣时长余额、再扣免费额度，
+    // 双双不足计 shortfall（只展示不阻断），与 settleLiveSession 口径一致。
+    var wholeMinutes = 0;
+    final startedAt = DateTime.tryParse(
+      lives[index]['startedAt']?.toString() ?? '',
+    );
+    final endedAt = DateTime.tryParse(now);
+    if (startedAt != null && endedAt != null && endedAt.isAfter(startedAt)) {
+      wholeMinutes = endedAt.difference(startedAt).inMinutes;
+    }
+    var remaining = wholeMinutes;
+    final fromBalance = remaining > 0
+        ? (remaining > balanceMinutes ? balanceMinutes : remaining)
+        : 0;
+    remaining -= fromBalance;
+    final quotaRemaining = monthlyQuotaMinutes > monthlyUsedMinutes
+        ? monthlyQuotaMinutes - monthlyUsedMinutes
+        : 0;
+    final fromQuota = remaining > 0
+        ? (remaining > quotaRemaining ? quotaRemaining : remaining)
+        : 0;
+    remaining -= fromQuota;
+    balanceMinutes -= fromBalance;
+    monthlyUsedMinutes += fromQuota;
+    return _jsonResponse({
+      'live': updated,
+      'billing': <String, dynamic>{
+        'settledMinutes': wholeMinutes,
+        'drawnFromBalance': fromBalance,
+        'drawnFromQuota': fromQuota,
+        'shortfallMinutes': remaining,
+      },
+    });
   }
 
   /// 直播中监控快照（镜像服务端 getLiveMonitor）：状态 + 已播时长 + 弹幕计数。

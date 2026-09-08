@@ -398,9 +398,11 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       }
       // M5：结束直播 = 循环播报唯一停止入口（正在播的当前句播完即止，不打断真人接管）
       loopCaster.stop(live.id);
-      // v0.3 结算接线：结束即按已播整分钟欠费式结算（先余额后免费分钟，缺额仅告警不阻断）
+      // v0.3 结算接线：结束即按已播整分钟欠费式结算（先余额后免费分钟，缺额仅告警不阻断）。
+      // billing 随响应回给客户端：工作台结束弹层展示「本场结算时长与抵扣明细」。
+      let billing: Awaited<ReturnType<typeof settleLiveSession>> | null = null;
       try {
-        const billing = await settleLiveSession({
+        billing = await settleLiveSession({
           userId: request.user.userId,
           liveId: live.id,
           startedAt: live.startedAt,
@@ -416,7 +418,7 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
           `[liveBilling] 场次 ${live.id} 结算失败：${err instanceof Error ? err.message : String(err)}`,
         );
       }
-      return { live };
+      return { live, billing };
     } catch (err) {
       if (err instanceof LiveError) {
         return reply.code(statusCodeOf(err.code)).send({ error: err.code, message: err.message });

@@ -73,6 +73,34 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
     }
   }
 
+  /// 结束结算弹层：展示本场按分钟计费的结算摘要（不足 1 分钟 / 无结算摘要时
+  /// 提示未扣费），用户点「知道了」后刷新列表。
+  Future<void> _showEndSummary(LiveEndSummary summary) {
+    final lines = <String>[
+      '直播已结束，AI 语音主播已下线。',
+      '',
+      summary.billing?.summaryText ?? '本场未产生时长扣费',
+    ];
+    return showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('liveEndSummaryDialog'),
+        title: const Text('本场结算'),
+        content: Text(
+          lines.join('\n'),
+          style: const TextStyle(fontSize: 14, height: 1.5),
+        ),
+        actions: [
+          FilledButton(
+            key: const Key('liveEndSummaryConfirmButton'),
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 结束直播：live → ended，二次确认后调用，成功后刷新列表。
   Future<void> _endLive(Live live) async {
     final confirmed = await showDialog<bool>(
@@ -98,11 +126,16 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
       return;
     }
     try {
-      await ref.read(apiClientProvider).endLive(live.id);
-      if (mounted) {
-        _showSnack('直播已结束');
-        await _reload();
+      final summary = await ref.read(apiClientProvider).endLive(live.id);
+      if (!mounted) {
+        return;
       }
+      await _showEndSummary(summary);
+      if (!mounted) {
+        return;
+      }
+      _showSnack('直播已结束');
+      await _reload();
     } on ApiException catch (error) {
       if (mounted) {
         _showSnack('结束失败：${error.message}');

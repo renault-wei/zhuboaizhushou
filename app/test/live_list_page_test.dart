@@ -17,6 +17,8 @@ Map<String, dynamic> _liveJson({
   String? voiceId,
   String? scriptId,
   String? couponId,
+  String? startedAt,
+  String? endedAt,
 }) {
   final now = DateTime.now().toUtc();
   return <String, dynamic>{
@@ -29,8 +31,8 @@ Map<String, dynamic> _liveJson({
     'scriptId': scriptId,
     'status': status,
     'aiBadgeShown': true,
-    'startedAt': null,
-    'endedAt': null,
+    'startedAt': startedAt,
+    'endedAt': endedAt,
     'createdAt': now.toIso8601String(),
     'updatedAt': now.toIso8601String(),
   };
@@ -52,19 +54,23 @@ Future<void> _pumpListRouter(WidgetTester tester, FakeBackend backend) async {
   final router = GoRouter(
     initialLocation: '/lives',
     routes: <RouteBase>[
-      GoRoute(path: '/lives', builder: (context, state) => const LiveListPage()),
-      GoRoute(path: '/lives/new', builder: (context, state) => const LiveFormPage()),
+      GoRoute(
+        path: '/lives',
+        builder: (context, state) => const LiveListPage(),
+      ),
+      GoRoute(
+        path: '/lives/new',
+        builder: (context, state) => const LiveFormPage(),
+      ),
       GoRoute(
         path: '/lives/:id',
-        builder: (context, state) => LiveFormPage(
-          liveId: state.pathParameters['id'] ?? '',
-        ),
+        builder: (context, state) =>
+            LiveFormPage(liveId: state.pathParameters['id'] ?? ''),
       ),
       GoRoute(
         path: '/lives/:id/monitor',
-        builder: (context, state) => LiveMonitorPage(
-          liveId: state.pathParameters['id'] ?? '',
-        ),
+        builder: (context, state) =>
+            LiveMonitorPage(liveId: state.pathParameters['id'] ?? ''),
       ),
     ],
   );
@@ -91,7 +97,9 @@ void main() {
     expect(find.byKey(const Key('liveRefreshButton')), findsOneWidget);
   });
 
-  testWidgets('列表分段：草稿 / 就绪·合成中·直播中 / 已结束分组展示，摘要含绑定资源名', (WidgetTester tester) async {
+  testWidgets('列表分段：草稿 / 就绪·合成中·直播中 / 已结束分组展示，摘要含绑定资源名', (
+    WidgetTester tester,
+  ) async {
     final backend = FakeBackend(
       douyinBound: true,
       voices: <Map<String, dynamic>>[
@@ -155,10 +163,7 @@ void main() {
     expect(find.byKey(const Key('liveEdit_live-002')), findsNothing);
 
     // 摘要展示音色 / 话术 / 团购券名称
-    expect(
-      find.text('音色：主播小美 · 话术：火锅套餐话术 · 券：双人火锅套餐'),
-      findsOneWidget,
-    );
+    expect(find.text('音色：主播小美 · 话术：火锅套餐话术 · 券：双人火锅套餐'), findsOneWidget);
 
     // 删除保护：idle 可删，ready 的删除按钮禁用
     final idleDelete = tester.widget<IconButton>(
@@ -171,7 +176,9 @@ void main() {
     expect(readyDelete.onPressed, isNull);
   });
 
-  testWidgets('合成中（processing）并入进行中分段：展示「合成中」徽章并受删除保护', (WidgetTester tester) async {
+  testWidgets('合成中（processing）并入进行中分段：展示「合成中」徽章并受删除保护', (
+    WidgetTester tester,
+  ) async {
     final backend = FakeBackend(
       lives: <Map<String, dynamic>>[
         _liveJson(id: 'live-004', title: '午市合成中的直播', status: 'processing'),
@@ -292,5 +299,51 @@ void main() {
     // 收尾：卸载整棵树，取消工作台轮询 / 秒表定时器
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 5));
+  });
+
+  testWidgets('结束直播：结算弹层展示分钟抵扣（先扣余额），确认后回列表为已结束', (WidgetTester tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(
+          id: 'live-001',
+          title: '午市火锅直播',
+          status: 'live',
+          startedAt: DateTime.now()
+              .toUtc()
+              .subtract(const Duration(minutes: 10))
+              .toIso8601String(),
+        ),
+      ],
+    );
+    await _pumpListPage(tester, backend);
+    expect(find.text('就绪 / 合成中 / 直播中（1）'), findsOneWidget);
+    expect(find.byKey(const Key('liveEndAction_live-001')), findsOneWidget);
+    expect(backend.balanceMinutes, 120);
+
+    // 点击结束并确认
+    await tester.tap(find.byKey(const Key('liveEndAction_live-001')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('liveEndDialog')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('liveEndConfirmButton')));
+    await tester.pumpAndSettle();
+
+    // 结算弹层：本场 10 分钟，先扣时长余额
+    expect(find.byKey(const Key('liveEndSummaryDialog')), findsOneWidget);
+    expect(find.text('本场结算'), findsOneWidget);
+    expect(find.textContaining('共结算 10 分钟'), findsOneWidget);
+    expect(find.textContaining('时长余额抵扣 10 分钟'), findsOneWidget);
+    expect(backend.balanceMinutes, 110);
+    expect(backend.lives.first['status'], 'ended');
+
+    // 确认后回列表：已结束分组 + 提示
+    await tester.tap(find.byKey(const Key('liveEndSummaryConfirmButton')));
+    await tester.pumpAndSettle();
+    expect(find.text('已结束（1）'), findsOneWidget);
+    expect(find.byKey(const Key('liveEndAction_live-001')), findsNothing);
+    expect(find.text('直播已结束'), findsOneWidget);
+
+    // 等待 SnackBar 自动消失，避免遗留计时器
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
   });
 }

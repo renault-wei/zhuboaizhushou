@@ -317,4 +317,43 @@ void main() {
 
     await _unmount(tester);
   });
+
+  testWidgets('直播中结束：结算弹层展示本场分钟抵扣，余额同步扣减（按分钟计费）', (tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(
+          id: 'live-001',
+          title: '午市火锅直播',
+          status: 'live',
+          startedAt: DateTime.now()
+              .toUtc()
+              .subtract(const Duration(minutes: 10))
+              .toIso8601String(),
+        ),
+      ],
+    );
+    await _pumpMonitor(tester, backend);
+    expect(find.byKey(const Key('liveEndButton')), findsOneWidget);
+    expect(backend.balanceMinutes, 120);
+
+    // 点击结束并确认
+    await tester.tap(find.byKey(const Key('liveEndButton')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byKey(const Key('liveEndDialog')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('liveEndConfirmButton')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // 结算弹层：本场 10 分钟先扣余额；不点「知道了」，页面由测试卸载收尾
+    expect(find.byKey(const Key('liveEndSummaryDialog')), findsOneWidget);
+    expect(find.text('本场结算'), findsOneWidget);
+    expect(find.textContaining('共结算 10 分钟'), findsOneWidget);
+    expect(find.textContaining('时长余额抵扣 10 分钟'), findsOneWidget);
+    expect(backend.balanceMinutes, 110);
+    expect(backend.lives.single['status'], 'ended');
+
+    await _unmount(tester);
+  });
 }

@@ -664,15 +664,16 @@ class ApiClient {
     }
   }
 
-  /// 结束直播：live → ended，记录 endedAt；成功返回最新开播配置。
+  /// 结束直播：live → ended，记录 endedAt；返回最新开播配置与按分钟结算摘要
+  /// （billing 为空 = 结算未启用或服务端降级，结束本身不阻断）。
   /// 非直播中（status !== live）服务端返回 400 LIVE_NOT_LIVE。
-  Future<Live> endLive(String id) async {
+  Future<LiveEndSummary> endLive(String id) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/api/lives/$id/end',
         data: <String, dynamic>{},
       );
-      return _parseLive(response.data);
+      return LiveEndSummary.fromJson(response.data ?? <String, dynamic>{});
     } on DioException catch (error) {
       throw _toApiException(error);
     }

@@ -79,9 +79,23 @@ async function startAndEndLive(token: string, startedSecondsAgo: number): Promis
     payload: {},
   });
   expect(ended.statusCode).toBe(200);
-  const live = ended.json().live as { status: string; startedAt: string | null; endedAt: string | null };
-  expect(live.status).toBe('ended');
-  expect(live.endedAt).toBeTruthy();
+  const body = ended.json() as {
+    live: { status: string; startedAt: string | null; endedAt: string | null };
+    billing: {
+      settledMinutes: number;
+      drawnFromBalance: number;
+      drawnFromQuota: number;
+      shortfallMinutes: number;
+    } | null;
+  };
+  expect(body.live.status).toBe('ended');
+  expect(body.live.endedAt).toBeTruthy();
+  // 结算摘要随 /end 响应回传：settledMinutes 与已播整分钟一致（不足 1 分钟为 0）
+  expect(body.billing).not.toBeNull();
+  expect(body.billing?.settledMinutes).toBe(Math.floor(startedSecondsAgo / 60));
+  expect(body.billing?.drawnFromBalance).toBeGreaterThanOrEqual(0);
+  expect(body.billing?.drawnFromQuota).toBeGreaterThanOrEqual(0);
+  expect(body.billing?.shortfallMinutes).toBeGreaterThanOrEqual(0);
 }
 
 /** 复位该用户的账本/额度，并按需预置：balanceMinutes 余额 + 当月直播免费额度 */
