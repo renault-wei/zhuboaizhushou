@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 
 import 'package:starvoice_app/core/models/coupon.dart';
+import 'package:starvoice_app/core/models/app_config.dart';
 import 'package:starvoice_app/core/models/douyin_bind_status.dart';
 import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/models/user_profile.dart';
@@ -12,6 +13,7 @@ import 'package:starvoice_app/core/models/voice_agreement.dart';
 import 'package:starvoice_app/core/models/script.dart';
 import 'package:starvoice_app/core/models/loop_script.dart';
 import 'package:starvoice_app/core/models/speech_out_item.dart';
+import 'package:starvoice_app/core/models/wallet.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 
 /// 发送验证码的结果。dev 模式下服务端会额外返回明文 [code] 便于联调。
@@ -162,6 +164,73 @@ class ApiClient {
             .toList();
       }
       return <Coupon>[];
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 获取钱包总览：时长余额 + 当月免费直播剩余 + 时长流水 + 最近充值单。
+  Future<WalletOverview> fetchWalletOverview() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/api/wallet');
+      return WalletOverview.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 获取服务端开关下发（公开接口）：充值入口显隐 / 档位 / 公告。
+  Future<PublicAppConfig> fetchAppConfig() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/api/app/config');
+      final data = response.data ?? <String, dynamic>{};
+      final configJson = data['config'];
+      return PublicAppConfig.fromJson(
+        configJson is Map
+            ? Map<String, dynamic>.from(configJson)
+            : <String, dynamic>{},
+      );
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 服务端扫码下单（mock 通道返回占位收款码；M8 凭证接入后替换为真实收款码）。
+  Future<RechargeScanResult> createRechargeOrderScan({
+    required int hours,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/recharge/scan',
+        data: <String, dynamic>{'hours': hours},
+      );
+      return RechargeScanResult.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 轮询扫码单确认状态：paid 后附带最新时长余额。
+  Future<RechargePollResult> pollRecharge({required String orderId}) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/recharge/poll',
+        data: <String, dynamic>{'orderId': orderId},
+      );
+      return RechargePollResult.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 卡密核销入账（幂等：同一卡密重复提交返回 409 CARD_REDEEMED）。
+  Future<RedeemCardResult> redeemCard({required String code}) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/cards/redeem',
+        data: <String, dynamic>{'code': code},
+      );
+      return RedeemCardResult.fromJson(response.data ?? <String, dynamic>{});
     } on DioException catch (error) {
       throw _toApiException(error);
     }
