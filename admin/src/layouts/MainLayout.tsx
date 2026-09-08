@@ -1,8 +1,10 @@
 import {
+  ControlOutlined,
   CreditCardOutlined,
   DashboardOutlined,
   FundOutlined,
   LogoutOutlined,
+  ProfileOutlined,
   SafetyCertificateOutlined,
   ShopOutlined,
 } from '@ant-design/icons';
@@ -19,6 +21,8 @@ const menuItems: MenuProps['items'] = [
   { key: '/merchants', icon: <ShopOutlined />, label: '商家管理' },
   { key: '/usage', icon: <FundOutlined />, label: '算力用量' },
   { key: '/orders', icon: <CreditCardOutlined />, label: '订单订阅' },
+  { key: '/card-batches', icon: <ProfileOutlined />, label: '卡密批次' },
+  { key: '/app-config', icon: <ControlOutlined />, label: '系统开关' },
   { key: '/audit', icon: <SafetyCertificateOutlined />, label: '内容审核' },
 ];
 
@@ -27,6 +31,8 @@ const pageTitles: Record<string, string> = {
   '/merchants': '商家管理',
   '/usage': '算力用量',
   '/orders': '订单订阅',
+  '/card-batches': '卡密批次',
+  '/app-config': '系统开关',
   '/audit': '内容审核',
 };
 

@@ -2,7 +2,9 @@ import type { ReactNode } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { getSession } from './auth';
 import MainLayout from './layouts/MainLayout';
+import AppConfigPage from './pages/AppConfigPage';
 import AuditPage from './pages/AuditPage';
+import CardBatchesPage from './pages/CardBatchesPage';
 import DashboardPage from './pages/DashboardPage';
 import LoginPage from './pages/LoginPage';
 import MerchantPage from './pages/MerchantPage';
@@ -44,6 +46,8 @@ export default function App() {
         <Route path="merchants" element={<MerchantPage />} />
         <Route path="usage" element={<UsagePage />} />
         <Route path="orders" element={<OrderPage />} />
+        <Route path="card-batches" element={<CardBatchesPage />} />
+        <Route path="app-config" element={<AppConfigPage />} />
         <Route path="audit" element={<AuditPage />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
