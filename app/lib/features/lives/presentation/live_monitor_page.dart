@@ -858,8 +858,19 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     final String note;
     final Color stateColor;
     if (live) {
-      stateText = '播报中';
-      note = '真人出镜现场，AI 语音主播在后台实时朗读弹幕、介绍产品并回复提问。';
+      if (monitor.loopRunning) {
+        // M5：循环台本播出中 —— 状态胶囊带出当前条 / 轮
+        stateText =
+            '循环播报中 · 第 ${monitor.loopCurrentSeq} 条 / 第 ${monitor.loopRound} 轮';
+        note = '真人出镜现场，AI 语音主播正在按台本循环介绍产品，并可在空档回复弹幕。';
+      } else if (monitor.loopMissing) {
+        // M5：未绑定循环台本 —— 开播也只回弹幕，需要提示绑定
+        stateText = '播报中';
+        note = '未绑定循环台本（仅弹幕回复）：AI 只在收到弹幕时回复；绑定台本并开播后才会自动循环口播介绍产品。';
+      } else {
+        stateText = '播报中';
+        note = '真人出镜现场，AI 语音主播在后台实时朗读弹幕、介绍产品并回复提问。';
+      }
       stateColor = AppColors.live;
     } else if (ready) {
       stateText = '待开播';
@@ -912,6 +923,7 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                       ),
                     ),
                     Container(
+                      constraints: const BoxConstraints(maxWidth: 220),
                       padding: const EdgeInsets.symmetric(
                         horizontal: 10,
                         vertical: 4,
@@ -928,6 +940,9 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                           color: stateColor,
                           fontWeight: FontWeight.w700,
                         ),
+                        maxLines: 2,
+                        textAlign: TextAlign.right,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],

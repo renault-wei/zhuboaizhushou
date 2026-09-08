@@ -290,4 +290,31 @@ void main() {
 
     await _unmount(tester);
   });
+
+  testWidgets('直播中 + 循环播报：AI 主播卡展示当前条 / 轮（M5）', (tester) async {
+    final liveJson = _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live');
+    liveJson['loopRunning'] = true;
+    liveJson['loopRound'] = 2;
+    liveJson['loopCurrentSeq'] = 3;
+    final backend = FakeBackend(lives: <Map<String, dynamic>>[liveJson]);
+    await _pumpMonitor(tester, backend);
+
+    // 状态胶囊：循环播报中 · 第 3 条 / 第 2 轮
+    expect(find.text('循环播报中 · 第 3 条 / 第 2 轮'), findsOneWidget);
+    expect(find.textContaining('正在按台本循环介绍产品'), findsOneWidget);
+
+    await _unmount(tester);
+  });
+
+  testWidgets('直播中未绑定循环台本：AI 主播卡提示仅弹幕回复（M5）', (tester) async {
+    final liveJson = _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live');
+    liveJson['loopMissing'] = true;
+    final backend = FakeBackend(lives: <Map<String, dynamic>>[liveJson]);
+    await _pumpMonitor(tester, backend);
+
+    expect(find.text('播报中'), findsOneWidget);
+    expect(find.textContaining('未绑定循环台本（仅弹幕回复）'), findsOneWidget);
+
+    await _unmount(tester);
+  });
 }

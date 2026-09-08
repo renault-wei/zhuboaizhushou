@@ -698,6 +698,10 @@ class FakeBackend implements HttpClientAdapter {
       'endedAt': live['endedAt'],
       'durationSeconds': durationSeconds,
       'danmakuCount': _danmakuFor(id).length,
+      'loopRunning': live['loopRunning'] == true,
+      'loopRound': (live['loopRound'] as num?)?.toInt() ?? 0,
+      'loopCurrentSeq': (live['loopCurrentSeq'] as num?)?.toInt() ?? 0,
+      'loopMissing': live['loopMissing'] == true,
     });
   }
 

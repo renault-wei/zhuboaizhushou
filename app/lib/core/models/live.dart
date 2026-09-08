@@ -172,6 +172,10 @@ class LiveMonitor {
     required this.endedAt,
     required this.durationSeconds,
     required this.danmakuCount,
+    required this.loopRunning,
+    required this.loopRound,
+    required this.loopCurrentSeq,
+    required this.loopMissing,
   });
 
   factory LiveMonitor.fromJson(Map<String, dynamic> json) {
@@ -184,6 +188,10 @@ class LiveMonitor {
       endedAt: _nullableString(json['endedAt']),
       durationSeconds: (json['durationSeconds'] as num?)?.toInt() ?? 0,
       danmakuCount: (json['danmakuCount'] as num?)?.toInt() ?? 0,
+      loopRunning: json['loopRunning'] == true,
+      loopRound: (json['loopRound'] as num?)?.toInt() ?? 0,
+      loopCurrentSeq: (json['loopCurrentSeq'] as num?)?.toInt() ?? 0,
+      loopMissing: json['loopMissing'] == true,
     );
   }
 
@@ -207,6 +215,18 @@ class LiveMonitor {
 
   /// 弹幕总数（live_danmaku 计数）
   final int danmakuCount;
+
+  /// 循环台本 Runner 是否运行中（live 且有绑定台本且已开播才可能为 true）
+  final bool loopRunning;
+
+  /// 已播轮数（服务端内存态；进程重启不恢复属已知限制）
+  final int loopRound;
+
+  /// 当前轮到第几条（1 起；空闲 / 结束为 0）
+  final int loopCurrentSeq;
+
+  /// 未绑定循环台本：开播也只回弹幕，工作台需提示
+  final bool loopMissing;
 
   /// 已播时长格式化为 hh:mm:ss（超过 24h 时小时数继续累加）。
   String get durationLabel {
