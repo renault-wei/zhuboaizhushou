@@ -123,7 +123,7 @@
 | D2.2 | 采集器核心 | CollectorManager：注册 / 注销、每房一 worker、心跳 / 断线重连、并发上限、优雅退出 | D2.1 | mock wss 服务覆盖重连与并发上限 |
 | D2.3 | 采集器核心 | 【D2.5 解锁后】抖音 adapter：网页取 wss 地址与 cookie 维护 + protobuf 解码（自研 TS；mock fixture 报文） | D2.5/D2.2 | mock 报文解出 chat / gift；解码失败不崩、记日志 |
 | D2.4 | 采集器核心 | 【D2.5 解锁后】B站 adapter：getRoomBaseInfo / getDanmuInfo + wss 二进制 + 心跳 + 压缩解码 | D2.5/D2.2 | mock 报文解出 chat 事件 |
-| D2.5 | 合规门 | 真实平台协议适配器解锁拍板：B 站协议文档仓库遭律师函关停 + 开源候选普遍无许可，是否自研 wss/protobuf 适配器需用户拍板并经法律复核 | D0.1 | 拍板记录入档：解锁 → 依序开 D2.3/D2.4；否决 → 本期仅保留模拟源与官方通道预留 |
+| D2.5 | 合规门 | 真实平台协议适配器解锁拍板：B 站协议文档仓库遭律师函关停 + 开源候选普遍无许可，是否自研 wss/protobuf 适配器需用户拍板并经法律复核 | D0.1 | 拍板记录入档：解锁 → 依序开 D2.3/D2.4；否决 → 本期仅保留模拟源与官方通道预留。2026-09-08 已解锁：用户拍板 + AIOBS 官方试用 Key 探针入档（见 docs/COMPETITOR-XCAI.md §6.4），D2.3 抖音 adapter 离线形态开发完成 |
 | D3.1 | 落库与状态 | `live_danmaku` 扩字段 + `(platform, msg_key)` 唯一索引 + `collector_watches` 表 + Drizzle 迁移 | D2.1 | 迁移可执行；重复 msg_key 幂等拒绝 |
 | D3.2 | 落库与状态 | 监听控制 API：resolve / start / stop / status（登录态 + 归属校验） | D3.1 | 集成测试覆盖状态机（stopped → listening → stopped） |
 | D4.1 | 本地演示 | 本机联调台：贴链接 → 解析预览 → 开始 / 停止 → 实时弹幕（复用工作台弹幕日志 / 胶囊）→ 回放时间线 | D3.2 | 本机开播一次全流程联调通过 |
@@ -187,7 +187,7 @@ interface UnifiedDanmakuEvent {
 | Q5 | 采集入口 | 与既有「测试弹幕注入」并存；抖音绑定页是否一并下线另立任务（不在 D 系列） |
 | Q6 | 执行节奏 | D0 审计先行 → D1/D2 采集验证 → 评审后再开 D3~D6 |
 | Q7 | 开源收录范围 | 预计可直接收录的很少（多数无 LICENSE / Go / Java / C# 形态）；以自研为主，可收录项只进 vendor/third_party/ 并先过 D0.1 审计 |
-| Q8 | D2.5 合规门 | 真实平台协议适配器默认不开发；如拍板解锁，须用户明确同意 + 法律复核后再动（D2.3/D2.4） |
+| Q8 | D2.5 合规门 | 真实平台协议适配器默认不开发；如拍板解锁，须用户明确同意 + 法律复核后再动（D2.3/D2.4）；若解锁抖音 wss，签名环节的服务商采购属保留项（竞品用 AIOBS，成本调查见 docs/COMPETITOR-XCAI.md §6）；2026-09-08 用户已拍板解锁并给出 AIOBS 官方试用 Key，但探针返回 `ApiKey is invalid`（GUID 非 SignWss 可用 Key，见 §6.4），签名链路等有效 Web API Key 或改走桌面客户端试用 + helperAdapter 路线（2026-09-08 复核：AIOBS 公开文档 + 卡密实证坐实其为桌面端激活码，可走官方客户端 + localhost:6789 控制接口，见 docs/COMPETITOR-XCAI.md §6.5） |
 
 ## 9. 不做清单（边界不变 + 新增）
 
@@ -206,4 +206,5 @@ interface UnifiedDanmakuEvent {
 | wss / protobuf 协议资料时效 | D0 审计保留参考仓库 commit hash 与日期；自研层避免贴死单一版本 |
 | 测试依赖真实网络 | 全部 mock / fixture；真机复测仅在自用直播间低流量执行 |
 | 报文异常 / 内容超长 | 归一化层兜底，沿用既有 CONTENT_INVALID 等错误模型，不冒 500 |
+
 

@@ -48,3 +48,58 @@
 
 - 证据时间：2026-09-06 用户截图（XCai 商家版介绍页，含上述更新说明原文）。
 - 复查建议：竞品页属灰产向宣传，后续链接/文案可能变化；本文档以「截图时间 + OCR 摘录」为准。
+
+## 6. 签名服务调查：竞品「买断的 Key」= AIOBS 抖音签名接口（2026-09-08，探针已验证）
+
+> 状态：D2.5 合规门已由用户拍板解锁（「这个是官方的 key 没错 开始开发吧」）；官方试用 Key 探针已执行，
+> 结论 = **该 Key 不是 SignWss 接口可用的 ApiKey**（详见 §6.4）。签名链路暂缓，等待有效 Web API Key 或改走桌面客户端试用路线。
+
+### 6.1 Key 与调用位置（证据）
+
+- 调用点：`D:\codex_project\2026-09-07\ni\outputs\source\beautified\app-service.js:49878`（POST `https://api.aiobs.cn/Douyin/Douyin/SignWss`）；`:49881` 写死 `ApiKey: apikey-dy-L30c3b5a3-f2e4-4805-800d-d639446647c0`。
+- 配套链路：`getRoomIdByShareCode()`（同文件约 49850 起）先分享链接解析 `roomid` + `ttwid` Cookie，再进 `getWssUrl()` 用上述接口换取带签名的抖音 wss 地址。
+- 判断：签名在 AIOBS 服务端完成，是本地无法伪造的那一环；`api.aiobs.cn` 为 IIS/ASP.NET 主机，与 AIOBS 自家 .NET 弹幕产品同源，Key 由 AIOBS 发给竞品账户，命名 `apikey-dy-` = 抖音通道。
+
+### 6.2 成本锚点（AIOBS 官网定价方案，2026-09-08 抓取官网 JS 数据）
+
+| 档位 | 公开价 | 适用判断 |
+|---|---|---|
+| 零售版 | ¥50/月（¥180/年、¥360/永久），1 个直播间并发 + Web API 对接 | 仅自用单直播间验证/自用档 |
+| 合伙人计划 | ¥1,000 充值起（拿卡折扣 + 后台发卡 + API 授权 + OEM 换皮） | 要把 Key 内嵌自己 App 分发给商家的最低入口 |
+| 买断版 | ¥6,500 一次性（签商业合同、无限制生成授权、二次开发接口文档；.NET Core 源码 / 私有化部署另计增值） | 字面意义的「买断全套」 |
+
+- 官网另有零售版「免费试用 7 天」入口；是否覆盖签名接口的试用，**待用户在官网核实**。
+
+### 6.3 我方结论口径
+
+- 无法仅凭 APK 证明竞品购买的档位；能证明的是它持有一个 AIOBS 抖音签名 API Key。
+- 成本估算：仅链路验证 = ¥0（7 天试用）/ ¥50/月起；做成自己产品分发 = 合伙人档起（≥¥1,000 预充值）到买断档（¥6,500 一次性）。
+- 竞品 Key 属他人账户资产，**禁止直接复用**。
+- 非官方通道风险：平台改版即集体失效、有风控连带；把 Key 内嵌再转售须书面确认 AIOBS 授权边界。
+
+### 6.4 官方试用 Key 探针结论（2026-09-08 实测入档）
+
+- 探针实现：`server/scripts/douyin-sign-smoke.ts`（`npm run sign:smoke -- <roomId>`），请求体与竞品调用点同构
+  （`ApiKey / BrowserName / BrowserVersion / RoomId / UserUniqueId`，POST `api.aiobs.cn/Douyin/Douyin/SignWss`）。
+- 实测输入：用户提供的 AIOBS 官方试用 Key（GUID 形如 `be732746-…`，7 天试用）。
+- 实测结果：服务端返回 HTTP 200 + `{"Code":-1,"Msg":"ApiKey is invalid.","Data":null}` → **该 GUID 未被 SignWss 接口认可**，
+  与竞品 Key 的 `apikey-dy-…` 命名格式不同，判断为桌面端「畅播·全平台弹幕助手」的试用激活卡密，而非 Web API 签名 Key。
+- 影响：自研抖音 wss 的签名环节目前无可用 Key，不能真连验证；D2.3 适配器代码为离线可自测形态，不受此阻塞。
+- 后续两条路线（二选一，需用户在外侧推进）：
+  1. 向 AIOBS 申请/采购 **SignWss 可用**的 Web API Key（命名应为 `apikey-dy-*`；零售版 Web API 对接 ¥50/月起，或合伙人档），
+     到手后重跑 `sign:smoke` 验收；
+  2. 用该 GUID 激活桌面端「畅播」试用，监控自己直播间并转发到本服务（D5.2 helperAdapter 已具备接收与归一化能力），
+     签名链路可继续挂起。
+
+
+### 6.5 AIOBS 公开接口文档勘察 + 卡密身份实证（2026-09-08 实测入档）
+
+- 文档入口：`https://aiobs.apifox.cn/`（Apifox 发布站，项目名「全平台弹幕助手」，共 17 个页面），接口分两层：
+  - 云·合伙人接口 `https://api.aiobs.cn/agent/api/*`：激活码 create / insert / extend / allow / forbidden / verify + `appOem/getOemInfoByActiveCode`；请求体 `{AppKey, ActiveCode}`，其中 ActiveCode 需传「AES 加密后的密文」（文档示例 AppKey = `bb97a02e-…`）。
+  - 本机·客户端控制接口 `http://localhost:6789/*`：桌面端「全平台弹幕助手」运行时开放，含发送弹幕 `/api/chat/send`、直播间信息 `/api/livepc/roominfo`、商品讲解 `/api/livepc/setcurrent`、弹卡 `/api/livepc/popupcard`、置顶 `/api/livepc/sticktop`、营销商品 `/api/livepc/promotions|basiclist`、自动关播 `/api/livestudio/autocloseliving` 等；页面注明支持抖音(Douyin)、视频号(Channel)、小红书(Xhs)。
+  - 该公开文档中**没有** `/Douyin/Douyin/SignWss` → 抖音 wss 签名服务不在合伙人/公开文档范围，需另购 `apikey-dy-*` 通道 Key。
+- 卡密实证（POST `agent/api/appOem/getOemInfoByActiveCode`，ActiveCode = 试用 GUID）：
+  - 返回 HTTP 200 + `{"code":200,"msg":"操作成功","data":{"name":"AIOBS",…,"slogan":"畅播助您，畅快直播"}}` → **该 GUID 是合法注册激活码，且绑定 AIOBS「畅播」OEM 品牌**，即 §6.4 推断的「桌面端试用卡密」身份坐实。
+  - 对照组：伪造 ActiveCode → `{"code":-1,"msg":"激活码无效"}`。
+- verify 探针：AppKey = 文档示例值时通过 Key 校验、卡在 ActiveCode 解码（Base64 错误）→ 示例 AppKey 真实可用；AppKey = 试用 GUID 时返回 `app key is invalid` → GUID 不是合伙人 AppKey。调通 create/verify 全量还差文档未公开的 AES 密钥（合伙人侧私下持有）。
+- 口径更新：该 GUID 的价值 = 激活桌面端「畅播·全平台弹幕助手」并使用其 localhost:6789 控制接口；不替代 SignWss Web API Key。桌面客户端试用 + helperAdapter 仍是 D 系列默认候选；采购 `apikey-dy-*` 仅在需要自研直连抖音时启用。
