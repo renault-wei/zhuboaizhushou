@@ -77,6 +77,8 @@ class HomePage extends ConsumerWidget {
               const _CouponEntryCard(),
               const SizedBox(height: 16),
               const _LiveEntryCard(),
+              const SizedBox(height: 16),
+              const _WalletEntryCard(),
               const SizedBox(height: 24),
               OutlinedButton(
                 key: const Key('logoutButton'),
@@ -1149,6 +1151,54 @@ class _CouponEntryCard extends StatelessWidget {
               const SizedBox(height: 10),
               Text(
                 '拉取抖音团购券，为实景直播挂载商品',
+                style: TextStyle(fontSize: 13, color: context.tokenTextBody),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 「收银台 / 充值」入口卡片：预充直播时长、兑换卡密、查看余额与流水。
+/// 点击进入收银台页 /wallet（充值入口显隐由服务端开关控制）。
+class _WalletEntryCard extends StatelessWidget {
+  const _WalletEntryCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      key: const Key('walletEntryCard'),
+      margin: EdgeInsets.zero,
+      child: InkWell(
+        key: const Key('walletEntryOpenButton'),
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => context.push('/wallet'),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  const Icon(Icons.account_balance_wallet_outlined, size: 20),
+                  const SizedBox(width: 8),
+                  const Text(
+                    '收银台 / 充值',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const Spacer(),
+                  Icon(
+                    Icons.chevron_right,
+                    size: 20,
+                    color: context.tokenTextHint,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '预充直播时长、兑换卡密，查看余额与消费流水',
                 style: TextStyle(fontSize: 13, color: context.tokenTextBody),
               ),
             ],

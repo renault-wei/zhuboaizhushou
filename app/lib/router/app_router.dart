@@ -17,6 +17,7 @@ import 'package:starvoice_app/features/scripts/presentation/script_edit_page.dar
 import 'package:starvoice_app/features/scripts/presentation/script_generate_page.dart';
 import 'package:starvoice_app/features/splash/presentation/splash_page.dart';
 import 'package:starvoice_app/features/voices/presentation/voice_library_page.dart';
+import 'package:starvoice_app/features/wallet/presentation/wallet_page.dart';
 
 /// 构建全局路由：根据认证状态在 启动页 / 登录页 / 首页 之间做守卫跳转。
 GoRouter createAppRouter(AuthController authController) {
@@ -70,9 +71,8 @@ GoRouter createAppRouter(AuthController authController) {
       ),
       GoRoute(
         path: '/scripts/:id/edit',
-        builder: (context, state) => ScriptEditPage(
-          scriptId: state.pathParameters['id'] ?? '',
-        ),
+        builder: (context, state) =>
+            ScriptEditPage(scriptId: state.pathParameters['id'] ?? ''),
       ),
       GoRoute(
         path: '/loop-scripts',
@@ -90,9 +90,8 @@ GoRouter createAppRouter(AuthController authController) {
       ),
       GoRoute(
         path: '/loop-scripts/:id/edit',
-        builder: (context, state) => LoopScriptEditPage(
-          loopScriptId: state.pathParameters['id'] ?? '',
-        ),
+        builder: (context, state) =>
+            LoopScriptEditPage(loopScriptId: state.pathParameters['id'] ?? ''),
       ),
       GoRoute(
         path: '/lives',
@@ -104,16 +103,15 @@ GoRouter createAppRouter(AuthController authController) {
       ),
       GoRoute(
         path: '/lives/:id',
-        builder: (context, state) => LiveFormPage(
-          liveId: state.pathParameters['id'] ?? '',
-        ),
+        builder: (context, state) =>
+            LiveFormPage(liveId: state.pathParameters['id'] ?? ''),
       ),
       GoRoute(
         path: '/lives/:id/monitor',
-        builder: (context, state) => LiveMonitorPage(
-          liveId: state.pathParameters['id'] ?? '',
-        ),
+        builder: (context, state) =>
+            LiveMonitorPage(liveId: state.pathParameters['id'] ?? ''),
       ),
+      GoRoute(path: '/wallet', builder: (context, state) => const WalletPage()),
     ],
   );
 }
