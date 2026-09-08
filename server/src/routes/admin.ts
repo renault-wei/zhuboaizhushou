@@ -313,18 +313,30 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       (ORDER_STATUSES as readonly string[]).includes(query.status)
         ? query.status
         : '';
+    const kind = query.kind === 'subscription' || query.kind === 'recharge' ? query.kind : '';
+    const channel =
+      query.channel === 'manual' || query.channel === 'alipay_scan' || query.channel === 'card'
+        ? query.channel
+        : '';
     const offset = (page - 1) * pageSize;
+    const filters = [
+      status ? sql`o.status = ${status}` : undefined,
+      kind ? sql`o.kind = ${kind}` : undefined,
+      channel ? sql`o.channel = ${channel}` : undefined,
+    ].filter((item): item is ReturnType<typeof sql> => item !== undefined);
+    const whereSql =
+      filters.length > 0 ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
     const orderRows = await db.execute(sql`
       SELECT o.*, u.phone, u.nickname
       FROM orders o JOIN users u ON u.id = o.user_id
-      WHERE ${status ? sql`o.status = ${status}` : sql`true`}
+      ${whereSql}
       ORDER BY o.created_at DESC
       LIMIT ${pageSize} OFFSET ${offset}
     `);
     const totals = await db.execute(sql`
       SELECT count(*)::int AS total
       FROM orders o
-      WHERE ${status ? sql`o.status = ${status}` : sql`true`}
+      ${whereSql}
     `);
     return { items: orderRows.rows, total: totals.rows[0]?.total ?? 0, page, pageSize };
   });

@@ -245,14 +245,17 @@ export const billingAdminRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/api/admin/app-config', { preHandler: app.adminAuthenticate }, async () => {
     const rows = await db.execute(sql`
-      SELECT key, value, updated_by, updated_at FROM app_config ORDER BY key
+      SELECT c.key, c.value, c.updated_at, u.username AS updated_by_username
+      FROM app_config c
+      LEFT JOIN admin_users u ON u.id = c.updated_by
+      ORDER BY c.key
     `);
     return {
       config: await readAppConfig(),
       rows: rows.rows.map((row) => ({
         key: row.key,
         value: row.value,
-        updatedBy: row.updated_by ?? null,
+        updatedBy: row.updated_by_username ?? null,
         updatedAt: row.updated_at,
       })),
     };
