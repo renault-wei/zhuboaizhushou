@@ -15,6 +15,7 @@
 > - 更新时间：2026-09-07（批量追记：P-话术v1 代码提交（d05f094）、P-循环台本代码两批（M1 台本库 CRUD + M2 一次过审链路 139a4ca、M3 台本库+开播配置绑定 UI a891f40）、克隆录音收敛 2 段念稿（f37e946）、常规页 UI-2 裸色收尾（4facf2e，App 测试 101/101）、公司端任务台控制台 M1~M4 全落地（b9f9cde / c2e2b91 / aa88983 / 69b3924）；服务端测试 171/171、admin build/lint 0 issue。详见 §6 第 18~27 条）
 > - 更新时间：2026-09-08（doc-only 定位定稿：产品收敛为「平台无关 AI 语音助播」— 商家任选直播平台开播，App 只做后台 AI 语音（循环台本 + 弹幕问答）；声音出口天然跨平台，平台相关只剩弹幕源（外挂弹幕助手适配）；商业模式 = 直播期间 AI 在线时长 / 轮播计费。新增 docs/PLATFORM-NEUTRAL-VOICE.md）
 > - 更新时间：2026-09-08（D 系列结项：真实平台弹幕采集需求关闭（用户拍板），D1/D2.1~D2.3/D5.2 离线交付与调查归档后 D3~D6 不再推进；弹幕源回到「测试弹幕注入优先 + 外挂 / 人工补位」口径，决策见 §6 第 31 条）
+> - 更新时间：2026-09-08（P-M5 App 循环播报状态接线：AI 主播卡直播中展示「循环播报中 · 第 x 条 / 第 y 轮」胶囊，未绑台本提示仅弹幕回复；flutter analyze 0 issue、App 测试 103/103，见 §6 第 32 条）
 
 ## 0. 当前大局
 
@@ -169,3 +170,4 @@
 29. ✅ D2.5 合规门解锁 + AIOBS 官方 Key 探针（2026-09-08）：用户拍板「开始开发」解锁真实平台采集自研（观众身份、只采自己直播间口径不变）；用官方试用 Key（GUID）真调 `api.aiobs.cn/Douyin/Douyin/SignWss`，服务端返回 `Code:-1 ApiKey is invalid` → 该 GUID 不是 SignWss 可用 ApiKey（预计为桌面端「畅播」试用卡密，详见 docs/COMPETITOR-XCAI.md §6.4）。签名链路需有效 `apikey-dy-*` Web API Key（零售版 Web API 对接 ¥50/月起 / 合伙人档）或改走桌面客户端试用 + helperAdapter 转发路线。
 30. ✅ D2.3 抖音采集适配器离线交付（2026-09-08）：纯 TS PushFrame/Response/protobuf 解码（`douyinWire.ts`）+ 可注入签名服务的 wss 适配器（心跳 / ack / 断线 / 归一化 chat·like·enter·gift，`douyinLiveAdapter.ts`）+ 报文字节级 fixture；`createDouyinHttpSigner` 请求体与竞品同构、错误信息带服务端返回体便于排障；新增 `npm run sign:smoke` 手动探针（不烧自动化测试额度）。douyin 适配器单测 18 例全绿，服务端全量 168 passed / 117 skipped；真实链路待有效签名 Key 或桌面客户端路线（见 29）。
 31. ✅ D 系列结项（doc-only，2026-09-08）：真实平台弹幕采集需求关闭（用户拍板「弹幕抓取先关闭，其余收尾 / 结项」）。D1 / D2.1~D2.3 / D5.2 离线交付与 AIOBS 调查已归档（797cae9，douyin 适配器单测 35 例全绿），D3~D6 不再推进；对外口径回到「测试弹幕注入优先 + 外挂 / 人工补位、不自研平台采集」，同步 docs/DANMAKU-COLLECTOR-PLAN.md（标记已结项）与 docs/PLATFORM-NEUTRAL-VOICE.md（补落点注记）。自研离线采集代码保留为技术储备。
+32. ✅ P-M5 App 工作台循环播报状态（2026-09-08，9b91b0e）：LiveMonitor 补齐 `loopRunning / loopRound / loopCurrentSeq / loopMissing` 解析（服务端 monitor 早已返回）；AI 语音主播卡直播中 = 循环播报中展示「循环播报中 · 第 x 条 / 第 y 轮」胶囊（maxLines 2 防溢出），未绑台本提示「未绑定循环台本（仅弹幕回复）」；fake_backend monitor 补 4 字段 + 新增 2 条 widget 冒烟；`flutter analyze` 0 issue、App 测试 103/103。
