@@ -95,6 +95,7 @@ it('非 Windows 平台返回 unsupported，不调用合成器与出声端', asyn
   const speaker = createLiveSpeaker({
     platform: 'linux',
     enabled: true,
+    remoteOutput: false,
     synth,
     sink,
   });

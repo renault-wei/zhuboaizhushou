@@ -221,6 +221,8 @@ export interface CreateLiveSpeakerOptions {
   synth?: LocalWavSynth;
   /** 测试注入出声端；不传用本地默认（Windows 播放队列） */
   sink?: SpeechSink;
+  /** phone 远程出声模式：任意平台可把合成 wav 入远程队列；不传按 LIVE_SPEAKER_OUTPUT=phone 判定 */
+  remoteOutput?: boolean;
 }
 
 /** 出口工厂：生产用真实本机合成 + 真实播放器；测试可注入替身 */
@@ -231,14 +233,16 @@ export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveS
   const rate = options.rate ?? LOCAL_TTS_RATE;
   const synth = options.synth ?? new WindowsLocalSpeechSynth({ voice, rate });
   const sink = options.sink ?? getSharedSink();
+  // 平台限制只约束「本机出声」（Windows SAPI / 本机播放器）；phone 远程出声队列任意平台可入队
+  const remoteOutput = options.remoteOutput ?? env.liveSpeaker.output === 'phone';
 
   return {
     async speak(text: string): Promise<SpeakResult> {
       if (!enabled) {
         return { spoken: false, reason: 'disabled' };
       }
-      // 远程出声端落地后，平台限制下放到各 sink 自判；本期仍按“本机出声”判断
-      if (platform !== 'win32') {
+      // 平台限制只约束「本机出声」；phone 远程出声队列任意平台可入队（见 remoteOutput 判定）
+      if (!remoteOutput && platform !== 'win32') {
         return { spoken: false, reason: 'unsupported' };
       }
       let sinkReached = false;
