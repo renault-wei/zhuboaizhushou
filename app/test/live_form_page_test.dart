@@ -153,9 +153,9 @@ void main() {
 
     expect(find.byKey(const Key('liveFormPage')), findsOneWidget);
     expect(find.text('新建开播配置'), findsOneWidget);
-    // T11：新建草稿尚无 liveId，提示先保存、再从列表进入编辑后操作
+    // 新建草稿尚无 liveId，开播准备区提示先保存、再从列表进入编辑后操作
     expect(
-      find.byKey(const Key('liveVideoNewModeHint')),
+      find.byKey(const Key('liveReadyNewModeHint')),
       findsOneWidget,
     );
 
@@ -287,7 +287,7 @@ void main() {
     );
   });
 
-  testWidgets('T11 编辑模式：视频路径输入后上传按钮从置灰变为可点', (WidgetTester tester) async {
+  testWidgets('编辑模式：克隆音色就绪 → 「纯 AI 就绪开播」可点，就绪后状态推进并防重复', (WidgetTester tester) async {
     final backend = FakeBackend(
       douyinBound: true,
       voices: <Map<String, dynamic>>[
@@ -308,16 +308,13 @@ void main() {
     );
     await _pumpFormPage(tester, backend, liveId: 'live-001');
 
-    // 已绑可用克隆音色但未传实景视频：进入「纯 AI 语音」就绪态，
-    // 上传按钮仍需先填路径，prepare 已可直接就绪（纯 AI 不合成）
-    final uploadButtonFinder = find.byKey(const Key('liveVideoUploadButton'));
-    await _scrollTo(tester, uploadButtonFinder);
-    expect(find.byKey(const Key('liveVideoSourceText')), findsOneWidget);
-    expect(find.text('未传实景视频 · 纯 AI 语音模式'), findsOneWidget);
+    // 无需实景视频：绑定可用克隆音色即进入「纯 AI 就绪开播」入口
+    final prepareButtonFinder = find.byKey(const Key('livePrepareButton'));
+    await _scrollTo(tester, prepareButtonFinder);
+    expect(find.byKey(const Key('liveReadySection')), findsOneWidget);
     expect(
-      _widget<FilledButton>(tester, const Key('liveVideoUploadButton'))
-          .onPressed,
-      isNull,
+      tester.widget<Text>(find.byKey(const Key('liveReadyStatusText'))).data,
+      '已绑定音色，可直接就绪开播',
     );
     expect(find.text('纯 AI 就绪开播'), findsOneWidget);
     expect(
@@ -325,66 +322,19 @@ void main() {
       isNotNull,
     );
 
-    // 输入本机路径后上传按钮点亮（真实调用由 ApiClient 单测覆盖）
-    await tester.enterText(
-      find.byKey(const Key('liveVideoPathField')),
-      r'D:\videos\scene.mp4',
-    );
-    await tester.pump();
-    expect(
-      _widget<FilledButton>(tester, const Key('liveVideoUploadButton'))
-          .onPressed,
-      isNotNull,
-    );
-  });
-
-  testWidgets('T11 生成直播视频：prepare 成功提示「可开播」，状态推进 ready 且防重复生成', (WidgetTester tester) async {
-    final backend = FakeBackend(
-      douyinBound: true,
-      voices: <Map<String, dynamic>>[
-        _voiceJson(id: 'v-ready', name: '主播小美', status: 'ready'),
-      ],
-      scripts: <Map<String, dynamic>>[
-        _scriptJson(id: 'script-001', title: '火锅套餐话术', status: 'ready'),
-      ],
-      lives: <Map<String, dynamic>>[
-        _liveJson(
-          id: 'live-001',
-          title: '午市循环直播',
-          videoSourceUrl: '/uploads/videos/live-001.mp4',
-          voiceId: 'v-ready',
-          scriptId: 'script-001',
-          couponId: 'c-001-mock',
-        ),
-      ],
-    );
-    await _pumpFormPage(tester, backend, liveId: 'live-001');
-
-    // 已上传回填：展示「已上传：文件名」，生成按钮可用
-    final prepareButtonFinder = find.byKey(const Key('livePrepareButton'));
-    await _scrollTo(tester, prepareButtonFinder);
-    expect(
-      tester.widget<Text>(find.byKey(const Key('liveVideoSourceText'))).data,
-      '已上传：live-001.mp4',
-    );
-    expect(
-      _widget<FilledButton>(tester, const Key('livePrepareButton')).onPressed,
-      isNotNull,
-    );
-
-    // 点击生成：真实调用 prepareLive（服务端前置校验 + 合成）
+    // 点击就绪：真实调用 prepareLive（服务端前置校验），纯 AI 不触发视频合成
     await tester.tap(prepareButtonFinder);
     await tester.pumpAndSettle();
 
-    expect(find.text('已生成直播视频，可开播'), findsOneWidget);
-    expect(find.text('已生成：live-001.mp4'), findsOneWidget);
     expect(backend.lives.single['status'], 'ready');
+    expect(backend.lives.single['videoSourceUrl'], isEmpty);
     expect(
-      backend.lives.single['videoSourceUrl'],
-      '/uploads/lives/live-001.mp4',
+      tester.widget<Text>(find.byKey(const Key('liveReadyStatusText'))).data,
+      '已就绪，可进入工作台开播',
     );
+    expect(find.text('已就绪，可进入工作台开播'), findsWidgets);
 
-    // 本页已合成：生成按钮置灰，避免重复合成
+    // 已就绪后按钮置灰，防止重复就绪
     expect(
       _widget<FilledButton>(tester, const Key('livePrepareButton')).onPressed,
       isNull,
@@ -393,6 +343,35 @@ void main() {
     // 等待 SnackBar 自动消失，避免遗留计时器
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('未绑定可用音色：开播准备提示先绑音色且就绪按钮置灰', (WidgetTester tester) async {
+    final backend = FakeBackend(
+      douyinBound: true,
+      scripts: <Map<String, dynamic>>[
+        _scriptJson(id: 'script-001', title: '火锅套餐话术', status: 'ready'),
+      ],
+      lives: <Map<String, dynamic>>[
+        _liveJson(
+          id: 'live-001',
+          title: '午市循环直播',
+          scriptId: 'script-001',
+          couponId: 'c-001-mock',
+        ),
+      ],
+    );
+    await _pumpFormPage(tester, backend, liveId: 'live-001');
+
+    final prepareButtonFinder = find.byKey(const Key('livePrepareButton'));
+    await _scrollTo(tester, prepareButtonFinder);
+    expect(
+      tester.widget<Text>(find.byKey(const Key('liveReadyStatusText'))).data,
+      '尚未绑定可用音色，先在上方选择后即可就绪',
+    );
+    expect(
+      _widget<FilledButton>(tester, const Key('livePrepareButton')).onPressed,
+      isNull,
+    );
   });
 
   test('ApiClient.uploadLiveVideo：multipart 真实上传临时文件后回填 videoSourceUrl', () async {
@@ -569,7 +548,7 @@ void main() {
     );
     await _pumpFormPage(tester, backend, liveId: 'live-001');
 
-    // 编辑预填：音色值展示火山预设；无实景视频时展示纯 AI 就绪入口
+    // 编辑预填：音色值展示火山预设；无需实景视频即展示纯 AI 就绪入口
     expect(
       tester.widget<Text>(find.byKey(const Key('liveVoiceValue'))).data,
       'Vivi 2.0（火山预设）',
@@ -578,24 +557,21 @@ void main() {
     await _scrollTo(tester, prepareButton);
     expect(find.text('纯 AI 就绪开播'), findsOneWidget);
     expect(
-      tester.widget<Text>(find.byKey(const Key('liveVideoSourceText'))).data,
-      '未传实景视频 · 纯 AI 语音模式',
+      tester.widget<Text>(find.byKey(const Key('liveReadyStatusText'))).data,
+      '已绑定音色，可直接就绪开播',
     );
 
     await tester.tap(prepareButton);
     await tester.pumpAndSettle();
 
-    expect(find.text('已就绪，可开播（纯 AI 语音模式）'), findsOneWidget);
     expect(backend.lives.single['status'], 'ready');
     // 纯 AI 就绪不触发视频合成：videoSourceUrl 保持空、无 /uploads/lives 回填
+    expect(backend.lives.single['videoSourceUrl'], isEmpty);
     expect(
-      backend.lives.single['videoSourceUrl'],
-      isNot(contains('/uploads/lives/')),
+      tester.widget<Text>(find.byKey(const Key('liveReadyStatusText'))).data,
+      '已就绪，可进入工作台开播',
     );
-    expect(
-      tester.widget<Text>(find.byKey(const Key('liveVideoSourceText'))).data,
-      '已就绪（纯 AI 语音模式，可直接开播）',
-    );
+    expect(find.text('已就绪，可进入工作台开播'), findsWidgets);
     // 已就绪后按钮置灰，防止重复就绪
     expect(
       _widget<FilledButton>(tester, const Key('livePrepareButton')).onPressed,

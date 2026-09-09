@@ -3,8 +3,8 @@
 /// 话术（仅 ready 可选）+
 /// 循环台本（push /loop-scripts?select=1 点选后 pop 回整本）+ 团购券
 /// （push /coupons 点选后 pop 回券 id）+ 直播标题。
-/// T11 点亮实景视频区：上传实景视频（MVP 简化为本机 mp4 路径输入）+「生成直播视频」合成，
-/// 产物为本地文件、不推流（推流 T12）；新建草稿先保存、再从列表进入编辑后操作。
+/// 就绪开播：产品口径为平台无关 AI 语音助播，无需实景视频 —— 绑定可用音色后
+/// 点「纯 AI 就绪开播」完成敏感词/音色前置校验即就绪；新建草稿先保存、再从列表进入编辑后操作。
 /// 「AI 智能直播」角标由服务端强制叠加为 true，本页面没有任何关闭入口。
 library;
 
@@ -37,7 +37,6 @@ class LiveFormPage extends ConsumerStatefulWidget {
 
 class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   late final TextEditingController _titleController;
-  late final TextEditingController _videoPathController;
 
   /// 已选择的绑定项：null 表示未绑定（提交时置空对应字段）。
   String? _voiceId;
@@ -55,16 +54,10 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   /// 正在同步已绑定台本摘要。
   bool _loopSummarySyncing = false;
 
-  /// 服务端回填的实景视频源：上传 → /uploads/videos/...，合成成功 → /uploads/lives/...
-  String _videoSourceUrl = '';
-
-  /// 是否已在本页完成合成（成功后禁用重复生成）
+  /// 是否已在本页完成就绪（成功后禁用重复就绪）
   bool _composed = false;
 
-  /// 是否正在上传视频
-  bool _videoUploading = false;
-
-  /// 是否正在生成直播视频
+  /// 是否正在就绪开播
   bool _preparing = false;
 
   /// 编辑模式初值是否已回填到本地（避免 controller 重建覆盖用户输入）。
@@ -76,8 +69,6 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   void initState() {
     super.initState();
     _titleController = TextEditingController()..addListener(_onTitleChanged);
-    _videoPathController = TextEditingController()
-      ..addListener(_onVideoPathChanged);
     // 首帧后再加载可选项与初值，避免在 build 阶段发起网络请求
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(liveFormControllerProvider(widget.liveId).notifier).load();
@@ -87,19 +78,11 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   @override
   void dispose() {
     _titleController.dispose();
-    _videoPathController.dispose();
     super.dispose();
   }
 
   /// 标题变化时刷新底部保存按钮的可用态。
   void _onTitleChanged() {
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  /// 视频路径变化时刷新「上传实景视频」按钮可用态。
-  void _onVideoPathChanged() {
     if (mounted) {
       setState(() {});
     }
@@ -131,7 +114,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       _scriptId = initial.scriptId;
       _loopScriptId = initial.loopScriptId;
       _couponId = initial.couponId;
-      _videoSourceUrl = initial.videoSourceUrl;
+      // 已就绪场次重进编辑页时直接展示「已就绪」，禁止重复就绪
+      _composed = initial.isReady;
     });
     if (initial.loopScriptId != null) {
       _refreshLoopSummary();
@@ -232,61 +216,24 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     }
   }
 
-  /// 上传实景视频：真实调用 /api/lives/:id/video（multipart），成功后回填视频源。
-  Future<void> _uploadVideo() async {
-    final path = _videoPathController.text.trim();
-    if (path.isEmpty) {
-      _showSnack('请先填写本机 mp4 文件路径');
-      return;
-    }
-    setState(() {
-      _videoUploading = true;
-    });
-    try {
-      final live = await ref
-          .read(apiClientProvider)
-          .uploadLiveVideo(widget.liveId, path);
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _videoSourceUrl = live.videoSourceUrl;
-        _composed = false;
-      });
-      _showSnack('实景视频已上传，可点击「生成直播视频」');
-    } on ApiException catch (error) {
-      if (mounted) {
-        _showSnack('视频上传失败：${error.message}');
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _videoUploading = false;
-        });
-      }
-    }
-  }
-
-  /// 生成直播视频：真实调用 /api/lives/:id/prepare（FFmpeg 合成），
-  /// 成功后提示可开播（T12）。T11 不推流，只产出本地合成文件。
+  /// 就绪开播：真实调用 /api/lives/:id/prepare。纯 AI 语音模式无需实景视频，
+  /// 服务端完成敏感词 / 音色前置校验后直接置 ready（可进入工作台开播）。
   Future<void> _prepareLive() async {
     setState(() {
       _preparing = true;
     });
     try {
-      final live = await ref.read(apiClientProvider).prepareLive(widget.liveId);
+      await ref.read(apiClientProvider).prepareLive(widget.liveId);
       if (!mounted) {
         return;
       }
       setState(() {
-        _videoSourceUrl = live.videoSourceUrl;
         _composed = true;
       });
-      final hasComposed = live.videoSourceUrl.isNotEmpty;
-      _showSnack(hasComposed ? '已生成直播视频，可开播' : '已就绪，可开播（纯 AI 语音模式）');
+      _showSnack('已就绪，可进入工作台开播');
     } on ApiException catch (error) {
       if (mounted) {
-        _showSnack('生成失败：${error.message}');
+        _showSnack('就绪失败：${error.message}');
       }
     } finally {
       if (mounted) {
@@ -295,12 +242,6 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         });
       }
     }
-  }
-
-  /// 从 URL 或本机路径里取文件名段（Windows 与 POSIX 分隔符都兼容）。
-  String _videoFileName(String source) {
-    final segment = source.split(RegExp(r'[\\/]')).last;
-    return segment.isEmpty ? source : segment;
   }
 
   @override
@@ -390,7 +331,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         const SizedBox(height: 12),
         _buildCouponPicker(state, coupon),
         const SizedBox(height: 12),
-        _buildVideoSources(state),
+        _buildReadySection(state),
         const SizedBox(height: 12),
         _buildComplianceNote(),
         const SizedBox(height: 20),
@@ -598,38 +539,29 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     );
   }
 
-  /// 实景视频区（T11 点亮）：本机 mp4 路径输入 + 上传实景视频 + 「生成直播视频」合成。
-  /// 新建草稿还没有 liveId，先保存、再从列表进入编辑后操作；
-  /// prepare 由服务端做前置校验（视频 / 话术敏感词 / 音色）后同步合成，
-  /// 产物为本地合成文件：T11 不推流、不接 RTMP。
-  Widget _buildVideoSources(LiveFormState state) {
-    final busy = _videoUploading || _preparing;
-    // 仅编辑模式且初始为草稿（idle）可操作；合成中/就绪等由服务端保护
+  /// 开播准备区：纯 AI 语音模式主入口（无需实景视频）。绑定可用音色后点
+  /// 「纯 AI 就绪开播」，由服务端完成敏感词 / 音色前置校验后就绪；就绪后进入工作台开播。
+  Widget _buildReadySection(LiveFormState state) {
+    final busy = _preparing;
+    // 仅编辑模式且初始为草稿（idle）可操作；就绪 / 直播中等由服务端保护
     final canOperate = _isEdit && !busy && (state.initial?.isEditable ?? false);
-    final hasSource = _videoSourceUrl.isNotEmpty;
-    // 克隆音色（就绪）或火山预设音色任一绑定即视为「纯 AI 语音」来源
     final voice = _selectedVoice(state);
     final preset = _selectedPreset(state);
     final cloneVoiceReady = voice?.isReady ?? false;
     final hasVoiceChoice = preset != null || cloneVoiceReady;
-    final canUpload = canOperate && _videoPathController.text.trim().isNotEmpty;
-    final canPrepare = canOperate && !_composed && (hasSource || hasVoiceChoice);
-    final String sourceLabel;
-    if (_composed && hasSource) {
-      sourceLabel = '已生成：${_videoFileName(_videoSourceUrl)}';
-    } else if (_composed) {
-      sourceLabel = '已就绪（纯 AI 语音模式，可直接开播）';
-    } else if (hasSource) {
-      sourceLabel = '已上传：${_videoFileName(_videoSourceUrl)}';
+    final canPrepare = canOperate && !_composed && hasVoiceChoice;
+    final String statusLabel;
+    if (_composed) {
+      statusLabel = '已就绪，可进入工作台开播';
     } else if (hasVoiceChoice) {
-      sourceLabel = '未传实景视频 · 纯 AI 语音模式';
+      statusLabel = '已绑定音色，可直接就绪开播';
     } else {
-      sourceLabel = '尚未上传实景视频';
+      statusLabel = '尚未绑定可用音色，先在上方选择后即可就绪';
     }
-    // 状态为积极（可生成 / 已就绪）时以绿色对勾呈现，避免看起来像报错
-    final sourceReady = hasSource || hasVoiceChoice || _composed;
+    // 状态为积极（已就绪）时以绿色对勾呈现，避免看起来像报错
+    final statusReady = _composed;
     return Container(
-      key: const Key('liveVideoSection'),
+      key: const Key('liveReadySection'),
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -642,72 +574,47 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         children: [
           const Row(
             children: [
-              Icon(Icons.videocam_outlined, size: 18),
+              Icon(Icons.play_circle_outline, size: 18),
               SizedBox(width: 6),
               Text(
-                '实景视频',
+                '开播准备',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
               ),
             ],
           ),
           const SizedBox(height: 4),
           Text(
-            '实景视频可选：上传后生成合成直播视频（循环播放 + 音轨 + 角标）；'
-            '不上传则绑定可用音色后纯 AI 语音直接就绪、可开播。',
+            '纯 AI 语音模式无需实景视频：绑定可用音色后点下方按钮完成敏感词 / 音色预检并就绪，'
+            '就绪后进入工作台即可开始直播。',
             style: TextStyle(fontSize: 12, color: context.tokenTextBody),
           ),
           if (!_isEdit) ...[
             const SizedBox(height: 8),
             Text(
-              '新建草稿先保存，再从列表进入编辑后绑定可用音色即可就绪（实景视频可选上传）',
-              key: const Key('liveVideoNewModeHint'),
+              '新建草稿先保存，再从列表进入编辑后绑定可用音色即可就绪开播。',
+              key: const Key('liveReadyNewModeHint'),
               style: TextStyle(fontSize: 12, color: context.tokenTextBody),
             ),
           ],
           const SizedBox(height: 10),
           if (busy)
-            _buildVideoBusyHint()
+            _buildPrepareBusyHint()
           else ...[
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: TextField(
-                    key: const Key('liveVideoPathField'),
-                    controller: _videoPathController,
-                    enabled: canOperate,
-                    decoration: const InputDecoration(
-                      labelText: '实景视频本机路径',
-                      hintText: r'D:\videos\scene.mp4',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                FilledButton.tonal(
-                  key: const Key('liveVideoUploadButton'),
-                  onPressed: canUpload ? _uploadVideo : null,
-                  child: const Text('上传实景视频'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
             Row(
               children: [
                 Icon(
-                  sourceReady ? Icons.check_circle_outline : Icons.info_outline,
+                  statusReady ? Icons.check_circle_outline : Icons.info_outline,
                   size: 16,
-                  color: sourceReady ? AppColors.live : context.tokenTextHint,
+                  color: statusReady ? AppColors.live : context.tokenTextHint,
                 ),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    sourceLabel,
-                    key: const Key('liveVideoSourceText'),
+                    statusLabel,
+                    key: const Key('liveReadyStatusText'),
                     style: TextStyle(
                       fontSize: 12,
-                      color: sourceReady ? AppColors.live : context.tokenTextBody,
+                      color: statusReady ? AppColors.live : context.tokenTextBody,
                     ),
                   ),
                 ),
@@ -722,14 +629,14 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
                 style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(44),
                 ),
-                child: Text(hasSource ? '生成直播视频' : '纯 AI 就绪开播'),
+                child: const Text('纯 AI 就绪开播'),
               ),
             ),
-            if (_isEdit && !canOperate)
+            if (_isEdit && !canOperate && !_composed)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
-                  '仅草稿状态可操作（合成中 / 就绪等不可重复生成）',
+                  '仅草稿状态可操作（就绪 / 直播中等不可重复就绪）',
                   style: TextStyle(fontSize: 12, color: context.tokenTextHint),
                 ),
               ),
@@ -739,8 +646,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     );
   }
 
-  /// 上传 / 合成进行中的进度提示。
-  Widget _buildVideoBusyHint() {
+  /// 就绪开播进行中的进度提示。
+  Widget _buildPrepareBusyHint() {
     return Row(
       children: [
         const SizedBox(
@@ -751,8 +658,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         const SizedBox(width: 10),
         Expanded(
           child: Text(
-            _videoUploading ? '正在上传实景视频…' : '正在合成直播视频…',
-            key: const Key('liveVideoBusyText'),
+            '正在就绪开播…',
+            key: const Key('livePrepareBusyText'),
             style: TextStyle(fontSize: 13, color: context.tokenTextBody),
           ),
         ),
