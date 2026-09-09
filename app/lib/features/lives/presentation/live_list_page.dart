@@ -470,7 +470,7 @@ class _LiveCard extends StatelessWidget {
                   TextButton(
                     key: Key('liveEdit_${live.id}'),
                     onPressed: onEdit,
-                    child: const Text('编辑'),
+                    child: Text(live.hasVoiceSource ? '编辑' : '去完善'),
                   )
                 else if (live.status == LiveStatus.ready ||
                     live.status == LiveStatus.live)

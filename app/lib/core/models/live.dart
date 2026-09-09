@@ -121,6 +121,9 @@ class Live {
   /// 是否可编辑：仅 idle（草稿）可编辑；合成中/就绪/直播中/已结束均不可编辑
   bool get isEditable => status == LiveStatus.idle;
 
+  /// 是否已绑定出声来源（克隆音色 / 火山预设音色任一）：无音色的草稿无法就绪开播
+  bool get hasVoiceSource => voiceId != null || volcPresetId != null;
+
   /// 是否直播中
   bool get isLive => status == LiveStatus.live;
 

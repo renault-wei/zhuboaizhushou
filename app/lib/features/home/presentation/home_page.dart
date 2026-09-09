@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:starvoice_app/core/models/douyin_bind_status.dart';
+import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/models/voice_agreement.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/core/theme/app_colors.dart';
@@ -61,7 +62,9 @@ class HomePage extends ConsumerWidget {
               Text('用户ID：$userId', style: const TextStyle(fontSize: 16)),
               const SizedBox(height: 12),
               Text('登录时间：$loginTimeText', style: const TextStyle(fontSize: 16)),
-              const SizedBox(height: 32),
+              const SizedBox(height: 24),
+              const _LiveStartHeroCard(),
+              const SizedBox(height: 16),
               const _DouyinAccountCard(),
               const SizedBox(height: 16),
               const _VoiceAgreementCard(),
@@ -75,8 +78,6 @@ class HomePage extends ConsumerWidget {
               const _LoopScriptLibraryCard(),
               const SizedBox(height: 16),
               const _CouponEntryCard(),
-              const SizedBox(height: 16),
-              const _LiveEntryCard(),
               const SizedBox(height: 16),
               const _WalletEntryCard(),
               const SizedBox(height: 24),
@@ -98,47 +99,270 @@ class HomePage extends ConsumerWidget {
   }
 }
 
-/// 「开播配置」入口卡片：位于「团购券」卡片下方。
-/// 点击进入开播配置列表页 /lives，把音色 / 话术 / 团购券组合成开播草稿。
-class _LiveEntryCard extends StatelessWidget {
-  const _LiveEntryCard();
+/// 「AI 语音开播」主入口卡片：首页顶部主行动入口，状态化展示当前场次
+/// （直播中 / 已就绪 / 草稿待完善 / 空态），点击直达对应工作台或列表页；
+/// 从页面返回后自动刷新，保证与列表页状态一致。
+class _LiveStartHeroCard extends ConsumerStatefulWidget {
+  const _LiveStartHeroCard();
+
+  @override
+  ConsumerState<_LiveStartHeroCard> createState() => _LiveStartHeroCardState();
+}
+
+class _LiveStartHeroCardState extends ConsumerState<_LiveStartHeroCard> {
+  List<Live>? _lives;
+  bool _loading = true;
+  bool _opening = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    // 首帧后再拉取，避免 build 阶段发起网络请求
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
+  }
+
+  Future<void> _refresh() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    try {
+      final lives = await ref.read(apiClientProvider).listLives();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _lives = lives;
+        _loading = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _error = error.message;
+      });
+    }
+  }
+
+  /// 直播中的场次（多条时取首条，其余在列表页统一管理）。
+  Live? get _liveNow {
+    final lives = _lives;
+    if (lives == null) {
+      return null;
+    }
+    for (final live in lives) {
+      if (live.isLive) {
+        return live;
+      }
+    }
+    return null;
+  }
+
+  /// 已就绪待开播的场次（无直播中时取首条就绪）。
+  Live? get _readyNow {
+    final lives = _lives;
+    if (lives == null) {
+      return null;
+    }
+    for (final live in lives) {
+      if (live.isReady) {
+        return live;
+      }
+    }
+    return null;
+  }
+
+  /// 草稿（idle）数量：用于「去完善」引导文案。
+  int get _draftCount {
+    final lives = _lives;
+    if (lives == null) {
+      return 0;
+    }
+    return lives.where((live) => live.status == LiveStatus.idle).length;
+  }
+
+  /// 点击主入口：直播中 / 就绪场次直达工作台；空态去新建，否则进列表管理。
+  Future<void> _handleTap() async {
+    if (_opening || _loading) {
+      return;
+    }
+    if (_error != null) {
+      // 同步失败：整卡点击等同重试
+      await _refresh();
+      return;
+    }
+    final target = _liveNow ?? _readyNow;
+    if (target != null) {
+      setState(() => _opening = true);
+      try {
+        await context.push('/lives/${target.id}/monitor');
+      } finally {
+        if (mounted) {
+          setState(() => _opening = false);
+        }
+      }
+      if (mounted) {
+        await _refresh();
+      }
+      return;
+    }
+    final lives = _lives ?? const <Live>[];
+    setState(() => _opening = true);
+    try {
+      await context.push(lives.isEmpty ? '/lives/new' : '/lives');
+    } finally {
+      if (mounted) {
+        setState(() => _opening = false);
+      }
+    }
+    if (mounted) {
+      await _refresh();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final bool blocked = _loading || _opening;
+    final String hint;
+    final String action;
+    final IconData actionIcon;
+    if (_loading) {
+      hint = '正在同步开播状态…';
+      action = '请稍候';
+      actionIcon = Icons.hourglass_top_rounded;
+    } else if (_error != null) {
+      hint = '开播状态同步失败：$_error';
+      action = '重试';
+      actionIcon = Icons.refresh_rounded;
+    } else {
+      final liveNow = _liveNow;
+      if (liveNow != null) {
+        hint = '正在直播：${liveNow.title}';
+        action = '进入直播';
+        actionIcon = Icons.radio_button_checked_rounded;
+      } else {
+        final readyNow = _readyNow;
+        if (readyNow != null) {
+          hint = '已就绪，可一键开播：${readyNow.title}';
+          action = '开始直播';
+          actionIcon = Icons.play_arrow_rounded;
+        } else {
+          final lives = _lives ?? const <Live>[];
+          if (lives.isEmpty) {
+            hint = '还没有直播场次，创建第一场就能用 AI 语音开播';
+            action = '创建场次';
+            actionIcon = Icons.add_rounded;
+          } else {
+            final draftCount = _draftCount;
+            if (draftCount > 0) {
+              hint = '有 $draftCount 个草稿待完善，补齐音色/话术即可开播';
+              action = '去完善';
+              actionIcon = Icons.edit_rounded;
+            } else {
+              hint = '直播场次都在这里统一管理';
+              action = '管理场次';
+              actionIcon = Icons.tune_rounded;
+            }
+          }
+        }
+      }
+    }
+
     return Card(
-      key: const Key('liveEntryCard'),
+      key: const Key('liveStartHeroCard'),
       margin: EdgeInsets.zero,
-      child: InkWell(
-        key: const Key('liveEntryOpenButton'),
-        borderRadius: BorderRadius.circular(12),
-        onTap: () => context.push('/lives'),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  const Icon(Icons.live_tv, size: 20),
-                  const SizedBox(width: 8),
-                  const Text(
-                    '开播配置',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+      clipBehavior: Clip.antiAlias,
+      child: Ink(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: <Color>[AppColors.primary, AppColors.primaryDark],
+          ),
+        ),
+        child: InkWell(
+          key: const Key('liveStartHeroOpenButton'),
+          onTap: blocked ? null : _handleTap,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    const Icon(
+                      Icons.campaign_rounded,
+                      size: 22,
+                      color: Colors.white,
+                    ),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'AI 语音开播',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    Icon(
+                      Icons.chevron_right,
+                      size: 20,
+                      color: Colors.white.withValues(alpha: 0.9),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  hint,
+                  key: const Key('liveStartHeroHint'),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    height: 1.4,
                   ),
-                  const Spacer(),
-                  Icon(
-                    Icons.chevron_right,
-                    size: 20,
-                    color: context.tokenTextHint,
+                ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  height: 42,
+                  child: FilledButton.icon(
+                    key: const Key('liveStartActionButton'),
+                    onPressed: blocked ? null : _handleTap,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: AppColors.primaryDark,
+                      disabledBackgroundColor: Colors.white.withValues(
+                        alpha: 0.85,
+                      ),
+                      disabledForegroundColor: AppColors.primaryDark,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(21),
+                      ),
+                    ),
+                    icon: _opening
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: AppColors.primaryDark,
+                            ),
+                          )
+                        : Icon(actionIcon, size: 18),
+                    label: Text(
+                      _opening ? '进入中…' : action,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Text(
-                '绑定音色 / 话术 / 团购券，生成开播配置草稿（T11 接入视频源）',
-                style: TextStyle(fontSize: 13, color: context.tokenTextBody),
-              ),
-            ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
