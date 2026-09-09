@@ -15,6 +15,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
@@ -42,6 +43,9 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   /// 弹幕日志轮询间隔
   static const _danmakuInterval = Duration(seconds: 3);
 
+  /// 「助播机出声」常开偏好键：直播进入时按该记忆自动恢复出声。
+  static const _speakerAlwaysOnKey = 'assistant_speaker_always_on';
+
   Timer? _monitorTimer;
   Timer? _danmakuTimer;
 
@@ -66,6 +70,12 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
 
   /// 助播机出声控制器实例缓存：dispose 阶段 ref 已失效，需用本实例收口出声。
   AssistantSpeakerController? _speakerNotifier;
+
+  /// 助播机出声是否常开：来自本地偏好的内存镜像，避免直播中轮询反复读盘。
+  bool _speakerAlwaysOn = false;
+
+  /// 本地常开偏好是否已读取：仅首个直播态读取一次并缓存。
+  bool _speakerPrefLoaded = false;
 
   /// 测试弹幕输入框（直播中可用，模拟观众提问触发 AI 语音回复）
   final TextEditingController _testController = TextEditingController();
@@ -99,7 +109,12 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     _danmakuTimer?.cancel();
     _ticker?.cancel();
     _testController.dispose();
-    _speakerNotifier?.stop();
+    final speaker = _speakerNotifier;
+    if (speaker != null) {
+      // 出声收口延后到当前卸载帧完成后再停用：元素已随页面卸载，同步
+      // notify 会触发已 defunct 元素的 markNeedsBuild 断言。
+      scheduleMicrotask(speaker.stop);
+    }
     super.dispose();
   }
 
@@ -138,6 +153,10 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
       if (monitor.status != LiveStatus.live) {
         ref.read(assistantSpeakerControllerProvider.notifier).stop();
       }
+      // 直播中按「常开」记忆自动恢复助播出声（用户手动关闭则不拉起）
+      if (monitor.status == LiveStatus.live) {
+        _syncSpeakerAutoStart();
+      }
     } on ApiException catch (error) {
       if (!mounted) {
         return;
@@ -148,6 +167,28 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
           _error = error.message;
         }
       });
+    }
+  }
+
+  /// 直播中按用户「常开」偏好自动恢复助播出声：仅首个直播态读取一次本地
+  /// 偏好并缓存；开关由用户手动切换时同步写回偏好，本方法不覆盖用户选择。
+  Future<void> _syncSpeakerAutoStart() async {
+    if (ref.read(assistantSpeakerControllerProvider).enabled) {
+      return;
+    }
+    if (!_speakerPrefLoaded) {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) {
+        return;
+      }
+      _speakerPrefLoaded = true;
+      _speakerAlwaysOn = prefs.getBool(_speakerAlwaysOnKey) ?? false;
+    }
+    if (_speakerAlwaysOn) {
+      final notifier = ref.read(assistantSpeakerControllerProvider.notifier);
+      if (!ref.read(assistantSpeakerControllerProvider).enabled) {
+        notifier.start();
+      }
     }
   }
 
@@ -540,7 +581,8 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
           const SizedBox(height: 10),
           const Text(
             '启用后本机轮询播报队列并出声，经音频转接线送入开播手机；'
-            '需服务端 LIVE_SPEAKER_OUTPUT=phone。',
+            '需服务端 LIVE_SPEAKER_OUTPUT=phone。开启后记忆为常开，'
+            '下次进入直播将自动启用。',
             style: TextStyle(
               fontSize: 12,
               color: AppColors.nightTextDim,
@@ -576,7 +618,12 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                 value: enabled,
                 activeThumbColor: AppColors.live,
                 activeTrackColor: AppColors.live.withValues(alpha: 0.35),
-                onChanged: (value) {
+                onChanged: (value) async {
+                  // 常开记忆写回本地，再启停出声端
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool(_speakerAlwaysOnKey, value);
+                  _speakerAlwaysOn = value;
+                  _speakerPrefLoaded = true;
                   final notifier = ref.read(
                     assistantSpeakerControllerProvider.notifier,
                   );

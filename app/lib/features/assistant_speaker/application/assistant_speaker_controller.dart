@@ -98,6 +98,9 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
 
   /// 停用出声：停表、打断播放并回到 idle（幂等，页面收尾 / 直播结束时调用）。
   void stop() {
+    if (_disposed) {
+      return;
+    }
     if (!state.enabled && state.status == AssistantSpeakerStatus.idle) {
       return;
     }
@@ -163,8 +166,10 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     if (_disposed) {
       return;
     }
-    _disposed = true;
+    // 先停表收口再置位：stop 依赖 _disposed 守卫兜底迟到的停用调用，
+    // 若先置位会导致 stop 直接返回而遗留轮询定时器。
     stop();
+    _disposed = true;
     unawaited(_player.dispose());
     super.dispose();
   }

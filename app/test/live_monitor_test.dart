@@ -9,6 +9,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/features/assistant_speaker/application/assistant_speaker_controller.dart';
@@ -74,7 +75,9 @@ Future<void> _pumpMonitor(
   WidgetTester tester,
   FakeBackend backend, {
   List<Override> overrides = const <Override>[],
+  Map<String, Object> initialPrefs = const <String, Object>{},
 }) async {
+  SharedPreferences.setMockInitialValues(initialPrefs);
   // 放大测试视口：让弹幕日志区也处于可视区（ListView 懒构建，默认视口可能不渲染）
   tester.view.physicalSize = const Size(1200, 2600);
   tester.view.devicePixelRatio = 1.0;
@@ -214,6 +217,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
     expect(speakerController.state.enabled, isTrue);
     expect(find.text('监听中'), findsOneWidget);
+    // 常开记忆已写回本地，供下次直播自动恢复
+    var prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool('assistant_speaker_always_on'), isTrue);
 
     // 关闭开关：回到未启用
     await tester.tap(find.byKey(const Key('liveMonitorSpeakerSwitch')));
@@ -221,6 +227,42 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
     expect(speakerController.state.enabled, isFalse);
     expect(find.text('未启用'), findsOneWidget);
+    prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool('assistant_speaker_always_on'), isFalse);
+
+    await _unmount(tester);
+    speakerController.dispose();
+  });
+
+  testWidgets('直播中 + 常开记忆：偏好开启时进入直播自动启用助播出声（Q5）', (tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
+      ],
+    );
+    final speakerController = AssistantSpeakerController(
+      ApiClient(buildMockDio(backend)),
+      _FakeSpeechOutPlayer(),
+    );
+    await _pumpMonitor(
+      tester,
+      backend,
+      overrides: <Override>[
+        assistantSpeakerControllerProvider.overrideWith(
+          (ref) => speakerController,
+        ),
+      ],
+      initialPrefs: <String, Object>{'assistant_speaker_always_on': true},
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // 进入直播态即按常开记忆自动启用，无需再次手动打开
+    expect(speakerController.state.enabled, isTrue);
+    expect(find.text('监听中'), findsOneWidget);
+    final switchOn = tester.widget<Switch>(
+      find.byKey(const Key('liveMonitorSpeakerSwitch')),
+    );
+    expect(switchOn.value, isTrue);
 
     await _unmount(tester);
     speakerController.dispose();
