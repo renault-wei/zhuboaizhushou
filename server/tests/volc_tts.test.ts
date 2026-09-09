@@ -215,6 +215,38 @@ it('合成成功：请求头正确、mp3 中间产物被清理、返回可播放
   expect(requestBody.req_params?.sample_rate).toBe(24000);
 });
 
+it('单次合成覆盖 speaker/语速：请求体带覆盖值（缺省回落构造值）', async () => {
+  const audio = Buffer.from('fake-mp3-bytes');
+  const sseText = [
+    `data: ${JSON.stringify({ code: 0, data: audio.toString('base64') })}`,
+    `data: ${JSON.stringify({ code: 20000000, message: 'ok' })}`,
+  ].join('\n');
+  const captured: { body?: string } = {};
+  const fetchFn = async (_url: string, init: { body?: string }) => {
+    captured.body = init.body;
+    return new Response(sseText, { status: 200 });
+  };
+  const caseDir = join(tempRoot, 'override');
+  mkdirSync(caseDir, { recursive: true });
+  const synth = createVolcTtsSynth({
+    apiKey: 'test-key',
+    baseUrl: 'https://openspeech.example.com',
+    sampleRate: 24000,
+    fetchFn,
+    outDir: caseDir,
+    transcode: makeFakeTranscoder(),
+  });
+  await synth.synthesize('帮我覆盖音色', {
+    speaker: 'zh_male_m191_uranus_bigtts',
+    speechRate: 30,
+  });
+  const body = JSON.parse(captured.body ?? '{}') as {
+    req_params?: { speaker?: string; audio_params?: { speech_rate?: number } };
+  };
+  expect(body.req_params?.speaker).toBe('zh_male_m191_uranus_bigtts');
+  expect(body.req_params?.audio_params?.speech_rate).toBe(30);
+});
+
 it('HTTP 非 2xx：抛 VOLC_TTS_HTTP_FAILED 且带状态码', async () => {
   const fetchFn = async () => new Response('forbidden', { status: 403 });
   const synth = createVolcTtsSynth({

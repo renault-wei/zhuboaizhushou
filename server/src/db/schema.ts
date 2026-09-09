@@ -397,6 +397,44 @@ export const quotas = pgTable(
   (table) => [uniqueIndex('quotas_user_period_unique').on(table.userId, table.period)],
 );
 
+// ---------- tts_audio_cache：TTS 分句音频缓存（按 user 隔离；命中旁路真实合成）----------
+// 键 = (userId, voiceKey, rate, textSha256)：voiceKey = 火山预设 id / 克隆 voiceId（互斥归一口径同 lives）；
+// 命中不调供应商、不写 usage_logs、不扣 ttsCharsUsed；产物 wav 存 server/data/tts-cache，行内只存相对路径。
+export const ttsAudioCache = pgTable(
+  'tts_audio_cache',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // 音色键：火山预设 = volcPresetId；克隆 = voiceId（与 lives 归一取值一致）
+    voiceKey: varchar('voice_key', { length: 64 }).notNull(),
+    // 语速档：对齐火山 speech_rate [-50, 100]，0 为正常语速
+    rate: integer('rate').notNull().default(0),
+    // 台本条目文本 sha256（改一个字即 miss，天然处理改稿失效）
+    textSha256: varchar('text_sha256', { length: 64 }).notNull(),
+    // 原始文本快照（便于排查命中/失效）
+    text: text('text').notNull(),
+    // 缓存文件相对路径（相对 tts 缓存根目录，见 env.ttsCache.dir）
+    audioPath: text('audio_path').notNull(),
+    // 真实合成字符数（T5 计量口径：按行内字符核对 usage_logs）
+    chars: integer('chars').notNull(),
+    // 命中统计（懒清理兜底排序依据；不进实时展示）
+    hitCount: integer('hit_count').notNull().default(0),
+    lastHitAt: timestamp('last_hit_at', { withTimezone: true }),
+    ...timestamps(),
+  },
+  (table) => [
+    uniqueIndex('tts_audio_cache_voice_text_unique').on(
+      table.userId,
+      table.voiceKey,
+      table.rate,
+      table.textSha256,
+    ),
+    index('tts_audio_cache_user_idx').on(table.userId),
+  ],
+);
+
 // ---------- usage_logs：用量流水（每次 AI 调用一条，含成本）----------
 export const usageLogs = pgTable(
   'usage_logs',

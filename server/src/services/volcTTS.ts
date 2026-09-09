@@ -196,6 +196,14 @@ export const volcDefaultTranscoder: VolcTranscoder = async (
 
 // ---------- 合成器（与 liveSpeaker 的 LocalWavSynth 同构）----------
 
+/** 单次合成覆盖项：缺省回落构造/环境变量默认值，liveSpeaker 现有调用（只传 text）行为完全不变 */
+export interface VolcTtsTextOverrides {
+  /** 本次合成音色（发音人 ID） */
+  speaker?: string;
+  /** 本次合成语速：[-50, 100]，0 为正常语速 */
+  speechRate?: number;
+}
+
 export interface VolcTtsSynthOptions {
   /** 火山语音 API Key；缺省读环境变量 VOLC_TTS_API_KEY */
   apiKey?: string;
@@ -233,7 +241,7 @@ export class VolcTtsSynth implements LocalWavSynth {
   }
 
   /** 把一段文字合成为可直接播放的 PCM wav，返回临时文件绝对路径（调用方播完负责清理） */
-  async synthesize(text: string): Promise<{ wavPath: string }> {
+  async synthesize(text: string, overrides: VolcTtsTextOverrides = {}): Promise<{ wavPath: string }> {
     const apiKey = this.options.apiKey ?? env.volcTTS.apiKey;
     if (!apiKey) {
       throw new VolcTtsError(
@@ -247,7 +255,7 @@ export class VolcTtsSynth implements LocalWavSynth {
     }
     const baseUrl = (this.options.baseUrl ?? env.volcTTS.baseUrl).replace(/\/+$/, '');
     const resourceId = this.options.resourceId ?? env.volcTTS.resourceId;
-    const speaker = this.options.speaker ?? env.volcTTS.speaker;
+    const speaker = overrides.speaker ?? this.options.speaker ?? env.volcTTS.speaker;
     const sampleRate = this.options.sampleRate ?? env.volcTTS.sampleRate;
     if (!VOLC_TTS_VALID_SAMPLE_RATES.has(sampleRate)) {
       throw new VolcTtsError(
@@ -255,7 +263,7 @@ export class VolcTtsSynth implements LocalWavSynth {
         `采样率 ${sampleRate} 不在火山官方可选范围（8000~48000）`,
       );
     }
-    const speechRate = this.options.speechRate ?? env.volcTTS.speechRate;
+    const speechRate = overrides.speechRate ?? this.options.speechRate ?? env.volcTTS.speechRate;
     const timeoutMs = this.options.timeoutMs ?? VOLC_TTS_TIMEOUT_MS;
     const fetchFn = this.options.fetchFn ?? fetch;
     const outDir = this.options.outDir ?? tmpdir();

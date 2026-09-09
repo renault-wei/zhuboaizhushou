@@ -120,6 +120,14 @@ export const env = {
     certSerialNo: optionalEnv('WXPAY_CERT_SERIAL_NO'),
     notifyUrl: optionalEnv('WXPAY_NOTIFY_URL'),
   },
+  // TTS 分句缓存（T3）：命中旁路真实合成，把每小时新合成量压到锚点内
+  ttsCache: {
+    // TTS_CACHE_ENABLED=false 时旁路缓存（灰度对比命中率/成本用；默认开）
+    enabled: optionalEnv('TTS_CACHE_ENABLED') !== 'false',
+    // 缓存根目录：默认相对 server 运行目录 data/tts-cache（产物 *.wav 已被 .gitignore 覆盖）
+    dir: optionalEnv('TTS_CACHE_DIR') ?? 'data/tts-cache',
+  },
+
 } as const;
 
 export type Env = typeof env;
