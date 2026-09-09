@@ -103,3 +103,62 @@
   - 对照组：伪造 ActiveCode → `{"code":-1,"msg":"激活码无效"}`。
 - verify 探针：AppKey = 文档示例值时通过 Key 校验、卡在 ActiveCode 解码（Base64 错误）→ 示例 AppKey 真实可用；AppKey = 试用 GUID 时返回 `app key is invalid` → GUID 不是合伙人 AppKey。调通 create/verify 全量还差文档未公开的 AES 密钥（合伙人侧私下持有）。
 - 口径更新：该 GUID 的价值 = 激活桌面端「畅播·全平台弹幕助手」并使用其 localhost:6789 控制接口；不替代 SignWss Web API Key。桌面客户端试用 + helperAdapter 仍是 D 系列默认候选；采购 `apikey-dy-*` 仅在需要自研直连抖音时启用。
+
+## 7. 语音架构取证：低成本 = 服务端合成 + 分句缓存复用（2026-09-09，doc-only）
+
+> 状态：调研落档（不动代码）。回答「竞品凭什么便宜」——结论是**不是供应商便宜，是架构省钱**：
+> App 端零 TTS 厂商调用，语音合成全部走服务端、按句把已合成 mp3 下发；播放端只做「攒 6 条 → 顺序播 → 空了回放历史」，
+> 把单位时长内的真实新合成量压到很低，从而实现按时长/算力收费仍有余量。
+
+### 7.1 取证对象与多份同构引擎副本
+
+- 竞品反编译产物 `app-service.js`（2026-09-07 逆向，下同）里，同一套「助播机」语音引擎存在**多份几乎一致的副本**：
+  | 页面 | 近似起始行 | 角色 |
+  |---|---|---|
+  | pages/live/new-float.vue | ~4912（状态定义）~5657（引擎主体） | 悬浮助播引擎（取证基准） |
+  | pages/feedback/index.vue | ~46515 | 助播引擎副本 |
+  | pages/feedback/index-app.vue | ~56496 | 助播直播间：抖音弹幕解码 + 上报 + 同款引擎 |
+  | pages/feedback/index-float.vue | ~58783 | 助播引擎副本 |
+- 以下行号除注明外均指 **pages/live/new-float.vue** 一份；其余副本逻辑一致、仅行号平移。取证时不逐一列举所有副本，避免读者误以为只存在单一冷门路径。
+
+### 7.2 语音合成全部在服务端（App 端零 TTS 厂商调用）
+
+- 合成请求 = 服务端接口（HTTP 与 socket 两条等价通道，App 只提交「一句话 + 场次 + 队列深度」）：
+  - HTTP：`:5503` POST `api/v1.liveapi/makeAudio`（参数含 `txt`/`task_id`/`audio`/`txtnum`/`daudio`/`xuhao`）；备选 `:5538`（`methd:"makeAudio"` → `socket/xiecheng_login/needLogin`）。
+  - Socket：`:5356` `/socket/open/makeTask → /socket/open/gettxtAudio`（`task_id + txt`），语义同 makeAudio。
+  - 响应 `data.relist` = 已合成音频项列表：`:5523` / `:5550` 逐条按类型处理（`audioRes` 入播放队，`addAudio` / `clockAudio` 走插队 / 定点播）。
+- 已合成音频以 `audioRes` 回传：`:5122` socket 收 `audioRes` → `:5303` `goaudioOption`（downloader 把 mp3 落本地临时文件）→ 成功则 push `last_audio`（`:5312`）→ `:5431` `goaudioRes` 排入播放队列。
+- 全文件检索不到火山 / 讯飞 / Azure 等 TTS 厂商 SDK 的调用痕迹：**客户端不碰合成**；
+  `:2681`「实时语音合成，延迟低于200ms」是官网型营销文案（UI 文案），不是 App 侧能力声明。
+- 克隆 / 预设音色同样服务端化（pages/feedback/audio.vue）：`:41075` POST `api/v1.live/kelong`（样本克隆）、
+  `:41124` POST `api/v1.live/kelongx`（长音频克隆）、`:41165` POST `api/v1.live/suijiaudio`（随机预设音色，`isfree:1`）；
+  主播 / 助播音色列表 = index-app.vue `:57122` POST `api/v1.live/persons`，`:57133` 成功回调写 `hostVoices` / `assistantVoices`。
+
+### 7.3 播放端平滑 = 攒 6 条 + 空队历史回放 + 缺货退避
+
+- `store_audio` 归集缓存：`:5454` `getares` 在序号 <5 时只攒条不播放（UI「正在归集音频 n/6」），攒满才切 `audioArray` 顺序播；
+  状态定义见 `:4912`（`store_audio:""`）。`:4913` `last_audio:[]` 缓存每一条已合成 mp3。
+- 空队历史回放：`:5615` `Endlater` 在 `audioArray` 空且 `last_audio ≥ 30` 时，按 `last_audio_xuhao` 轮转回放已播 mp3——队列空转时段不触发新合成。
+- 缺货 / 断连退避 `audio_sos`：`:5391` 随机退避 35~60s（`Math.floor(25*Math.random())+35`，乘 1000）后才重连要货；`:5403` 库存告急日志「库存不足，拒不奉诏」。
+  `last_audio ≥ 50` 时降频 `sendtxtAudio` 保活——本地库存越足，真实新合成越少。
+- AI 改写 / 生成的话术经 `getRetxt`（`:5420` 轮询 `/socket/index/getRetxt`，`:5050` welcome 后触发）由服务端下发文案，App 只排队转合成。
+
+### 7.4 弹幕插播：服务端节流 + 自然停顿才插入
+
+- 弹幕上报 `sendbulle`（index-app.vue `:57072`）POST `socket/httpapi/bullet`（`type`/`content`/`nickname`/`live_id`），
+  服务端合成后以 `audioRes` 推回，App 端不另起 AI 管道。
+- 插播节流 `dengdanmu`（`:5140`）：`useaudio` 且当前句快播完（`duration - currentTime` 与 `chaju` 判定）才等一个 `later` 定时器把弹幕回复插进空档，
+  不打断整段产品口播——对应我方「弹幕回复只在空档插入」的既有口径，竞品用的是播放端语义近似的节流实现。
+
+### 7.5 结论：结构省钱，不是供应商便宜（2026-09-09 立项口径）
+
+- 便宜来自**服务端一次合成、播放端缓存/历史反复复用**：同一批已合成 mp3 在播放端缓存与历史里循环回放，
+  真实新合成量只来自「首轮 + 改稿 + 弹幕回复」。单位小时新合成字符压得越低，按小时/算力卖就越有余量。
+- 对应我方路线：**话术分句音频缓存**（里程碑见 `docs/LOWCOST-AUDIO-PLAN.md`），成本锚点 = 每小时 ≤0.4 元
+  （口径见 `docs/PLATFORM-NEUTRAL-VOICE.md` §4.1）。我方现状已满足「合成只在 server」（火山 TTS 由 `server/src/services/volcTTS.ts` 注入），不需要 App 端引入任何厂商调用。
+- 只抄结构与结论，不搬竞品代码（合规约束沿用本文件开头口径）。
+
+### 7.6 证据边界与存疑
+
+- 仅凭 APK 无法证明服务端用哪家 TTS、采购单价多少；能证明的是「服务端合成 + 播放端缓存复用」的**结构**。
+- `dengdanmu` / `audio_sos` / 历史回放属于竞品内部工程细节；行号基于 2026-09-07 逆向产物，竞品版本更新后可能失效，引用时以本文档行号快照为准。
