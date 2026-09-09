@@ -59,7 +59,7 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
     }
   }
 
-  /// 查看占位：processing / ended / failed 暂无详情页，仅提示后续版本接入。
+  /// 查看占位：processing 暂无详情页，仅提示后续版本接入。
   void _viewPlaceholder() {
     _showSnack('该状态的详情与推流能力将在后续版本接入');
   }
@@ -71,6 +71,50 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
     if (mounted) {
       await _reload();
     }
+  }
+
+  /// 再来一场：把已结束 / 失败场次复制为 idle 草稿（保留音色、话术、循环
+  /// 台本与团购券，不携带开播运行态），随后进入新草稿编辑页完善开播。
+  Future<void> _goReplay(Live live) async {
+    try {
+      final created = await ref.read(apiClientProvider).createLive(
+            title: _replayTitle(live.title),
+            volcPresetId: live.volcPresetId,
+            voiceId: live.voiceId,
+            scriptId: live.scriptId,
+            loopScriptId: live.loopScriptId,
+            couponId: live.couponId,
+          );
+      if (!mounted) {
+        return;
+      }
+      _showSnack('已按本场配置复制新草稿，可完善后再次开播');
+      await context.push('/lives/${created.id}');
+      if (mounted) {
+        await _reload();
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        _showSnack('复制失败：${error.message}');
+      }
+    }
+  }
+
+  /// 复播草稿标题：去除历史「（复播）」后缀后追加，避免多次复播标题叠加；
+  /// 超长标题按服务端 100 字上限截断后再拼后缀。
+  String _replayTitle(String title) {
+    const suffix = '（复播）';
+    var base = title.trim();
+    while (base.endsWith(suffix)) {
+      base = base.substring(0, base.length - suffix.length).trimRight();
+    }
+    if (base.isEmpty) {
+      return '开播配置$suffix';
+    }
+    const maxLength = 100;
+    final budget = maxLength - suffix.length;
+    final safe = base.length <= budget ? base : base.substring(0, budget);
+    return '$safe$suffix';
   }
 
   /// 结束结算弹层：展示本场按分钟计费的结算摘要（不足 1 分钟 / 无结算摘要时
@@ -264,6 +308,7 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
               couponNames: state.couponNames,
               onEdit: live.isEditable ? () => _goEdit(live) : null,
               onView: _viewPlaceholder,
+              onReplay: live.isFinished ? () => _goReplay(live) : null,
               onMonitor: live.isReady || live.isLive
                   ? () => _goMonitor(live)
                   : null,
@@ -367,7 +412,8 @@ Color _statusColor(BuildContext context, LiveStatus status) {
 
 /// 单条开播配置卡片：标题 + 状态徽章 + 绑定摘要 + 操作按钮。
 /// 操作按钮随状态切换：idle 编辑；ready / live 进入监控（开播 / 结束
-/// 收口在工作台内）；processing / ended / failed 查看占位。
+/// 收口在工作台内）；processing 查看占位；ended / failed「再来一场」
+/// 复制为可再次开播的草稿。
 /// 删除保护：processing / ready / live 的删除按钮禁用（服务端同样 409 拦截）。
 class _LiveCard extends StatelessWidget {
   const _LiveCard({
@@ -378,6 +424,7 @@ class _LiveCard extends StatelessWidget {
     required this.couponNames,
     required this.onEdit,
     required this.onView,
+    required this.onReplay,
     required this.onMonitor,
     required this.onEnd,
     required this.onDelete,
@@ -390,6 +437,7 @@ class _LiveCard extends StatelessWidget {
   final Map<String, String> couponNames;
   final VoidCallback? onEdit;
   final VoidCallback? onView;
+  final VoidCallback? onReplay;
   final VoidCallback? onMonitor;
   final VoidCallback? onEnd;
   final VoidCallback? onDelete;
@@ -478,6 +526,12 @@ class _LiveCard extends StatelessWidget {
                     key: Key('liveMonitor_${live.id}'),
                     onPressed: onMonitor,
                     child: const Text('进入监控'),
+                  )
+                else if (live.isFinished)
+                  TextButton(
+                    key: Key('liveReplay_${live.id}'),
+                    onPressed: onReplay,
+                    child: const Text('再来一场'),
                   )
                 else
                   TextButton(

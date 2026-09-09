@@ -157,10 +157,11 @@ void main() {
     expect(find.text('已结束'), findsOneWidget);
 
     // 操作按钮：草稿可编辑；ready / live 统一「进入监控」（开播收口在工作台）；
-    // 已结束走「查看」占位，ready 不再有列表内「开播」按钮
+    // 已结束卡片给「再来一场」入口，ready 不再有列表内「开播」按钮
     expect(find.byKey(const Key('liveEdit_live-001')), findsOneWidget);
     expect(find.byKey(const Key('liveMonitor_live-002')), findsOneWidget);
-    expect(find.byKey(const Key('liveView_live-003')), findsOneWidget);
+    expect(find.byKey(const Key('liveReplay_live-003')), findsOneWidget);
+    expect(find.byKey(const Key('liveView_live-003')), findsNothing);
     expect(find.byKey(const Key('liveStart_live-002')), findsNothing);
     expect(find.byKey(const Key('liveEdit_live-002')), findsNothing);
 
@@ -364,5 +365,68 @@ void main() {
     // 等待 SnackBar 自动消失，避免遗留计时器
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('已结束场次「再来一场」：复制为草稿并跳转编辑页，绑定资源保留', (
+    WidgetTester tester,
+  ) async {
+    final backend = FakeBackend(
+      douyinBound: true,
+      voices: <Map<String, dynamic>>[
+        <String, dynamic>{
+          'id': 'v-replay',
+          'name': '主播小美',
+          'status': 'ready',
+          'providerVoiceId': 'cosy-mock-v-replay',
+          'sampleDurationSeconds': 200,
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+        },
+      ],
+      scripts: <Map<String, dynamic>>[
+        <String, dynamic>{
+          'id': 'script-002',
+          'industry': 'restaurant',
+          'title': '火锅套餐话术',
+          'productSnapshot': <String, dynamic>{'name': '双人火锅套餐'},
+          'content': '双人火锅套餐，锅底现炒，欢迎到店品尝。',
+          'status': 'ready',
+          'sensitiveCheckStatus': 'pass',
+          'sensitiveMatchedWords': <String>[],
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+        },
+      ],
+      lives: <Map<String, dynamic>>[
+        _liveJson(
+          id: 'live-003',
+          title: '昨日火锅直播',
+          status: 'ended',
+          voiceId: 'v-replay',
+          scriptId: 'script-002',
+          couponId: 'c-001-mock',
+        ),
+      ],
+    );
+    await _pumpListRouter(tester, backend);
+
+    // 已结束卡片提供「再来一场」，不再给无用的「查看」占位
+    expect(find.text('已结束（1）'), findsOneWidget);
+    expect(find.byKey(const Key('liveReplay_live-003')), findsOneWidget);
+    expect(find.byKey(const Key('liveView_live-003')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('liveReplay_live-003')));
+    await tester.pumpAndSettle();
+
+    // 服务端新增一条 idle 草稿：标题带「（复播）」，绑定资源保留、运行态清空
+    final drafts =
+        backend.lives.where((live) => live['status'] == 'idle').toList();
+    expect(drafts, hasLength(1));
+    expect(drafts.first['title'], '昨日火锅直播（复播）');
+    expect(drafts.first['voiceId'], 'v-replay');
+    expect(drafts.first['scriptId'], 'script-002');
+    expect(drafts.first['couponId'], 'c-001-mock');
+    expect(drafts.first['videoSourceUrl'], isEmpty);
+
+    // 复制后自动进入新草稿编辑页，可继续完善后就绪开播
+    expect(find.byKey(const Key('liveFormPage')), findsOneWidget);
   });
 }
