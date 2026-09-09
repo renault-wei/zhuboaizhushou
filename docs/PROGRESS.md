@@ -29,6 +29,7 @@
 > - 更新时间：2026-09-09（doc-only：竞品低成本语音架构取证落档 + TTS 缓存里程碑立项 — COMPETITOR-XCAI.md 新增 §7（服务端合成下发 mp3 + 播放端缓存复用/历史回放，低成本=结构省钱而非供应商便宜，附 app-service.js 行号取证），PLATFORM-NEUTRAL-VOICE.md 增 §4.1 每小时成本锚点（≤0.4 元/小时、每小时新合成≤2000 字符），新增 docs/LOWCOST-AUDIO-PLAN.md v1（T3 分句缓存→T7 观察项）；未动代码、未调第三方，见 §6 第 44 条）
 
 > - 更新时间：2026-09-09（T3 TTS 分句缓存服务端首查批次 — 新增 tts_audio_cache 表（v04 drizzle 迁移已执行，键=userId+voiceKey+rate+textSha256、命中自增 hit_count、懒清理）+ ttsCache 读写服务 + ttsUsage 真实合成计量埋点（额度原子守门、usage_logs 只记 miss 合成）+ volcTTS 单次调用 speaker/语速覆盖；liveSpeaker.speak 缓存旁路与 loopCaster 首轮预热接线拆为 T4 待办；服务端 typecheck/lint 0、定向 4 文件 29/29、全量 34 文件 321/321，见 §6 第 45 条）
+> - 更新时间：2026-09-10（T3 云端部署 + 新云版安装包批次 — ECS 整包对齐本地 HEAD src 重建（修复零散 scp 遗留的 src/env.ts 与旧 sms.ts 类型冲突）、v04 tts_audio_cache 迁移已在云端库执行、重启 /health 200；App 版本升至 0.3.0+85 出云版 APK 归档 outputs/starvoice-app-release-cloud.apk，见 §6 第 46 条）
 
 ## 0. 当前大局
 
@@ -38,10 +39,10 @@
 | 服务端测试 | ✅ 321 / 321（34 个测试文件；全量并行本机偶发 PG 文件锁，用 `npx vitest run --no-file-parallelism` 复跑稳定） |
 | 前端静态检查 | ✅ `flutter analyze` No issues found（Flutter 3.47.2 @ `E:\dev\flutter`） |
 | 管理后台 | ✅ `npm run build` / `npm run lint` 0 issue（React + AntD，公司端任务台 M1~M4 页面全接通） |
-| 最近提交 | T3 TTS 分句缓存服务端首查 + 计量埋点（见 §6 第 45 条）；云端出声修复部署 + 真机出声闭环批次（见 §6 第 43 条）；UI v2 三 Tab 改造批次（见 §6 第 42 条）；首页「AI 语音开播」主入口批次（8e245fb，见 §6 第 41 条）；云版 v0.3.0+83 真机安装批次（b210219，见 §6 第 40 条）；火山预设音色 + 纯 AI 语音批次：server 159e906（prepare 解除实景强制 + volc_preset_id）+ app f6dca27（音色两组 UI），见 §6 第 39 条；云端部署基线 2465584 见 §6 第 38 条；G7 示例台本×3（ba4055e，见 §6 第 37 条） |
+| 最近提交 | T3 云端部署批次 + App 0.3.0+85 云版包（见 §6 第 46 条）；T3 TTS 分句缓存服务端首查 + 计量埋点（见 §6 第 45 条）；云端出声修复部署 + 真机出声闭环批次（见 §6 第 43 条）；UI v2 三 Tab 改造批次（见 §6 第 42 条）；首页「AI 语音开播」主入口批次（8e245fb，见 §6 第 41 条）；云版 v0.3.0+83 真机安装批次（b210219，见 §6 第 40 条）；火山预设音色 + 纯 AI 语音批次：server 159e906（prepare 解除实景强制 + volc_preset_id）+ app f6dca27（音色两组 UI），见 §6 第 39 条；云端部署基线 2465584 见 §6 第 38 条；G7 示例台本×3（ba4055e，见 §6 第 37 条） |
 | 主推进路线 | v0.2 G 清单（形态已定 = 画面真人出镜 + 后台 AI 语音主播，取消双模式 A/B；托管线 G1→G2 暂停待抖音 key） |
 | 产品定位（2026-09-08 定稿） | 平台无关 AI 语音助播：真人 / 实景开播 + 后台 AI 语音；只出声不推流；弹幕 = 外挂适配（口径见 docs/PLATFORM-NEUTRAL-VOICE.md） |
-| 当前推进 | 云端 remoteOutput 修复已部署（Linux 云端 LIVE_SPEAKER_OUTPUT=phone 可入远程出声队列），真机出声闭环达成 — 工作台「助播机出声」开关轮询 /api/out/speech/next 已真实播出 AI 语音（用户听声确认）；首页「AI 语音开播」主入口已打通（首页直达 /lives 列表、空态引导新建、就绪直达工作台）；火山预设音色 + 纯 AI 语音就绪落地并同步云端（lives 增 volc_preset_id、presets 只读目录、prepare 无视频直接 ready，ECS 113.44.226.189 已迁移重启 /health 200）；公司端任务台 M1~M7 全落地，商业闭环只剩真实收款（M8，待支付凭证）；真机出声复验、贴片/素材包与演示脚本、UI-3 真机视觉走查待手机线批次；弹幕 = 外挂适配口径（docs/PLATFORM-NEUTRAL-VOICE.md）；UI v2 三 Tab（首页/直播/我的）+「我的」页落地、竞品「直播/个人信息」UI 调研已归档 docs/ui-v2-research.md（见 §6 第 42 条）；T3 分句缓存服务端基础设施已落地（tts_audio_cache + ttsCache/ttsUsage/volcTTS 覆盖层，liveSpeaker 旁路与预热接线属 T4 待办，见 §6 第 45 条） |
+| 当前推进 | 云端 remoteOutput 修复已部署（Linux 云端 LIVE_SPEAKER_OUTPUT=phone 可入远程出声队列），真机出声闭环达成 — 工作台「助播机出声」开关轮询 /api/out/speech/next 已真实播出 AI 语音（用户听声确认）；首页「AI 语音开播」主入口已打通（首页直达 /lives 列表、空态引导新建、就绪直达工作台）；火山预设音色 + 纯 AI 语音就绪落地并同步云端（lives 增 volc_preset_id、presets 只读目录、prepare 无视频直接 ready，ECS 113.44.226.189 已迁移重启 /health 200）；公司端任务台 M1~M7 全落地，商业闭环只剩真实收款（M8，待支付凭证）；真机出声复验、贴片/素材包与演示脚本、UI-3 真机视觉走查待手机线批次；弹幕 = 外挂适配口径（docs/PLATFORM-NEUTRAL-VOICE.md）；UI v2 三 Tab（首页/直播/我的）+「我的」页落地、竞品「直播/个人信息」UI 调研已归档 docs/ui-v2-research.md（见 §6 第 42 条）；T3 分句缓存服务端基础设施已落地并随本批同步部署云端（tts_audio_cache + ttsCache/ttsUsage/volcTTS 覆盖层，liveSpeaker 旁路与预热接线属 T4 待办，见 §6 第 45/46 条） |
 
 ## 1. 能力基线（✅ 已完成，含旧仓库导入部分）
 
@@ -200,3 +201,4 @@
 44. ✅ doc-only：竞品低成本语音架构取证落档 + TTS 缓存里程碑立项（2026-09-09）— docs/COMPETITOR-XCAI.md 新增 §7（服务端合成/下发 mp3 + 播放端“攒 6 条→顺序播→空了回放 last_audio” = 便宜来源，非供应商便宜，附行号证据，含 /pages/live/new-float、feedback/index-app 等多副本说明）；docs/PLATFORM-NEUTRAL-VOICE.md 增 §4.1（≤0.4 元/小时、每小时新合成≤2000 字符、循环台本首轮预热全缓存命中口径）；新增 docs/LOWCOST-AUDIO-PLAN.md v1（T3 分句缓存→T7 观察项，每里程碑含验收与单测口径）；未动代码、未调用第三方。
 
 45. ✅ T3 TTS 分句缓存服务端首查 + 真实合成计量埋点（代码批，2026-09-09）：新增 `tts_audio_cache` 表（schema.ts 插在 usageLogs 前；v04 drizzle 迁移已执行，唯一索引 = userId+voiceKey+rate+textSha256）+ `ttsCache` 服务（computeTextSha256/countTtsChars/缓存路径解析/查-存-懒清理，命中自增、删行清文件、写失败仅 warn 不阻断）+ `ttsUsage.recordTtsUsage`（月额度原子守门扣 tts_chars_used，成功才写 usage_logs category=tts，超额返回 quota_exceeded）+ volcTTS 单次调用 speaker/speechRate 覆盖（不传时行为不变）；旁路开关 `TTS_CACHE_ENABLED`/`TTS_CACHE_DIR` 走 .env。拆分口径：本批只落服务端基础设施与单测（ttsCache/ttsUsage/volc_tts 定向 21 例），liveSpeaker.speak 缓存旁路与 loopCaster 首轮预热属 T4 接线待办；服务端 typecheck/lint 0、全量 34 文件 321/321（并行偶发 PG 文件锁为已知，单跑稳定）。
+46. ✅ T3 云端部署 + 新云版安装包（2026-09-10）：ECS 113.44.226.189 `/opt/starvoice/server` 先备份 src+dist（/root/starvoice-src-bak-20260909.tgz）再整包对齐本地 HEAD（git archive server/src + tsconfig.json 覆盖，修复此前零散 scp 遗留的 src/env.ts 与旧 sms.ts 类型冲突），远端 `npm run build` 0 error；v04 迁移已在云端 PostgreSQL 执行（`tts_audio_cache` 表 + 双索引 + FK 已核实）；`systemctl restart starvoice.service` active、/health 200、dist/config/env.js 确认 ttsCache 开关生效（.env 已加 `TTS_CACHE_ENABLED=true` / `TTS_CACHE_DIR=data/tts-cache`）。App 版本 0.3.0+84→+85（versionCode 85）出云版 APK（API_BASE_URL=http://113.44.226.189:3000，53.5MB）替换归档 `outputs/starvoice-app-release-cloud.apk`；App 代码自 +84 后无变更，本包为对齐 T3 服务端的基线包，真机安装 / 出声验证待 USB 接入。
