@@ -10,6 +10,10 @@ import 'fake_backend.dart';
 
 void main() {
   testWidgets('登录页冒烟：获取验证码自动填码并登录成功进首页', (WidgetTester tester) async {
+    // 加高视口：让「我的」页账号区与页脚按钮完整可见（避免懒加载截断断言）
+    tester.view.physicalSize = const Size(1080, 3000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     SharedPreferences.setMockInitialValues({});
     final backend = FakeBackend();
 
