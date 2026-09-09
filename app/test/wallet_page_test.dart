@@ -73,7 +73,7 @@ void main() {
     expect(find.byKey(const Key('walletBalanceCard')), findsNothing);
   });
 
-  testWidgets('扫码充值：生成 mock 收款单并弹「查询到账」', (WidgetTester tester) async {
+  testWidgets('扫码充值：生成收款单并展示微信收款码', (WidgetTester tester) async {
     final backend = FakeBackend();
     await _pumpWalletPage(tester, backend);
 
@@ -81,7 +81,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('walletScanDialog')), findsOneWidget);
-    expect(find.text('mock 收款码（演示占位）'), findsOneWidget);
+    expect(find.byKey(const Key('walletScanWechatQrImage')), findsOneWidget);
+    expect(find.byKey(const Key('walletScanHint')), findsOneWidget);
     expect(backend.scanOrders, hasLength(1));
     expect(backend.scanOrders.single['hours'], 1);
 

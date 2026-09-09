@@ -184,7 +184,7 @@ class WalletOverview {
   final List<RechargeOrder> rechargeOrders;
 }
 
-/// POST /api/recharge/scan 返回：扫码单（mock 通道返回占位收款码）。
+/// POST /api/recharge/scan 返回：扫码单（mock 通道下发占位地址，客户端兜底展示内置微信收款码）。
 class RechargeScanResult {
   const RechargeScanResult({
     required this.order,
@@ -209,7 +209,7 @@ class RechargeScanResult {
 
   final RechargeOrder order;
 
-  /// mock 通道为 mock:// 占位；M8 凭证接入后为真实支付宝收款码地址。
+  /// mock 通道为 mock:// 占位（客户端兜底展示内置微信收款码）；凭证接入后为真实收款码地址。
   final String qrcodeUrl;
   final bool mockChannel;
   final String message;

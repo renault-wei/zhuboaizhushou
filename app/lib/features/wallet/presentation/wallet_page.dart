@@ -10,6 +10,13 @@ import 'package:starvoice_app/providers.dart';
 
 String _twoDigits(int value) => value.toString().padLeft(2, '0');
 
+/// 微信收款码资源（自用验收阶段内置公司收款码；凭证接入后由服务端下发真实地址）。
+const String _wechatCollectQrAsset = 'assets/pay/wechat_collect_qr.jpg';
+
+/// 服务端是否下发了真实收款码地址（http/https）；mock:// 占位时用内置微信收款码兜底。
+bool _isRealQrUrl(String url) =>
+    url.startsWith('http://') || url.startsWith('https://');
+
 /// ISO 时间 → 本地「MM-dd HH:mm」；解析失败原样透出。
 String _formatTime(String iso) {
   final time = DateTime.tryParse(iso)?.toLocal();
@@ -287,41 +294,33 @@ class _WalletPageState extends ConsumerState<WalletPage> {
               ),
               const SizedBox(height: 12),
               Container(
-                key: const Key('walletScanQrPlaceholder'),
+                key: const Key('walletScanQrArea'),
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 20),
+                padding: const EdgeInsets.symmetric(vertical: 16),
                 decoration: BoxDecoration(
                   color: context.tokenSurfaceFill,
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: result.mockChannel
-                    ? Column(
-                        children: <Widget>[
-                          Icon(
-                            Icons.qr_code_2,
-                            size: 64,
-                            color: context.tokenTextHint,
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'mock 收款码（演示占位）',
-                            key: const Key('walletScanMockText'),
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: context.tokenTextHint,
-                            ),
-                          ),
-                        ],
-                      )
-                    : Image.network(
+                child: _isRealQrUrl(result.qrcodeUrl)
+                    ? Image.network(
                         result.qrcodeUrl,
-                        height: 160,
+                        height: 180,
+                        fit: BoxFit.contain,
+                      )
+                    : Image.asset(
+                        _wechatCollectQrAsset,
+                        key: const Key('walletScanWechatQrImage'),
+                        height: 320,
                         fit: BoxFit.contain,
                       ),
               ),
               const SizedBox(height: 10),
               Text(
-                result.message,
+                _isRealQrUrl(result.qrcodeUrl)
+                    ? result.message
+                    : '请用「微信扫一扫」上方收款码完成支付；'
+                          '付款后点「查询到账」，运营核对到账后即可入账。',
+                key: const Key('walletScanHint'),
                 style: TextStyle(fontSize: 12, color: context.tokenTextBody),
               ),
             ],
@@ -360,7 +359,7 @@ class _WalletPageState extends ConsumerState<WalletPage> {
       _toast('充值已到账，余额已刷新');
       return;
     }
-    _toast('订单待确认：演示通道需运营后台人工确权后到账');
+    _toast('订单待确认：运营核对收款到账后即可确权入账');
   }
 
   /// 卡密核销：成功清空输入并提示入账；失败把服务端中文错误透出。
@@ -496,7 +495,7 @@ class _BalanceCard extends StatelessWidget {
   }
 }
 
-/// 扫码充值区：服务端下发档位选择 + 生成收款码（mock 通道占位）。
+/// 扫码充值区：服务端下发档位选择 + 生成微信收款码（运营人工确权到账）。
 class _ChargeCard extends ConsumerStatefulWidget {
   const _ChargeCard({
     required this.packs,
@@ -591,7 +590,7 @@ class _ChargeCardState extends ConsumerState<_ChargeCard> {
             ),
             const SizedBox(height: 8),
             Text(
-              '当前为演示通道：收款码为占位，由运营后台人工确权后到账',
+              '请用「微信扫一扫」收款码付款；到账由运营人工确权（一般几分钟）',
               key: const Key('walletChargeHint'),
               style: TextStyle(fontSize: 11, color: context.tokenTextHint),
             ),
