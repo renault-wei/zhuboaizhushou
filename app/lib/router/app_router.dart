@@ -4,6 +4,7 @@ import 'package:starvoice_app/features/auth/application/auth_controller.dart';
 import 'package:starvoice_app/features/auth/presentation/login_page.dart';
 import 'package:starvoice_app/features/agreement/presentation/voice_agreement_page.dart';
 import 'package:starvoice_app/features/coupons/presentation/coupon_list_page.dart';
+import 'package:starvoice_app/core/navigation/app_shell.dart';
 import 'package:starvoice_app/features/douyin/presentation/douyin_bind_page.dart';
 import 'package:starvoice_app/features/home/presentation/home_page.dart';
 import 'package:starvoice_app/features/lives/presentation/live_form_page.dart';
@@ -12,6 +13,7 @@ import 'package:starvoice_app/features/lives/presentation/live_monitor_page.dart
 import 'package:starvoice_app/features/loop_scripts/presentation/loop_script_edit_page.dart';
 import 'package:starvoice_app/features/loop_scripts/presentation/loop_script_library_page.dart';
 import 'package:starvoice_app/features/loop_scripts/presentation/loop_script_new_page.dart';
+import 'package:starvoice_app/features/profile/presentation/profile_page.dart';
 import 'package:starvoice_app/features/recording/presentation/recording_page.dart';
 import 'package:starvoice_app/features/scripts/presentation/script_edit_page.dart';
 import 'package:starvoice_app/features/scripts/presentation/script_generate_page.dart';
@@ -41,10 +43,43 @@ GoRouter createAppRouter(AuthController authController) {
     routes: [
       GoRoute(path: '/splash', builder: (context, state) => const SplashPage()),
       GoRoute(path: '/login', builder: (context, state) => const LoginPage()),
-      GoRoute(path: '/home', builder: (context, state) => const HomePage()),
+      // 抖音号绑定：券列表「去绑定」入口使用（首页入口已在三 Tab 改造中移除）。
       GoRoute(
         path: '/douyin-bind',
         builder: (context, state) => const DouyinBindPage(),
+      ),
+      // 底部三 Tab：首页 / 直播 / 我的（各自独立子导航栈）。
+      // 其余 /voices、/scripts、/lives/new、/lives/:id/monitor 等全屏页
+      // 以顶层路由 push，覆盖整个 Shell，返回后回到原 Tab。
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, navigationShell) =>
+            AppShell(navigationShell: navigationShell),
+        branches: [
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/home',
+                builder: (context, state) => const HomePage(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/lives',
+                builder: (context, state) => const LiveListPage(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/me',
+                builder: (context, state) => const ProfilePage(),
+              ),
+            ],
+          ),
+        ],
       ),
       GoRoute(
         path: '/coupons',
@@ -94,10 +129,6 @@ GoRouter createAppRouter(AuthController authController) {
         path: '/loop-scripts/:id/edit',
         builder: (context, state) =>
             LoopScriptEditPage(loopScriptId: state.pathParameters['id'] ?? ''),
-      ),
-      GoRoute(
-        path: '/lives',
-        builder: (context, state) => const LiveListPage(),
       ),
       GoRoute(
         path: '/lives/new',

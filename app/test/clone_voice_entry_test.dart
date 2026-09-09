@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:starvoice_app/app.dart';
+import 'package:starvoice_app/features/home/presentation/home_page.dart';
 import 'package:starvoice_app/features/recording/application/recorder_controller.dart';
 import 'package:starvoice_app/providers.dart';
 
@@ -38,11 +39,27 @@ Future<void> _pumpLoggedInHome(
   await tester.pumpAndSettle();
 }
 
+/// 首页为懒加载 ListView，目标卡片在首屏下方时先滚动到可视区再断言/点按。
+Future<void> _scrollHomeTo(WidgetTester tester, Finder finder) async {
+  await tester.scrollUntilVisible(
+    finder,
+    120,
+    scrollable: find
+        .descendant(
+          of: find.byType(HomePage),
+          matching: find.byType(Scrollable),
+        )
+        .first,
+  );
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('录音入口：协议未签署 → 提示并跳转协议页', (WidgetTester tester) async {
     final backend = FakeBackend(); // agreementSigned 默认 false
     await _pumpLoggedInHome(tester, backend);
 
+    await _scrollHomeTo(tester, find.byKey(const Key('cloneVoiceCard')));
     expect(find.byKey(const Key('cloneVoiceCard')), findsOneWidget);
     expect(find.text('未授权'), findsOneWidget);
 
@@ -73,6 +90,7 @@ void main() {
       recorderController: recorderController,
     );
 
+    await _scrollHomeTo(tester, find.byKey(const Key('cloneVoiceCard')));
     expect(find.text('已授权'), findsOneWidget);
     final startButton = find.byKey(const Key('cloneVoiceStartButton'));
     await tester.ensureVisible(startButton);

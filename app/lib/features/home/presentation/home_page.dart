@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import 'package:starvoice_app/core/models/douyin_bind_status.dart';
 import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/models/voice_agreement.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
@@ -17,84 +16,154 @@ String _formatDateTime(DateTime time) {
       '${_twoDigits(time.hour)}:${_twoDigits(time.minute)}:${_twoDigits(time.second)}';
 }
 
-/// 登录后首页：展示脱敏手机号、用户 ID、登录时间与抖音账号绑定卡片。
-class HomePage extends ConsumerWidget {
+/// 登录后首页（三 Tab · 首页）：顶部品牌头 + 「AI 直播」「声音克隆」「话术」
+/// 三个能力区。账号信息、收银台与退出登录收敛到「我的」Tab；抖音绑定入口
+/// 由券列表页承接，首页不再展示。
+class HomePage extends StatelessWidget {
   const HomePage({super.key});
 
-  /// 手机号脱敏：保留前 3 位与后 4 位，中间 4 位用 * 隐藏。
-  String _maskPhone(String phone) {
-    if (phone.length != 11) {
-      return phone;
-    }
-    return '${phone.substring(0, 3)}****${phone.substring(7)}';
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+          children: const <Widget>[
+            _HomeBrandHeader(),
+            SizedBox(height: 20),
+            _SectionHeader(
+              icon: Icons.campaign_rounded,
+              title: 'AI 直播',
+              subtitle: '场次状态一目了然，就绪后一键进入直播工作台',
+            ),
+            SizedBox(height: 10),
+            _LiveStartHeroCard(),
+            SizedBox(height: 24),
+            _SectionHeader(
+              icon: Icons.record_voice_over_rounded,
+              title: '声音克隆',
+              subtitle: '完成声音授权后，录制专属音色或选用预设音色',
+            ),
+            SizedBox(height: 10),
+            _VoiceAgreementCard(),
+            SizedBox(height: 12),
+            _CloneVoiceCard(),
+            SizedBox(height: 12),
+            _VoiceLibraryCard(),
+            SizedBox(height: 24),
+            _SectionHeader(
+              icon: Icons.notes_rounded,
+              title: '话术',
+              subtitle: 'AI 生成带货话术与循环台本，开播后不冷场',
+            ),
+            SizedBox(height: 10),
+            _ScriptLibraryCard(),
+            SizedBox(height: 12),
+            _LoopScriptLibraryCard(),
+          ],
+        ),
+      ),
+    );
   }
+}
+
+/// 首页顶部品牌头：星橙渐变圆角图标 + 产品名与一句话定位。
+class _HomeBrandHeader extends StatelessWidget {
+  const _HomeBrandHeader();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final authState = ref.watch(authControllerProvider);
-    final user = authState.user;
-    final maskedPhone = _maskPhone(user?.phone ?? '');
-    final userId = user?.id ?? '--';
-    final loginTimeText = _formatDateTime(authState.loginAt ?? DateTime.now());
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('首页')),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+  Widget build(BuildContext context) {
+    return Row(
+      children: <Widget>[
+        Container(
+          width: 44,
+          height: 44,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: <Color>[AppColors.primary, AppColors.primaryDark],
+            ),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: const Icon(
+            Icons.auto_awesome_rounded,
+            color: Colors.white,
+            size: 22,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
               Text(
-                '欢迎使用星辰语音',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.headlineSmall
+                '星辰语音',
+                style: Theme.of(context).textTheme.titleLarge
                     ?.copyWith(fontWeight: FontWeight.bold),
               ),
-              const SizedBox(height: 40),
+              const SizedBox(height: 2),
               Text(
-                '手机号：$maskedPhone',
-                key: const Key('homePhone'),
-                style: const TextStyle(fontSize: 16),
-              ),
-              const SizedBox(height: 12),
-              Text('用户ID：$userId', style: const TextStyle(fontSize: 16)),
-              const SizedBox(height: 12),
-              Text('登录时间：$loginTimeText', style: const TextStyle(fontSize: 16)),
-              const SizedBox(height: 24),
-              const _LiveStartHeroCard(),
-              const SizedBox(height: 16),
-              const _DouyinAccountCard(),
-              const SizedBox(height: 16),
-              const _VoiceAgreementCard(),
-              const SizedBox(height: 16),
-              const _CloneVoiceCard(),
-              const SizedBox(height: 16),
-              const _VoiceLibraryCard(),
-              const SizedBox(height: 16),
-              const _ScriptLibraryCard(),
-              const SizedBox(height: 16),
-              const _LoopScriptLibraryCard(),
-              const SizedBox(height: 16),
-              const _CouponEntryCard(),
-              const SizedBox(height: 16),
-              const _WalletEntryCard(),
-              const SizedBox(height: 24),
-              OutlinedButton(
-                key: const Key('logoutButton'),
-                onPressed: () {
-                  ref.read(authControllerProvider.notifier).logout();
-                },
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(48),
-                ),
-                child: const Text('退出登录'),
+                'AI 智能直播助手，让 AI 帮你说',
+                style: TextStyle(fontSize: 12, color: context.tokenTextBody),
               ),
             ],
           ),
         ),
-      ),
+      ],
+    );
+  }
+}
+
+/// 能力区标题：小号星橙图标块 + 标题与一行副文案，作为首页分区锚点。
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: <Widget>[
+        Container(
+          width: 34,
+          height: 34,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: AppColors.primarySoft,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, size: 19, color: AppColors.primaryDark),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: TextStyle(fontSize: 12, color: context.tokenTextHint),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -214,7 +283,13 @@ class _LiveStartHeroCardState extends ConsumerState<_LiveStartHeroCard> {
     final lives = _lives ?? const <Live>[];
     setState(() => _opening = true);
     try {
-      await context.push(lives.isEmpty ? '/lives/new' : '/lives');
+      if (lives.isEmpty) {
+        // 无场次：直接进全屏「新建开播配置」，返回后回到首页
+        await context.push('/lives/new');
+      } else {
+        // 有草稿 / 多场次：/lives 已是直播 Tab 分支路由，用 go 切换过去
+        context.go('/lives');
+      }
     } finally {
       if (mounted) {
         setState(() => _opening = false);
@@ -366,257 +441,6 @@ class _LiveStartHeroCardState extends ConsumerState<_LiveStartHeroCard> {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// 抖音账号卡片：负责拉取绑定状态，支持去绑定 / 解绑后刷新。
-class _DouyinAccountCard extends ConsumerStatefulWidget {
-  const _DouyinAccountCard();
-
-  @override
-  ConsumerState<_DouyinAccountCard> createState() => _DouyinAccountCardState();
-}
-
-class _DouyinAccountCardState extends ConsumerState<_DouyinAccountCard> {
-  bool _loading = true;
-  bool _unbinding = false;
-  String? _error;
-  DouyinBindStatus? _status;
-
-  @override
-  void initState() {
-    super.initState();
-    // 首帧后再拉取，避免 build 阶段发起网络请求
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
-  }
-
-  Future<void> _refresh() async {
-    if (mounted) {
-      setState(() {
-        _loading = true;
-        _error = null;
-      });
-    }
-    try {
-      final status = await ref.read(apiClientProvider).fetchDouyinBindStatus();
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _status = status;
-        _loading = false;
-      });
-    } on ApiException catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _error = error.message;
-        _loading = false;
-      });
-    }
-  }
-
-  Future<void> _goBind() async {
-    // 绑定页成功后 pop，回到首页刷新卡片状态
-    await context.push('/douyin-bind');
-    await _refresh();
-  }
-
-  void _showSnack(String message) {
-    if (!mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
-
-  Future<void> _confirmUnbind() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('解绑抖音号'),
-        content: const Text('解绑后如需直播拉券需重新授权绑定，确定解绑吗？'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            key: const Key('douyinUnbindConfirmButton'),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('确定解绑'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) {
-      return;
-    }
-
-    setState(() {
-      _unbinding = true;
-    });
-    try {
-      await ref.read(apiClientProvider).unbindDouyin();
-      _showSnack('已解绑抖音号');
-      await _refresh();
-    } on ApiException catch (error) {
-      _showSnack(error.message);
-    } finally {
-      if (mounted) {
-        setState(() {
-          _unbinding = false;
-        });
-      }
-    }
-  }
-
-  Widget _buildContent() {
-    if (_loading) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 8),
-        child: Text('正在同步抖音绑定状态…'),
-      );
-    }
-    if (_error != null) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '抖音账号状态获取失败：$_error',
-            style: TextStyle(color: Theme.of(context).colorScheme.error),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton(onPressed: _refresh, child: const Text('重试')),
-        ],
-      );
-    }
-
-    final status = _status;
-    if (status == null || !status.bound) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text('绑定抖音号后可拉取团购券，为实景直播挂载商品。'),
-          const SizedBox(height: 12),
-          FilledButton.tonal(
-            key: const Key('douyinBindButton'),
-            onPressed: _goBind,
-            style: FilledButton.styleFrom(
-              minimumSize: const Size.fromHeight(44),
-            ),
-            child: const Text('去绑定'),
-          ),
-        ],
-      );
-    }
-
-    final avatarUrl = status.avatarUrl;
-    return Row(
-      children: [
-        ClipOval(
-          child: SizedBox(
-            width: 44,
-            height: 44,
-            child: avatarUrl != null && avatarUrl.isNotEmpty
-                ? Image.network(
-                    avatarUrl,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) =>
-                        const _AvatarFallback(),
-                  )
-                : const _AvatarFallback(),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                status.nickname ?? '已绑定抖音号',
-                key: const Key('douyinNickname'),
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 2),
-              Text(
-                '抖音账号已绑定',
-                style: TextStyle(fontSize: 12, color: context.tokenTextBody),
-              ),
-            ],
-          ),
-        ),
-        OutlinedButton(
-          key: const Key('douyinUnbindButton'),
-          onPressed: _unbinding ? null : _confirmUnbind,
-          child: _unbinding
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Text('解绑'),
-        ),
-      ],
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      key: const Key('douyinCard'),
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.smart_display, size: 20),
-                const SizedBox(width: 8),
-                const Text(
-                  '抖音账号',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const Spacer(),
-                Text(
-                  _status?.bound == true ? '已绑定' : '未绑定',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: _status?.bound == true
-                        ? AppColors.live
-                        : context.tokenTextHint,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            _buildContent(),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 头像加载失败 / 无头像时的兜底图标。
-class _AvatarFallback extends StatelessWidget {
-  const _AvatarFallback();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: context.tokenSurfaceFill,
-      alignment: Alignment.center,
-      child: Icon(Icons.person, color: context.tokenTextHint),
     );
   }
 }
@@ -1331,102 +1155,6 @@ class _LoopScriptLibraryCardState
               child: const Text('去管理台本'),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 「团购券」入口卡片：位于「话术生成」卡片下方。
-/// 点击进入团购券列表页 /coupons，供后续开播配置选择「直播挂载商品」。
-class _CouponEntryCard extends StatelessWidget {
-  const _CouponEntryCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      key: const Key('couponEntryCard'),
-      margin: EdgeInsets.zero,
-      child: InkWell(
-        key: const Key('couponEntryOpenButton'),
-        borderRadius: BorderRadius.circular(12),
-        onTap: () => context.push('/coupons'),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  const Icon(Icons.confirmation_number_outlined, size: 20),
-                  const SizedBox(width: 8),
-                  const Text(
-                    '团购券',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  const Spacer(),
-                  Icon(
-                    Icons.chevron_right,
-                    size: 20,
-                    color: context.tokenTextHint,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Text(
-                '拉取抖音团购券，为实景直播挂载商品',
-                style: TextStyle(fontSize: 13, color: context.tokenTextBody),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// 「收银台 / 充值」入口卡片：预充直播时长、兑换卡密、查看余额与流水。
-/// 点击进入收银台页 /wallet（充值入口显隐由服务端开关控制）。
-class _WalletEntryCard extends StatelessWidget {
-  const _WalletEntryCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      key: const Key('walletEntryCard'),
-      margin: EdgeInsets.zero,
-      child: InkWell(
-        key: const Key('walletEntryOpenButton'),
-        borderRadius: BorderRadius.circular(12),
-        onTap: () => context.push('/wallet'),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  const Icon(Icons.account_balance_wallet_outlined, size: 20),
-                  const SizedBox(width: 8),
-                  const Text(
-                    '收银台 / 充值',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  const Spacer(),
-                  Icon(
-                    Icons.chevron_right,
-                    size: 20,
-                    color: context.tokenTextHint,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Text(
-                '预充直播时长、兑换卡密，查看余额与消费流水',
-                style: TextStyle(fontSize: 13, color: context.tokenTextBody),
-              ),
-            ],
-          ),
         ),
       ),
     );

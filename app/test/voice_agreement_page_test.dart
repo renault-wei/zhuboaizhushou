@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:starvoice_app/app.dart';
+import 'package:starvoice_app/features/home/presentation/home_page.dart';
 import 'package:starvoice_app/providers.dart';
 
 import 'fake_backend.dart';
@@ -27,14 +28,35 @@ Future<void> _pumpLoggedInHome(WidgetTester tester, FakeBackend backend) async {
   await tester.pumpAndSettle();
 }
 
+/// 首页为懒加载 ListView，目标卡片在首屏下方时先滚动到可视区再断言/点按。
+Future<void> _scrollHomeTo(WidgetTester tester, Finder finder) async {
+  await tester.scrollUntilVisible(
+    finder,
+    120,
+    scrollable: find
+        .descendant(
+          of: find.byType(HomePage),
+          matching: find.byType(Scrollable),
+        )
+        .first,
+  );
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('声音授权冒烟：首页去签署 → 协议页阅读 → 勾选 → 签署成功返回首页刷新', (
     WidgetTester tester,
   ) async {
+    // 放大视口让整页首页一次性构建，避免返回后懒加载卡片离屏导致断言失败
+    tester.view.physicalSize = const Size(800, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
     final backend = FakeBackend();
     await _pumpLoggedInHome(tester, backend);
 
-    // 未签署：首页声音授权卡片展示警示提示与「去签署」入口
+    // 未签署：首页声音授权卡片展示警示提示与「去签署」入口（先滚动到可视区）
+    await _scrollHomeTo(tester, find.byKey(const Key('voiceAgreementCard')));
     expect(find.byKey(const Key('voiceAgreementCard')), findsOneWidget);
     expect(find.byKey(const Key('voiceAgreementWarningHint')), findsOneWidget);
     final goSign = find.byKey(const Key('goVoiceAgreementButton'));

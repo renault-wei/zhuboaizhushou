@@ -1,82 +1,92 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:go_router/go_router.dart';
 
-import 'package:starvoice_app/app.dart';
+import 'package:starvoice_app/features/douyin/presentation/douyin_bind_page.dart';
 import 'package:starvoice_app/providers.dart';
 
 import 'fake_backend.dart';
 
-/// 走登录流程直达首页（假后端全程无真实网络请求）。
-Future<void> _pumpLoggedInHome(WidgetTester tester, FakeBackend backend) async {
-  SharedPreferences.setMockInitialValues({});
+/// 三 Tab 改造后首页不再提供抖音绑定入口；绑定由券列表页（/coupons）承接。
+/// 本用例直达绑定页本体，验证授权码自动填充、授权成功 pop、非法码报错。
+Future<void> _pumpBindPage(WidgetTester tester, FakeBackend backend) async {
+  final router = GoRouter(
+    initialLocation: '/',
+    routes: <RouteBase>[
+      GoRoute(
+        path: '/',
+        builder: (context, state) => Scaffold(
+          body: Center(
+            child: Builder(
+              builder: (innerContext) => FilledButton(
+                key: const Key('openDouyinBind'),
+                onPressed: () => innerContext.push('/douyin-bind'),
+                child: const Text('去绑定'),
+              ),
+            ),
+          ),
+        ),
+      ),
+      GoRoute(
+        path: '/douyin-bind',
+        builder: (context, state) => const DouyinBindPage(),
+      ),
+    ],
+  );
+
   await tester.pumpWidget(
     ProviderScope(
-      overrides: [dioProvider.overrideWithValue(buildMockDio(backend))],
-      child: const StarVoiceApp(),
+      overrides: <Override>[
+        dioProvider.overrideWithValue(buildMockDio(backend)),
+      ],
+      child: MaterialApp.router(routerConfig: router),
     ),
   );
   await tester.pumpAndSettle();
 
-  await tester.enterText(find.byKey(const Key('phoneField')), '13800138000');
-  await tester.tap(find.byKey(const Key('sendCodeButton')));
-  await tester.pump();
-  await tester.pump(const Duration(milliseconds: 100));
-  await tester.tap(find.byKey(const Key('loginButton')));
+  await tester.tap(find.byKey(const Key('openDouyinBind')));
   await tester.pumpAndSettle();
 }
 
 void main() {
-  testWidgets('绑定页冒烟：dev 自动填 mock 码，模拟授权绑定成功回首页刷新', (WidgetTester tester) async {
-    final backend = FakeBackend();
-    await _pumpLoggedInHome(tester, backend);
-
-    // 未绑定 → 首页展示「去绑定」
-    expect(find.byKey(const Key('douyinBindButton')), findsOneWidget);
-
-    await tester.tap(find.byKey(const Key('douyinBindButton')));
-    await tester.pumpAndSettle();
+  testWidgets('绑定页冒烟：dev 自动填 mock 授权码，模拟授权成功 pop 回上一页', (
+    WidgetTester tester,
+  ) async {
+    final backend = FakeBackend(douyinBound: false);
+    await _pumpBindPage(tester, backend);
 
     // 绑定页：说明文案 + dev 模式已自动填入 mock 授权码
     expect(find.byKey(const Key('douyinCodeField')), findsOneWidget);
     expect(find.byKey(const Key('douyinDevCodeHint')), findsOneWidget);
-    final codeField =
-        tester.widget<TextField>(find.byKey(const Key('douyinCodeField')));
+    final codeField = tester.widget<TextField>(
+      find.byKey(const Key('douyinCodeField')),
+    );
     expect(codeField.controller?.text, startsWith('mock-'));
 
-    // 点击「模拟抖音授权」→ bind 接口 → 成功返回首页
+    // 点击「模拟抖音授权」→ bind 接口 → 成功 pop 回上一页
     await tester.tap(find.byKey(const Key('mockAuthorizeButton')));
     await tester.pumpAndSettle();
 
-    // 首页卡片已刷新为已绑定：展示抖音昵称与解绑按钮
-    expect(find.text(backend.douyinNickname), findsOneWidget);
-    expect(find.byKey(const Key('douyinUnbindButton')), findsOneWidget);
-    expect(find.byKey(const Key('douyinBindButton')), findsNothing);
+    expect(backend.douyinBound, isTrue);
+    expect(find.byKey(const Key('douyinCodeField')), findsNothing);
+    expect(find.byKey(const Key('openDouyinBind')), findsOneWidget);
   });
 
-  testWidgets('绑定后解绑：确认弹窗后卡片回到未绑定', (WidgetTester tester) async {
-    final backend = FakeBackend();
-    await _pumpLoggedInHome(tester, backend);
+  testWidgets('绑定失败：非法授权码展示服务端错误文案，不 pop', (WidgetTester tester) async {
+    final backend = FakeBackend(douyinBound: false);
+    await _pumpBindPage(tester, backend);
 
-    await tester.tap(find.byKey(const Key('douyinBindButton')));
-    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('douyinCodeField')),
+      'invalid-code',
+    );
     await tester.tap(find.byKey(const Key('mockAuthorizeButton')));
     await tester.pumpAndSettle();
-    expect(find.text(backend.douyinNickname), findsOneWidget);
 
-    // 解绑需二次确认
-    await tester.tap(find.byKey(const Key('douyinUnbindButton')));
-    await tester.pumpAndSettle();
-    expect(find.text('解绑抖音号'), findsOneWidget);
-
-    await tester.tap(find.byKey(const Key('douyinUnbindConfirmButton')));
-    await tester.pumpAndSettle();
-
-    // 等 SnackBar 计时器走完再结束用例，避免 pending timer
-    await tester.pump(const Duration(seconds: 5));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('douyinBindButton')), findsOneWidget);
-    expect(find.text(backend.douyinNickname), findsNothing);
+    expect(find.byKey(const Key('douyinBindError')), findsOneWidget);
+    expect(find.text('授权码无效或已过期，请重新授权'), findsOneWidget);
+    expect(backend.douyinBound, isFalse);
+    expect(find.byKey(const Key('openDouyinBind')), findsNothing);
   });
 }

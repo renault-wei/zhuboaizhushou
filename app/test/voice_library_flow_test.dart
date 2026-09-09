@@ -4,15 +4,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:starvoice_app/app.dart';
+import 'package:starvoice_app/features/home/presentation/home_page.dart';
 import 'package:starvoice_app/providers.dart';
 
 import 'fake_backend.dart';
 
 /// 登录并进入首页（假后端全程无真实网络请求）。
-Future<void> _pumpLoggedInHome(
-  WidgetTester tester,
-  FakeBackend backend,
-) async {
+Future<void> _pumpLoggedInHome(WidgetTester tester, FakeBackend backend) async {
   SharedPreferences.setMockInitialValues({});
   await tester.pumpWidget(
     ProviderScope(
@@ -30,14 +28,28 @@ Future<void> _pumpLoggedInHome(
   await tester.pumpAndSettle();
 }
 
+/// 首页为懒加载 ListView，目标卡片在首屏下方时先滚动到可视区再断言/点按。
+Future<void> _scrollHomeTo(WidgetTester tester, Finder finder) async {
+  await tester.scrollUntilVisible(
+    finder,
+    120,
+    scrollable: find
+        .descendant(
+          of: find.byType(HomePage),
+          matching: find.byType(Scrollable),
+        )
+        .first,
+  );
+  await tester.pumpAndSettle();
+}
+
 void main() {
-  testWidgets('首页「我的音色」入口：显示音色数量并进入音色库、空态引导录音', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('首页「我的音色」入口：显示音色数量并进入音色库、空态引导录音', (WidgetTester tester) async {
     final backend = FakeBackend();
     await _pumpLoggedInHome(tester, backend);
 
-    // 首页出现「我的音色」卡片，数量为 0
+    // 首页出现「我的音色」卡片，数量为 0（卡片在首页纵深，先滚动到可视区）
+    await _scrollHomeTo(tester, find.byKey(const Key('voiceLibraryCard')));
     expect(find.byKey(const Key('voiceLibraryCard')), findsOneWidget);
     expect(find.text('我的音色'), findsOneWidget);
     final countLabel = tester.widget<Text>(

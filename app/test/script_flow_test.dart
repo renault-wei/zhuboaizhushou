@@ -4,15 +4,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:starvoice_app/app.dart';
+import 'package:starvoice_app/features/home/presentation/home_page.dart';
 import 'package:starvoice_app/providers.dart';
 
 import 'fake_backend.dart';
 
 /// 登录并进入首页（假后端全程无真实网络请求）。
-Future<void> _pumpLoggedInHome(
-  WidgetTester tester,
-  FakeBackend backend,
-) async {
+Future<void> _pumpLoggedInHome(WidgetTester tester, FakeBackend backend) async {
   SharedPreferences.setMockInitialValues({});
   await tester.pumpWidget(
     ProviderScope(
@@ -40,14 +38,28 @@ Future<void> _scrollTo(WidgetTester tester, Finder finder) async {
   await tester.pumpAndSettle();
 }
 
+/// 首页为懒加载 ListView，目标卡片在首屏下方时先滚动到可视区再断言/点按。
+Future<void> _scrollHomeTo(WidgetTester tester, Finder finder) async {
+  await tester.scrollUntilVisible(
+    finder,
+    120,
+    scrollable: find
+        .descendant(
+          of: find.byType(HomePage),
+          matching: find.byType(Scrollable),
+        )
+        .first,
+  );
+  await tester.pumpAndSettle();
+}
+
 void main() {
-  testWidgets('首页「话术生成」入口：生成话术 → 编辑保存 → 返回后数量刷新', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('首页「话术生成」入口：生成话术 → 编辑保存 → 返回后数量刷新', (WidgetTester tester) async {
     final backend = FakeBackend();
     await _pumpLoggedInHome(tester, backend);
 
-    // 首页出现「话术生成」卡片，初始数量为 0
+    // 首页出现「话术生成」卡片，初始数量为 0（卡片在首页纵深，先滚动到可视区）
+    await _scrollHomeTo(tester, find.byKey(const Key('scriptEntryCard')));
     expect(find.byKey(const Key('scriptEntryCard')), findsOneWidget);
     expect(find.text('话术生成'), findsOneWidget);
     final countLabel = tester.widget<Text>(
@@ -64,14 +76,8 @@ void main() {
     expect(find.byKey(const Key('scriptGeneratePage')), findsOneWidget);
 
     // 填写商品信息并生成
-    await tester.enterText(
-      find.byKey(const Key('scriptField_name')),
-      '双人火锅套餐',
-    );
-    await tester.enterText(
-      find.byKey(const Key('scriptField_price')),
-      '99',
-    );
+    await tester.enterText(find.byKey(const Key('scriptField_name')), '双人火锅套餐');
+    await tester.enterText(find.byKey(const Key('scriptField_price')), '99');
     final generateButton = find.byKey(const Key('scriptGenerateButton'));
     await _scrollTo(tester, generateButton);
     await tester.tap(generateButton);
