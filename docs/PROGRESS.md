@@ -22,6 +22,7 @@
 > - 更新时间：2026-09-09（G7 谈单演示示例台本×3 落地 — 台本库「示例台本（谈单演示）」区「套用」直达新建编辑器预填，保存仍走既有落库合规（敏感词扫描不变）；服务端 GET /api/loop-script-samples 只读返回不落库；flutter analyze 0 issue、App 全量 131/131、服务端 307/307，见 §6 第 37 条）
 > - 更新时间：2026-09-09（云端部署批次 — 后端上华为云跑通：Node 22 + PostgreSQL 16（19 表）+ ffmpeg 就绪，systemd starvoice.service 常驻，公网 http://113.44.226.189:3000/health 200；locateFfmpeg 兼容 Linux PATH（2465584）；生产 LIVE_TTS_PROVIDER=volc + LIVE_SPEAKER_OUTPUT=phone，云端火山 TTS 冒烟出 wav；App 版本 0.3.0+82 = 云版基线 APK，真机安装待 USB 接入；服务端全量 307/307，见 §6 第 38 条）
 > - 更新时间：2026-09-09（火山预设音色 + 纯 AI 语音批次 — 音色拆「克隆/火山预设」两组互斥、prepare 解除实景 mp4 强制，纯 AI 语音可直接就绪开播；云端 v03 迁移已执行、health 200、presets 冒烟返回 Vivi 2.0/云舟 2.0；flutter analyze 0 issue、App 全量 135/135、服务端全量 308/308（31 文件），见 §6 第 39 条）
+> - 更新时间：2026-09-09（云版 v0.3.0+83 真机安装冒烟批次 — App 版本升至 0.3.0+83（b210219）出云版基线 APK 并归档 outputs/，adb install 到华为 ELS-AN10 成功（versionCode 82→83）；云端已核实 = 最新 server 代码无需重复部署；App 启动正常、首页保持登录态渲染；UI 走查中 USB 瞬断，待重连续测，见 §6 第 40 条）
 
 ## 0. 当前大局
 
@@ -31,7 +32,7 @@
 | 服务端测试 | ✅ 308 / 308（31 个测试文件；全量并行本机偶发 PG 文件锁，用 `npx vitest run --no-file-parallelism` 复跑稳定） |
 | 前端静态检查 | ✅ `flutter analyze` No issues found（Flutter 3.47.2 @ `E:\dev\flutter`） |
 | 管理后台 | ✅ `npm run build` / `npm run lint` 0 issue（React + AntD，公司端任务台 M1~M4 页面全接通） |
-| 最近提交 | 火山预设音色 + 纯 AI 语音批次：server 159e906（prepare 解除实景强制 + volc_preset_id）+ app f6dca27（音色两组 UI），见 §6 第 39 条；云端部署基线 2465584 见 §6 第 38 条；G7 示例台本×3（ba4055e，见 §6 第 37 条） |
+| 最近提交 | 云版 v0.3.0+83 真机安装批次（b210219，见 §6 第 40 条）；火山预设音色 + 纯 AI 语音批次：server 159e906（prepare 解除实景强制 + volc_preset_id）+ app f6dca27（音色两组 UI），见 §6 第 39 条；云端部署基线 2465584 见 §6 第 38 条；G7 示例台本×3（ba4055e，见 §6 第 37 条） |
 | 主推进路线 | v0.2 G 清单（形态已定 = 画面真人出镜 + 后台 AI 语音主播，取消双模式 A/B；托管线 G1→G2 暂停待抖音 key） |
 | 产品定位（2026-09-08 定稿） | 平台无关 AI 语音助播：真人 / 实景开播 + 后台 AI 语音；只出声不推流；弹幕 = 外挂适配（口径见 docs/PLATFORM-NEUTRAL-VOICE.md） |
 | 当前推进 | 火山预设音色 + 纯 AI 语音就绪落地并同步云端（lives 增 volc_preset_id、presets 只读目录、prepare 无视频直接 ready，ECS 113.44.226.189 已迁移重启 /health 200）；公司端任务台 M1~M7 全落地，商业闭环只剩真实收款（M8，待支付凭证）；真机出声复验、贴片/素材包与演示脚本、UI-3 真机视觉走查待手机线批次；弹幕 = 外挂适配口径（docs/PLATFORM-NEUTRAL-VOICE.md） |
@@ -185,3 +186,4 @@
 37. ✅ G7 谈单演示示例台本×3 落地（2026-09-09，ba4055e）：服务端内置只读火锅示例（hotpot-set-a/b/c：午市双人 / 四人家庭 / 单人夜宵），GET /api/loop-script-samples 登录即可读、不落库不扣生成配额（集成测试 5/5）；App 台本库新增「示例台本（谈单演示）」区（加载失败可重试、空态隐藏），「套用」直达新建编辑器预填标题与条目（loading 提示 + 标题「套用示例 · 编辑预览」），保存仍走 /api/loop-scripts 既有落库前敏感词扫描，合规红线不变、保存后为独立新台本；fake_backend 补样本路由/故障开关，widget 测试 2 例（套用→预填→保存落库闭环 / 失败重试）；flutter analyze 0 issue、App 全量 131/131、服务端 tsc / lint 通过、全量 307/307。
 38. ✅ 云端部署 + 云版 APK 基线（2026-09-09，2465584）：华为云 Flexus（Ubuntu 24.04，公网 113.44.226.189）完成 Node 22 / PostgreSQL 16 / ffmpeg，starvoice 库 19 表 db:push 就位，systemd starvoice.service 常驻、公网 /health 200；修复 locateFfmpeg 用 path.delimiter 切 PATH（兼容 Linux，云端命中 /usr/bin/ffmpeg）；生产 .env 切 LIVE_TTS_PROVIDER=volc + LIVE_SPEAKER_OUTPUT=phone，云端 npm run audio:volc 真连出 wav；App 0.3.0+82 以 API_BASE_URL=http://113.44.226.189:3000 出云版 APK（归档 outputs/starvoice-app-release-cloud.apk），USB 真机安装 + 开播出声复验待手机接入；云密钥仅存本地 .env / server.env 备份，未入库。
 39. ✅ 火山预设音色 + 纯 AI 语音就绪（2026-09-09，server 159e906 / app f6dca27）：开播音色新增内置火山预设目录（GET /api/voices/presets 只读，仅 Vivi 2.0 女声 / 云舟 2.0 男声经实测收录，注册在 :id 路由前防吞）；lives 增 volc_preset_id 与 voice_id 互斥归一（服务端白名单校验，越权写入 400 VOLC_PRESET_INVALID，v03 迁移已执行到远端与本库）；prepare 解除「必须先传实景 mp4」强制——有实景视频+就绪克隆音色才走 FFmpeg 压片，纯 AI 语音（无视频或仅预设音色）跳过合成直接置 ready，口播交给直播中出声链路（streaming 集成用例覆盖互斥、白名单与纯 AI ready 不合成）。App 音色选择拆「克隆音色 / 火山预设」两组互斥切换（volcPresetId 与 voiceId 二选一透传），移除实景视频必传引导、支持无视频纯 AI 语音直接开播，列表/工作台摘要区分「（火山预设）」；fake_backend 镜像互斥归一与纯 AI prepare 语义。flutter analyze 0 issue、App 全量 135/135、服务端 typecheck / lint 通过、全量 308/308（31 文件，DB 用例不再 skip）；云端 ECS 已迁移重启，/api/voices/presets 冒烟返回 Vivi 2.0 / 云舟 2.0。
+40. ✅ 云版 APK v0.3.0+83 真机安装冒烟（2026-09-09，b210219）：App 版本 0.3.0+82→+83（versionCode 83，旧包可覆盖升级），`flutter build apk --release --dart-define=API_BASE_URL=http://113.44.226.189:3000` 出 53.3MB 云版包，归档 outputs/starvoice-app-release-cloud.apk（*.apk 已在 .gitignore，不入库）。SSH 核实云端 /opt/starvoice/server = 最新 server 代码（src 含 volcPresets.ts、schema 含 volc_preset_id、dist 构建 16:49 与 159e906 批次一致，systemd starvoice.service 常驻 /health 200），无需重复部署。华为 ELS-AN10（GMG0220616000176）adb install -r 成功（versionCode 82→83），启动 MainActivity 无崩溃，uiautomator 语义树确认首页已登录（147****9030、声音授权已签署）正常渲染。阻塞项：随后 USB 连接瞬断，开播表单「火山预设音色」两组 UI 走查与出声复验待手机重连后继续。
