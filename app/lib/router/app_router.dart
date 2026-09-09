@@ -14,6 +14,7 @@ import 'package:starvoice_app/features/loop_scripts/presentation/loop_script_edi
 import 'package:starvoice_app/features/loop_scripts/presentation/loop_script_library_page.dart';
 import 'package:starvoice_app/features/loop_scripts/presentation/loop_script_new_page.dart';
 import 'package:starvoice_app/features/profile/presentation/profile_page.dart';
+import 'package:starvoice_app/features/profile/presentation/profile_docs_pages.dart';
 import 'package:starvoice_app/features/recording/presentation/recording_page.dart';
 import 'package:starvoice_app/features/scripts/presentation/script_edit_page.dart';
 import 'package:starvoice_app/features/scripts/presentation/script_generate_page.dart';
@@ -145,6 +146,27 @@ GoRouter createAppRouter(AuthController authController) {
             LiveMonitorPage(liveId: state.pathParameters['id'] ?? ''),
       ),
       GoRoute(path: '/wallet', builder: (context, state) => const WalletPage()),
+      // 「我的」页帮助与协议静态子页：隐私政策 / 服务协议 / AI 说明 / 客服 / 关于
+      GoRoute(
+        path: '/profile/privacy',
+        builder: (context, state) => const PrivacyPolicyPage(),
+      ),
+      GoRoute(
+        path: '/profile/terms',
+        builder: (context, state) => const TermsOfServicePage(),
+      ),
+      GoRoute(
+        path: '/profile/ai-info',
+        builder: (context, state) => const AiLiveInfoPage(),
+      ),
+      GoRoute(
+        path: '/profile/support',
+        builder: (context, state) => const SupportPage(),
+      ),
+      GoRoute(
+        path: '/profile/about',
+        builder: (context, state) => const AboutPage(),
+      ),
     ],
   );
 }
