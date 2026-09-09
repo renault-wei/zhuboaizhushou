@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 
 // ---------- FFmpeg 定位（streaming.ts 与火山 TTS 转码共用）----------
 
@@ -16,7 +16,7 @@ export function locateFfmpeg(): string {
     candidates.push(process.env.FFMPEG_PATH);
   }
   candidates.push(resolve(process.cwd(), 'bin', 'ffmpeg.exe'));
-  const pathDirs = (process.env.PATH ?? '').split(';').filter((dir) => dir.length > 0);
+  const pathDirs = (process.env.PATH ?? '').split(delimiter).filter((dir) => dir.length > 0);
   for (const dir of pathDirs) {
     candidates.push(join(dir, 'ffmpeg.exe'));
     candidates.push(join(dir, 'ffmpeg'));
