@@ -4,6 +4,7 @@ import { db } from '../db/client';
 import { users, voiceAgreements, voices } from '../db/schema';
 import { getLatestVoiceAgreement } from '../services/agreement';
 import { cosyVoiceService } from '../services/voice';
+import { VOLC_PRESET_VOICES } from '../services/volcPresets';
 
 // ---------- 常量 ----------
 
@@ -147,6 +148,11 @@ export const voicesRoutes: FastifyPluginAsync = async (app) => {
       .where(eq(voices.userId, request.user.userId))
       .orderBy(desc(voices.createdAt));
     return rows;
+  });
+
+  // 火山预设音色目录（只读内置，不调火山接口）：须注册在 /api/voices/:id 之前，避免被 id 路由吞掉
+  app.get('/api/voices/presets', { preHandler: app.authenticate }, async () => {
+    return { presets: VOLC_PRESET_VOICES };
   });
 
   // 单个音色状态（克隆进度轮询）：归属校验 + mock 状态惰性推进

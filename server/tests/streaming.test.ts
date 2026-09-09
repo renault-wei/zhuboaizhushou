@@ -60,6 +60,7 @@ const PHONE_OWNER_B = '13920000205'; // 归属隔离 B
 const PHONE_SMOKE = '13920000206'; // 真合成冒烟
 const PHONE_PROCESSING = '13920000207'; // processing 删除保护
 const PHONE_PENDING_VOICE = '13920000208'; // 音色未就绪拦截
+const PHONE_PRESET = '13920000209'; // 纯 AI 语音（火山预设音色、无实景视频）
 
 async function registerAndGetToken(phone: string): Promise<string> {
   const send = await app.inject({
@@ -194,20 +195,20 @@ it('未带 token 访问 video / prepare / stream-status 三个接口均返回 40
 
 // ---------- 上传与 prepare 前置校验 ----------
 
-dbIt('prepare 按序校验：无视频→空/非法文件→无话术→话术被拦截→未选音色', async () => {
+dbIt('prepare 校验（去掉实景 mp4 强制）：无话术→话术被拦截→未选音色；仅预设音色可直接 ready', async () => {
   const token = await registerAndGetToken(PHONE_FLOW);
   await resetUserData(PHONE_FLOW);
   const liveId = await createLiveDraft(token);
 
-  // 未上传视频直接 prepare → 400 VIDEO_NOT_UPLOADED
-  const noVideo = await app.inject({
+  // 未选话术直接 prepare（无视频也放行，先校验话术）→ 400 SCRIPT_NOT_READY
+  const noScript = await app.inject({
     method: 'POST',
     url: `/api/lives/${liveId}/prepare`,
     headers: bearer(token),
     payload: {},
   });
-  expect(noVideo.statusCode).toBe(400);
-  expect(noVideo.json()).toMatchObject({ error: 'VIDEO_NOT_UPLOADED' });
+  expect(noScript.statusCode).toBe(400);
+  expect(noScript.json()).toMatchObject({ error: 'SCRIPT_NOT_READY' });
 
   // 空文件 → 400 VIDEO_EMPTY
   const empty = await uploadVideo(token, liveId, Buffer.alloc(0), 'empty.mp4');
@@ -227,16 +228,6 @@ dbIt('prepare 按序校验：无视频→空/非法文件→无话术→话术�
   expect(uploadedLive.aiBadgeShown).toBe(true);
   trackCleanup(resolve(UPLOADS_DIR, 'videos', `${liveId}.mp4`));
 
-  // 有视频但未选话术 → 400 SCRIPT_NOT_READY
-  const noScript = await app.inject({
-    method: 'POST',
-    url: `/api/lives/${liveId}/prepare`,
-    headers: bearer(token),
-    payload: {},
-  });
-  expect(noScript.statusCode).toBe(400);
-  expect(noScript.json()).toMatchObject({ error: 'SCRIPT_NOT_READY' });
-
   // 话术敏感词 blocked → 400 SCRIPT_NOT_READY
   const blockedId = await seedOwnedScript(PHONE_FLOW, '被拦截话术', 'blocked');
   await app.inject({
@@ -254,7 +245,7 @@ dbIt('prepare 按序校验：无视频→空/非法文件→无话术→话术�
   expect(blockedScript.statusCode).toBe(400);
   expect(blockedScript.json()).toMatchObject({ error: 'SCRIPT_NOT_READY' });
 
-  // 话术 ready+pass 但未选音色 → 400 VOICE_NOT_SELECTED
+  // 话术 ready+pass 但既无克隆音色也无预设音色 → 400 VOICE_NOT_SELECTED
   const readyId = await seedOwnedScript(PHONE_FLOW, '干净话术', 'pass');
   await app.inject({
     method: 'PATCH',
@@ -270,6 +261,60 @@ dbIt('prepare 按序校验：无视频→空/非法文件→无话术→话术�
   });
   expect(noVoice.statusCode).toBe(400);
   expect(noVoice.json()).toMatchObject({ error: 'VOICE_NOT_SELECTED' });
+
+  // 非法预设音色 id → 400 VOLC_PRESET_INVALID（服务端白名单校验）
+  const badPreset = await app.inject({
+    method: 'PATCH',
+    url: `/api/lives/${liveId}`,
+    headers: bearer(token),
+    payload: { volcPresetId: 'speaker-not-exist' },
+  });
+  expect(badPreset.statusCode).toBe(400);
+  expect(badPreset.json()).toMatchObject({ error: 'VOLC_PRESET_INVALID' });
+
+  // 有视频但只选火山预设音色（无就绪克隆）→ 跳过合成直接 ready，口播交给直播中出声链路
+  const presetPick = await app.inject({
+    method: 'PATCH',
+    url: `/api/lives/${liveId}`,
+    headers: bearer(token),
+    payload: { volcPresetId: 'zh_female_vv_uranus_bigtts', voiceId: null },
+  });
+  expect(presetPick.statusCode).toBe(200);
+  const composeSpy = vi.spyOn(streamingService, 'composeLive');
+  const presetReady = await app.inject({
+    method: 'POST',
+    url: `/api/lives/${liveId}/prepare`,
+    headers: bearer(token),
+    payload: {},
+  });
+  expect(presetReady.statusCode).toBe(200);
+  const presetLive = presetReady.json().live as { status: string };
+  expect(presetLive.status).toBe('ready');
+  expect(composeSpy).not.toHaveBeenCalled();
+});
+
+dbIt('纯 AI 语音直播：无实景视频 + 火山预设音色 + pass 话术 → prepare 直接 ready（不合成）', async () => {
+  const token = await registerAndGetToken(PHONE_PRESET);
+  await resetUserData(PHONE_PRESET);
+  const scriptId = await seedOwnedScript(PHONE_PRESET);
+  const liveId = await createLiveDraft(token, {
+    scriptId,
+    voiceId: null,
+    volcPresetId: 'zh_male_m191_uranus_bigtts',
+  });
+  const spy = vi.spyOn(streamingService, 'composeLive');
+
+  const prepare = await app.inject({
+    method: 'POST',
+    url: `/api/lives/${liveId}/prepare`,
+    headers: bearer(token),
+    payload: {},
+  });
+  expect(prepare.statusCode).toBe(200);
+  const live = prepare.json().live as { status: string; videoSourceUrl: string };
+  expect(live.status).toBe('ready');
+  expect(live.videoSourceUrl).toBe('');
+  expect(spy).not.toHaveBeenCalled();
 });
 
 // ---------- 合成成功（Mock 注入，不真跑 FFmpeg）----------

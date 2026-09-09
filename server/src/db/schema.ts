@@ -193,6 +193,8 @@ export const lives = pgTable(
     couponId: text('coupon_id'),
     // 推流地址（抖音 RTMP，mock 阶段可为空，先本地合成）
     rtmpUrl: text('rtmp_url'),
+    // 火山预设音色 id（可选）：与 voice_id 克隆音色互斥，选预设则不绑定克隆
+    volcPresetId: varchar('volc_preset_id', { length: 64 }),
     voiceId: uuid('voice_id').references(() => voices.id, { onDelete: 'set null' }),
     scriptId: uuid('script_id').references(() => scripts.id, { onDelete: 'set null' }),
     // 绑定的循环台本（M1 起）：开播时读取一次快照驻内存，中途改台本库不影响进行中场次

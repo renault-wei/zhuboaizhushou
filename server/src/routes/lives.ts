@@ -29,6 +29,7 @@ interface LiveIdParams {
 /** 读取 POST 创建请求体：只收白名单字段，status / aiBadgeShown 一律忽略（合规角标不可篡改） */
 function readCreateBody(body: unknown): {
   title: string;
+  volcPresetId: string | null;
   voiceId: string | null;
   scriptId: string | null;
   loopScriptId: string | null;
@@ -36,11 +37,19 @@ function readCreateBody(body: unknown): {
   videoSourceUrl?: string;
 } {
   if (typeof body !== 'object' || body === null) {
-    return { title: '', voiceId: null, scriptId: null, loopScriptId: null, couponId: null };
+    return {
+      title: '',
+      volcPresetId: null,
+      voiceId: null,
+      scriptId: null,
+      loopScriptId: null,
+      couponId: null,
+    };
   }
   const record = body as Record<string, unknown>;
   const rawTitle = record.title;
   const title = typeof rawTitle === 'string' ? rawTitle : '';
+  const volcPresetId = readOptionalText(record.volcPresetId);
   const voiceId = readOptionalId(record.voiceId);
   const scriptId = readOptionalId(record.scriptId);
   const loopScriptId = readOptionalId(record.loopScriptId);
@@ -48,12 +57,13 @@ function readCreateBody(body: unknown): {
   const rawVideo = record.videoSourceUrl;
   // videoSourceUrl 非字符串一律回退空串，避免脏数据入库
   const videoSourceUrl = typeof rawVideo === 'string' ? rawVideo : '';
-  return { title, voiceId, scriptId, loopScriptId, couponId, videoSourceUrl };
+  return { title, volcPresetId, voiceId, scriptId, loopScriptId, couponId, videoSourceUrl };
 }
 
 /** 读取 PATCH 更新请求体：字段缺省为 undefined（保留原值）；status/aiBadgeShown 字段一律忽略 */
 function readUpdateBody(body: unknown): {
   title: string | undefined;
+  volcPresetId: string | null | undefined;
   voiceId: string | null | undefined;
   scriptId: string | null | undefined;
   loopScriptId: string | null | undefined;
@@ -63,6 +73,7 @@ function readUpdateBody(body: unknown): {
   if (typeof body !== 'object' || body === null) {
     return {
       title: undefined,
+      volcPresetId: undefined,
       voiceId: undefined,
       scriptId: undefined,
       loopScriptId: undefined,
@@ -74,6 +85,10 @@ function readUpdateBody(body: unknown): {
   let title: string | undefined;
   if (Object.prototype.hasOwnProperty.call(record, 'title')) {
     title = typeof record.title === 'string' ? record.title : '';
+  }
+  let volcPresetId: string | null | undefined;
+  if (Object.prototype.hasOwnProperty.call(record, 'volcPresetId')) {
+    volcPresetId = readOptionalText(record.volcPresetId);
   }
   let voiceId: string | null | undefined;
   if (Object.prototype.hasOwnProperty.call(record, 'voiceId')) {
@@ -95,7 +110,7 @@ function readUpdateBody(body: unknown): {
   if (Object.prototype.hasOwnProperty.call(record, 'videoSourceUrl')) {
     videoSourceUrl = typeof record.videoSourceUrl === 'string' ? record.videoSourceUrl : '';
   }
-  return { title, voiceId, scriptId, loopScriptId, couponId, videoSourceUrl };
+  return { title, volcPresetId, voiceId, scriptId, loopScriptId, couponId, videoSourceUrl };
 }
 
 /** 可选 uuid 字段：非空字符串才接收，其余一律视为 null */
@@ -312,47 +327,57 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
     }
     const { live, script, voice } = context;
-    if (!live.videoSourceUrl) {
-      return reply.code(400).send({ error: 'VIDEO_NOT_UPLOADED', message: '请先上传实景视频' });
-    }
     const scriptReady =
       script !== null && script.status === 'ready' && script.sensitiveCheckStatus === 'pass';
     if (!scriptReady) {
       return reply.code(400).send({ error: 'SCRIPT_NOT_READY', message: '请先生成已通过敏感词扫描的话术' });
     }
-    if (!voice?.providerVoiceId) {
+    const hasCloneVoice = Boolean(voice?.providerVoiceId);
+    const hasPresetVoice = Boolean(live.volcPresetId);
+    if (!hasCloneVoice && !hasPresetVoice) {
       const message = live.voiceId
-        ? '所选音色不存在或尚未就绪，请等待克隆完成或重新选择'
-        : '请先选择克隆音色';
+        ? '所选克隆音色尚未就绪，请等待克隆完成、改选火山预设音色或重新选择'
+        : '请先选择火山预设音色或克隆音色';
       return reply.code(400).send({ error: 'VOICE_NOT_SELECTED', message });
     }
-    const processing = await updateLiveInternal(request.user.userId, id, { status: 'processing' });
-    if (!processing) {
-      return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
-    }
-    try {
-      await streamingService.composeLive({
-        sourceVideoPath: uploadsPath('videos', `${id}.mp4`),
-        scriptText: script?.content ?? '',
-        outputPath: uploadsPath('lives', `${id}.mp4`),
-        durationSeconds,
-        providerVoiceId: voice.providerVoiceId,
+
+    // 实景视频 + 就绪克隆音色 → 走 FFmpeg 合成链路（口播压进成片，产物落 uploads/lives）
+    if (live.videoSourceUrl && hasCloneVoice) {
+      const processing = await updateLiveInternal(request.user.userId, id, { status: 'processing' });
+      if (!processing) {
+        return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
+      }
+      try {
+        await streamingService.composeLive({
+          sourceVideoPath: uploadsPath('videos', `${id}.mp4`),
+          scriptText: script?.content ?? '',
+          outputPath: uploadsPath('lives', `${id}.mp4`),
+          durationSeconds,
+          providerVoiceId: voice?.providerVoiceId ?? '',
+        });
+      } catch (err) {
+        // 合成失败：状态置 failed，把 ffmpeg 错误摘要带回给前端排查
+        await updateLiveInternal(request.user.userId, id, { status: 'failed' });
+        const message =
+          err instanceof Error && err.message ? err.message.slice(0, 500) : '合成失败，请稍后重试';
+        return reply.code(500).send({ error: 'COMPOSE_FAILED', message });
+      }
+      const updated = await updateLiveInternal(request.user.userId, id, {
+        status: 'ready',
+        videoSourceUrl: `/uploads/lives/${id}.mp4`,
       });
-    } catch (err) {
-      // 合成失败：状态置 failed，把 ffmpeg 错误摘要带回给前端排查
-      await updateLiveInternal(request.user.userId, id, { status: 'failed' });
-      const message =
-        err instanceof Error && err.message ? err.message.slice(0, 500) : '合成失败，请稍后重试';
-      return reply.code(500).send({ error: 'COMPOSE_FAILED', message });
+      if (!updated) {
+        return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
+      }
+      return { live: updated };
     }
-    const updated = await updateLiveInternal(request.user.userId, id, {
-      status: 'ready',
-      videoSourceUrl: `/uploads/lives/${id}.mp4`,
-    });
-    if (!updated) {
+
+    // 纯 AI 语音直播（无实景视频，或仅选火山预设音色无需压片）：跳过合成直接置 ready
+    const pureReady = await updateLiveInternal(request.user.userId, id, { status: 'ready' });
+    if (!pureReady) {
       return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
     }
-    return { live: updated };
+    return { live: pureReady };
   });
 
   // 合成 / 直播状态查询：供客户端轮询使用

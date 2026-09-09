@@ -6,6 +6,7 @@ import {
   scripts as scriptsTable,
   voices as voicesTable,
 } from '../db/schema';
+import { isVolcPresetId } from './volcPresets';
 
 // ---------- 常量 ----------
 
@@ -27,6 +28,8 @@ export interface Live {
   videoSourceUrl: string;
   couponId: string | null;
   rtmpUrl: string | null;
+  /** 火山预设音色 id：与 voiceId 互斥，二选一 */
+  volcPresetId: string | null;
   voiceId: string | null;
   scriptId: string | null;
   loopScriptId: string | null;
@@ -43,6 +46,8 @@ export interface Live {
 export interface CreateLiveInput {
   /** 直播标题：trim 后 1-100 字 */
   title: string;
+  /** 火山预设音色 id：可空（暂未选）；与 voiceId 互斥 */
+  volcPresetId: string | null;
   /** 音色 id：可空（暂未选） */
   voiceId: string | null;
   /** 话术 id：可空（暂未选） */
@@ -59,7 +64,7 @@ export interface CreateLiveInput {
 export type UpdateLiveInput = Partial<
   Pick<
     CreateLiveInput,
-    'title' | 'voiceId' | 'scriptId' | 'loopScriptId' | 'couponId' | 'videoSourceUrl'
+    'title' | 'volcPresetId' | 'voiceId' | 'scriptId' | 'loopScriptId' | 'couponId' | 'videoSourceUrl'
   >
 >;
 
@@ -68,6 +73,7 @@ export type UpdateLiveInput = Partial<
 export type LiveErrorCode =
   | 'LIVE_TITLE_INVALID'
   | 'VOICE_NOT_OWNED'
+  | 'VOLC_PRESET_INVALID'
   | 'SCRIPT_NOT_OWNED'
   | 'LOOP_SCRIPT_NOT_OWNED'
   | 'LIVE_NOT_FOUND'
@@ -100,6 +106,7 @@ export function toLive(row: LiveRow): Live {
     videoSourceUrl: row.videoSourceUrl,
     couponId: row.couponId,
     rtmpUrl: row.rtmpUrl,
+    volcPresetId: row.volcPresetId,
     voiceId: row.voiceId,
     scriptId: row.scriptId,
     loopScriptId: row.loopScriptId,
@@ -207,7 +214,13 @@ export async function getLiveById(userId: string, id: string): Promise<Live | nu
 /** 创建开播配置草稿：默认 status=idle、aiBadgeShown=true（合规写死，body 传参一律忽略） */
 export async function createLive(userId: string, input: CreateLiveInput): Promise<Live> {
   const title = assertValidTitle(input.title);
-  await assertOwnedReferences(userId, input);
+  // 互斥归一化：预设音色与克隆音色同时出现时以预设为准，避免库里两字段同时非空
+  const presetId = input.volcPresetId?.trim() ?? null;
+  const voiceId = presetId ? null : input.voiceId;
+  if (presetId && !isVolcPresetId(presetId)) {
+    throw new LiveError('VOLC_PRESET_INVALID', '不支持的火山预设音色');
+  }
+  await assertOwnedReferences(userId, { ...input, voiceId });
 
   const inserted = await db
     .insert(livesTable)
@@ -217,7 +230,8 @@ export async function createLive(userId: string, input: CreateLiveInput): Promis
       // T10 实景视频源默认空串，T11 上传视频后再 PATCH 回填
       videoSourceUrl: input.videoSourceUrl?.trim() ?? '',
       couponId: input.couponId,
-      voiceId: input.voiceId,
+      volcPresetId: presetId,
+      voiceId,
       scriptId: input.scriptId,
       loopScriptId: input.loopScriptId,
       status: 'idle',
@@ -248,6 +262,7 @@ export async function updateLive(
     title?: string;
     videoSourceUrl?: string;
     couponId?: string | null;
+    volcPresetId?: string | null;
     voiceId?: string | null;
     scriptId?: string | null;
     loopScriptId?: string | null;
@@ -261,11 +276,36 @@ export async function updateLive(
   if (patch.couponId !== undefined) {
     changes.couponId = patch.couponId;
   }
-  if (patch.voiceId !== undefined) {
-    if (patch.voiceId && !(await isOwnedVoice(patch.voiceId, userId))) {
+
+  // 音色选择：基于现值叠加本次 patch，再做互斥归一化，保证 voiceId 与 volcPresetId 不同时非空
+  const voiceTouched = patch.voiceId !== undefined;
+  const presetTouched = patch.volcPresetId !== undefined;
+  let nextVoiceId: string | null = existing.voiceId;
+  let nextPresetId: string | null = existing.volcPresetId;
+  if (voiceTouched) {
+    const nextVoice = patch.voiceId;
+    if (nextVoice && !(await isOwnedVoice(nextVoice, userId))) {
       throw new LiveError('VOICE_NOT_OWNED', '音色不存在或不属于当前用户');
     }
-    changes.voiceId = patch.voiceId;
+    nextVoiceId = nextVoice ?? null;
+  }
+  if (presetTouched) {
+    const preset = patch.volcPresetId?.trim() ?? '';
+    if (preset && !isVolcPresetId(preset)) {
+      throw new LiveError('VOLC_PRESET_INVALID', '不支持的火山预设音色');
+    }
+    nextPresetId = preset || null;
+  }
+  // 明确选了一侧就清空另一侧；两侧同时给且都非空时以预设为准
+  if (presetTouched && nextPresetId) {
+    nextVoiceId = null;
+  }
+  if (voiceTouched && nextVoiceId) {
+    nextPresetId = null;
+  }
+  if (voiceTouched || presetTouched) {
+    changes.voiceId = nextVoiceId;
+    changes.volcPresetId = nextPresetId;
   }
   if (patch.scriptId !== undefined) {
     if (patch.scriptId && !(await isOwnedScript(patch.scriptId, userId))) {
