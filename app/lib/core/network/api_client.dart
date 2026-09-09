@@ -10,6 +10,7 @@ import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/models/user_profile.dart';
 import 'package:starvoice_app/core/models/voice.dart';
 import 'package:starvoice_app/core/models/voice_agreement.dart';
+import 'package:starvoice_app/core/models/volc_preset.dart';
 import 'package:starvoice_app/core/models/script.dart';
 import 'package:starvoice_app/core/models/loop_script.dart';
 import 'package:starvoice_app/core/models/speech_out_item.dart';
@@ -290,6 +291,27 @@ class ApiClient {
     }
   }
 
+  /// 火山预设音色目录（只读内置，不调火山接口）：音色选择在「克隆音色 /
+  /// 火山预设」两组之间互斥切换，live 落库走 volcPresetId。
+  Future<List<VolcPresetVoice>> listVolcPresetVoices() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/api/voices/presets',
+      );
+      final raw = response.data?['presets'];
+      if (raw is List) {
+        return raw
+            .whereType<Map>()
+            .map((item) =>
+                VolcPresetVoice.fromJson(Map<String, dynamic>.from(item)))
+            .toList();
+      }
+      return <VolcPresetVoice>[];
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
   /// 创建声音克隆任务（提交录音样本），成功返回 201 + pending 音色。
   Future<Voice> createVoice({
     required String name,
@@ -561,6 +583,7 @@ class ApiClient {
   /// 请求体即使传 status / aiBadgeShown=false 也一律忽略，防止篡改合规角标）。
   Future<Live> createLive({
     required String title,
+    String? volcPresetId,
     String? voiceId,
     String? scriptId,
     String? loopScriptId,
@@ -572,6 +595,7 @@ class ApiClient {
         '/api/lives',
         data: <String, dynamic>{
           'title': title,
+          'volcPresetId': volcPresetId,
           'voiceId': voiceId,
           'scriptId': scriptId,
           'loopScriptId': loopScriptId,
@@ -590,6 +614,7 @@ class ApiClient {
   Future<Live> updateLive({
     required String id,
     String? title,
+    String? volcPresetId,
     String? voiceId,
     String? scriptId,
     String? loopScriptId,
@@ -602,6 +627,7 @@ class ApiClient {
         data: <String, dynamic>{
           'title': title,
           // 显式带 null：编辑页整体提交当前绑定，null 表示未绑定（服务端置空该列）
+          'volcPresetId': volcPresetId,
           'voiceId': voiceId,
           'scriptId': scriptId,
           'loopScriptId': loopScriptId,

@@ -259,6 +259,7 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
             child: _LiveCard(
               live: live,
               voiceNames: state.voiceNames,
+              presetNames: state.presetNames,
               scriptTitles: state.scriptTitles,
               couponNames: state.couponNames,
               onEdit: live.isEditable ? () => _goEdit(live) : null,
@@ -372,6 +373,7 @@ class _LiveCard extends StatelessWidget {
   const _LiveCard({
     required this.live,
     required this.voiceNames,
+    required this.presetNames,
     required this.scriptTitles,
     required this.couponNames,
     required this.onEdit,
@@ -383,6 +385,7 @@ class _LiveCard extends StatelessWidget {
 
   final Live live;
   final Map<String, String> voiceNames;
+  final Map<String, String> presetNames;
   final Map<String, String> scriptTitles;
   final Map<String, String> couponNames;
   final VoidCallback? onEdit;
@@ -396,6 +399,8 @@ class _LiveCard extends StatelessWidget {
     final parts = <String>[
       if (live.voiceId != null)
         '音色：${voiceNames[live.voiceId] ?? live.voiceId}',
+      if (live.volcPresetId != null)
+        '音色：${presetNames[live.volcPresetId] ?? live.volcPresetId}（火山预设）',
       if (live.scriptId != null)
         '话术：${scriptTitles[live.scriptId] ?? live.scriptId}',
       if (live.couponId != null)

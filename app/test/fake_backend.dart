@@ -85,6 +85,22 @@ const List<Map<String, dynamic>> fakeLoopScriptSamples = <Map<String, dynamic>>[
   },
 ];
 
+/// 内置火山预设音色目录：镜像服务端 /api/voices/presets 载荷
+/// （与服务端 volcPresets.ts 保持一致，供音色两组选择与 live.volcPresetId 测试）。
+const List<Map<String, dynamic>> fakeVolcPresetVoices =
+    <Map<String, dynamic>>[
+      <String, dynamic>{
+        'id': 'zh_female_vv_uranus_bigtts',
+        'name': 'Vivi 2.0',
+        'gender': 'female',
+      },
+      <String, dynamic>{
+        'id': 'zh_male_m191_uranus_bigtts',
+        'name': '云舟 2.0',
+        'gender': 'male',
+      },
+    ];
+
 /// 内存版假后端：覆盖登录、抖音绑定与声音授权协议相关接口，
 /// 测试全程不发起真实网络请求，响应形状与服务端保持一致。
 class FakeBackend implements HttpClientAdapter {
@@ -103,6 +119,7 @@ class FakeBackend implements HttpClientAdapter {
     this.failLoopScriptsList = false,
     this.failLoopScriptSamples = false,
     List<Map<String, dynamic>>? voices,
+    List<Map<String, dynamic>>? volcPresets,
     List<Map<String, dynamic>>? scripts,
     List<Map<String, dynamic>>? coupons,
     List<Map<String, dynamic>>? lives,
@@ -121,6 +138,7 @@ class FakeBackend implements HttpClientAdapter {
     List<Map<String, dynamic>>? rechargeOrders,
     Map<String, int>? redeemableCards,
   }) : voices = voices ?? <Map<String, dynamic>>[],
+       volcPresets = volcPresets ?? fakeVolcPresetVoices,
        scripts = scripts ?? <Map<String, dynamic>>[],
        coupons = coupons ?? _defaultCoupons(),
        lives = lives ?? <Map<String, dynamic>>[],
@@ -148,6 +166,9 @@ class FakeBackend implements HttpClientAdapter {
   /// GET :id 会像服务端一样按创建时间惰性推进克隆状态。
   final List<Map<String, dynamic>> voices;
   int _voiceSeq = 0;
+
+  /// 火山预设音色目录（内存）：结构与服务端 /api/voices/presets 返回保持一致。
+  final List<Map<String, dynamic>> volcPresets;
 
   /// 我的话术（内存）：结构与服务端 /api/scripts 返回保持一致。
   final List<Map<String, dynamic>> scripts;
@@ -371,6 +392,9 @@ class FakeBackend implements HttpClientAdapter {
     if (options.method == 'POST' && path.endsWith('/api/loop-scripts')) {
       return _createLoopScript(options);
     }
+    if (options.method == 'GET' && path.endsWith('/api/voices/presets')) {
+      return _jsonResponse({'presets': List<Map<String, dynamic>>.from(volcPresets)});
+    }
     if (options.method == 'GET' && path.endsWith('/api/voices')) {
       return _jsonResponse(List<Map<String, dynamic>>.from(voices));
     }
@@ -498,8 +522,18 @@ class FakeBackend implements HttpClientAdapter {
     }
     final voiceId = _liveNullable(body['voiceId']);
     final scriptId = _liveNullable(body['scriptId']);
-    if (voiceId != null &&
-        voices.indexWhere((voice) => voice['id'] == voiceId) < 0) {
+    final presetId = _liveNullable(body['volcPresetId']);
+    // 互斥归一化：预设音色与克隆音色同时出现时以预设为准
+    final normalizedVoiceId = presetId == null ? voiceId : null;
+    if (presetId != null &&
+        volcPresets.indexWhere((preset) => preset['id'] == presetId) < 0) {
+      return _jsonResponse({
+        'error': 'VOLC_PRESET_INVALID',
+        'message': '不支持的火山预设音色',
+      }, 400);
+    }
+    if (normalizedVoiceId != null &&
+        voices.indexWhere((voice) => voice['id'] == normalizedVoiceId) < 0) {
       return _jsonResponse({
         'error': 'VOICE_NOT_OWNED',
         'message': '音色不存在或不属于当前用户',
@@ -528,7 +562,8 @@ class FakeBackend implements HttpClientAdapter {
       'videoSourceUrl': body['videoSourceUrl']?.toString().trim() ?? '',
       'couponId': _liveNullable(body['couponId']),
       'rtmpUrl': null,
-      'voiceId': voiceId,
+      'volcPresetId': presetId,
+      'voiceId': normalizedVoiceId,
       'scriptId': scriptId,
       'loopScriptId': loopScriptId,
       'status': 'idle',
@@ -563,7 +598,13 @@ class FakeBackend implements HttpClientAdapter {
       }
       updated['title'] = title;
     }
-    if (body.containsKey('voiceId')) {
+    // 音色选择：基于现值叠加本次 patch，再做互斥归一化，保证 voiceId 与
+    // volcPresetId 不同时非空（镜像服务端语义：选预设清克隆，反之亦然）。
+    final voiceTouched = body.containsKey('voiceId');
+    final presetTouched = body.containsKey('volcPresetId');
+    var nextVoiceId = updated['voiceId'] as String?;
+    var nextPresetId = updated['volcPresetId'] as String?;
+    if (voiceTouched) {
       final voiceId = _liveNullable(body['voiceId']);
       if (voiceId != null &&
           voices.indexWhere((voice) => voice['id'] == voiceId) < 0) {
@@ -572,7 +613,28 @@ class FakeBackend implements HttpClientAdapter {
           'message': '音色不存在或不属于当前用户',
         }, 400);
       }
-      updated['voiceId'] = voiceId;
+      nextVoiceId = voiceId;
+    }
+    if (presetTouched) {
+      final presetId = _liveNullable(body['volcPresetId']);
+      if (presetId != null &&
+          volcPresets.indexWhere((preset) => preset['id'] == presetId) < 0) {
+        return _jsonResponse({
+          'error': 'VOLC_PRESET_INVALID',
+          'message': '不支持的火山预设音色',
+        }, 400);
+      }
+      nextPresetId = presetId;
+    }
+    if (presetTouched && nextPresetId != null) {
+      nextVoiceId = null;
+    }
+    if (voiceTouched && nextVoiceId != null) {
+      nextPresetId = null;
+    }
+    if (voiceTouched || presetTouched) {
+      updated['voiceId'] = nextVoiceId;
+      updated['volcPresetId'] = nextPresetId;
     }
     if (body.containsKey('scriptId')) {
       final scriptId = _liveNullable(body['scriptId']);
@@ -670,12 +732,6 @@ class FakeBackend implements HttpClientAdapter {
       }, 404);
     }
     final live = lives[index];
-    if ((live['videoSourceUrl']?.toString() ?? '').isEmpty) {
-      return _jsonResponse({
-        'error': 'VIDEO_NOT_UPLOADED',
-        'message': '请先上传实景视频再生成',
-      }, 400);
-    }
     final scriptId = _liveNullable(live['scriptId']);
     final script = scriptId == null ? null : _findScript(scriptId);
     final scriptReady =
@@ -689,18 +745,29 @@ class FakeBackend implements HttpClientAdapter {
       }, 400);
     }
     final voiceId = _liveNullable(live['voiceId']);
-    if (voiceId == null ||
-        voices.indexWhere((voice) => voice['id'] == voiceId) < 0) {
+    // 就绪克隆音色：voiceId 对应音色需已 ready（providerVoiceId 就绪语义）；
+    // 火山预设音色（volcPresetId）无需等待，二选一即可进入纯 AI 语音就绪。
+    final voiceIndex =
+        voiceId == null ? -1 : voices.indexWhere((voice) => voice['id'] == voiceId);
+    final hasCloneVoice =
+        voiceIndex >= 0 && voices[voiceIndex]['status'] == 'ready';
+    final hasPresetVoice = _liveNullable(live['volcPresetId']) != null;
+    if (!hasCloneVoice && !hasPresetVoice) {
+      final message = voiceId == null
+          ? '请先选择火山预设音色或克隆音色'
+          : '所选克隆音色尚未就绪，请等待克隆完成、改选火山预设音色或重新选择';
       return _jsonResponse({
         'error': 'VOICE_NOT_SELECTED',
-        'message': '请先绑定可用的音色',
+        'message': message,
       }, 400);
     }
     final now = DateTime.now().toUtc().toIso8601String();
+    final hasSourceVideo = (live['videoSourceUrl']?.toString() ?? '').isNotEmpty;
     final updated = <String, dynamic>{
       ...live,
       'status': 'ready',
-      'videoSourceUrl': '/uploads/lives/$id.mp4',
+      // 实景视频 + 就绪克隆音色才走合成回填成片；纯 AI 语音就绪不回填
+      if (hasSourceVideo && hasCloneVoice) 'videoSourceUrl': '/uploads/lives/$id.mp4',
       'updatedAt': now,
     };
     lives[index] = updated;

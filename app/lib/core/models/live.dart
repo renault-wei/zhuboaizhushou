@@ -37,6 +37,7 @@ class Live {
     required this.videoSourceUrl,
     required this.couponId,
     required this.rtmpUrl,
+    required this.volcPresetId,
     required this.voiceId,
     required this.scriptId,
     this.loopScriptId,
@@ -55,6 +56,7 @@ class Live {
       videoSourceUrl: json['videoSourceUrl']?.toString() ?? '',
       couponId: _nullableString(json['couponId']),
       rtmpUrl: _nullableString(json['rtmpUrl']),
+      volcPresetId: _nullableString(json['volcPresetId']),
       voiceId: _nullableString(json['voiceId']),
       scriptId: _nullableString(json['scriptId']),
       loopScriptId: _nullableString(json['loopScriptId']),
@@ -83,7 +85,10 @@ class Live {
   /// RTMP 推流地址：T10/T11 阶段为空，实际推流在 T12 接入
   final String? rtmpUrl;
 
-  /// 绑定的音色 id
+  /// 火山预设音色 id（内置目录，只读）：与 [voiceId] 互斥，二选一
+  final String? volcPresetId;
+
+  /// 绑定的克隆音色 id（来自「我的音色」）：与 [volcPresetId] 互斥，二选一
   final String? voiceId;
 
   /// 绑定的话术 id

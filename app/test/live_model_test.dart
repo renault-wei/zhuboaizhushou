@@ -7,6 +7,8 @@ Map<String, dynamic> _liveJson({
   String id = 'live-001',
   String title = '火锅店午市循环直播',
   String status = 'idle',
+  String? voiceId = 'v-ready',
+  String? volcPresetId,
 }) {
   return <String, dynamic>{
     'id': id,
@@ -14,7 +16,8 @@ Map<String, dynamic> _liveJson({
     'videoSourceUrl': 'https://cdn.example.com/live-001.mp4',
     'couponId': 'c-001-mock',
     'rtmpUrl': 'rtmp://push.example.com/live/stream-001',
-    'voiceId': 'v-ready',
+    'voiceId': voiceId,
+    'volcPresetId': volcPresetId,
     'scriptId': 'script-001',
     'status': status,
     'aiBadgeShown': true,
@@ -35,6 +38,7 @@ void main() {
     expect(live.couponId, 'c-001-mock');
     expect(live.rtmpUrl, 'rtmp://push.example.com/live/stream-001');
     expect(live.voiceId, 'v-ready');
+    expect(live.volcPresetId, isNull);
     expect(live.scriptId, 'script-001');
     expect(live.status, LiveStatus.idle);
     expect(live.aiBadgeShown, isTrue);
@@ -50,6 +54,7 @@ void main() {
       'couponId': null,
       'rtmpUrl': '',
       'voiceId': null,
+      'volcPresetId': '',
       'scriptId': '',
       'startedAt': null,
       'endedAt': null,
@@ -59,11 +64,26 @@ void main() {
     expect(live.couponId, isNull);
     expect(live.rtmpUrl, isNull);
     expect(live.voiceId, isNull);
+    expect(live.volcPresetId, isNull);
     expect(live.scriptId, isNull);
     expect(live.startedAt, isNull);
     expect(live.endedAt, isNull);
     // 合规兜底：角标字段缺失一律按 true 处理，不把角标当作可关闭项
     expect(live.aiBadgeShown, isTrue);
+  });
+
+  test('fromJson：volcPresetId 带值映射，克隆 / 预设二选一互不污染', () {
+    final presetLive = Live.fromJson(
+      _liveJson(voiceId: null, volcPresetId: 'zh_male_m191_uranus_bigtts'),
+    );
+    expect(presetLive.voiceId, isNull);
+    expect(presetLive.volcPresetId, 'zh_male_m191_uranus_bigtts');
+
+    final cloneLive = Live.fromJson(
+      _liveJson(voiceId: 'v-ready', volcPresetId: null),
+    );
+    expect(cloneLive.voiceId, 'v-ready');
+    expect(cloneLive.volcPresetId, isNull);
   });
 
   test('status 解析：六个合法值 + 未知值兜底 failed', () {

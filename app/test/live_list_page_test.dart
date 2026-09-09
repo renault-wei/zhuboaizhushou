@@ -15,6 +15,7 @@ Map<String, dynamic> _liveJson({
   required String title,
   required String status,
   String? voiceId,
+  String? volcPresetId,
   String? scriptId,
   String? couponId,
   String? startedAt,
@@ -28,6 +29,7 @@ Map<String, dynamic> _liveJson({
     'couponId': couponId,
     'rtmpUrl': null,
     'voiceId': voiceId,
+    'volcPresetId': volcPresetId,
     'scriptId': scriptId,
     'status': status,
     'aiBadgeShown': true,
@@ -174,6 +176,23 @@ void main() {
       find.byKey(const Key('liveDelete_live-002')),
     );
     expect(readyDelete.onPressed, isNull);
+  });
+
+  testWidgets('火山预设音色配置：卡片摘要展示「音色：名称（火山预设）」', (WidgetTester tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(
+          id: 'live-005',
+          title: '云舟声音午市直播',
+          status: 'idle',
+          volcPresetId: 'zh_male_m191_uranus_bigtts',
+        ),
+      ],
+    );
+    await _pumpListPage(tester, backend);
+
+    expect(find.byKey(const Key('liveCard_live-005')), findsOneWidget);
+    expect(find.text('音色：云舟 2.0（火山预设）'), findsOneWidget);
   });
 
   testWidgets('合成中（processing）并入进行中分段：展示「合成中」徽章并受删除保护', (

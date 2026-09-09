@@ -4,6 +4,7 @@ import 'package:starvoice_app/core/models/coupon.dart';
 import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/models/script.dart';
 import 'package:starvoice_app/core/models/voice.dart';
+import 'package:starvoice_app/core/models/volc_preset.dart';
 import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 
@@ -14,6 +15,7 @@ class LiveListState {
   const LiveListState({
     this.lives = const <Live>[],
     this.voiceNames = const <String, String>{},
+    this.presetNames = const <String, String>{},
     this.scriptTitles = const <String, String>{},
     this.couponNames = const <String, String>{},
     this.loading = false,
@@ -25,6 +27,9 @@ class LiveListState {
 
   /// 音色 id → 名称
   final Map<String, String> voiceNames;
+
+  /// 火山预设音色 id → 名称
+  final Map<String, String> presetNames;
 
   /// 话术 id → 展示标题（未命名话术退化为「未命名话术」）
   final Map<String, String> scriptTitles;
@@ -43,6 +48,7 @@ class LiveListState {
   LiveListState copyWith({
     List<Live>? lives,
     Map<String, String>? voiceNames,
+    Map<String, String>? presetNames,
     Map<String, String>? scriptTitles,
     Map<String, String>? couponNames,
     bool? loading,
@@ -52,6 +58,7 @@ class LiveListState {
     return LiveListState(
       lives: lives ?? this.lives,
       voiceNames: voiceNames ?? this.voiceNames,
+      presetNames: presetNames ?? this.presetNames,
       scriptTitles: scriptTitles ?? this.scriptTitles,
       couponNames: couponNames ?? this.couponNames,
       loading: loading ?? this.loading,
@@ -72,6 +79,7 @@ class LiveListController extends StateNotifier<LiveListState> {
     try {
       final lives = await _apiClient.listLives();
       final voices = await _loadVoicesBestEffort();
+      final presets = await _loadPresetsBestEffort();
       final scripts = await _loadScriptsBestEffort();
       final coupons = await _loadCouponsBestEffort();
       if (!mounted) {
@@ -81,6 +89,9 @@ class LiveListController extends StateNotifier<LiveListState> {
         lives: lives,
         voiceNames: <String, String>{
           for (final voice in voices) voice.id: voice.name,
+        },
+        presetNames: <String, String>{
+          for (final preset in presets) preset.id: preset.name,
         },
         scriptTitles: <String, String>{
           for (final script in scripts) script.id: script.displayTitle,
@@ -124,6 +135,15 @@ class LiveListController extends StateNotifier<LiveListState> {
       return await _apiClient.listVoices();
     } on ApiException {
       return <Voice>[];
+    }
+  }
+
+  /// 火山预设音色列表尽力而为：失败不影响主列表展示。
+  Future<List<VolcPresetVoice>> _loadPresetsBestEffort() async {
+    try {
+      return await _apiClient.listVolcPresetVoices();
+    } on ApiException {
+      return <VolcPresetVoice>[];
     }
   }
 

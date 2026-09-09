@@ -53,6 +53,7 @@ Map<String, dynamic> _liveJson({
   String status = 'idle',
   String videoSourceUrl = '',
   String? voiceId,
+  String? volcPresetId,
   String? scriptId,
   String? couponId,
 }) {
@@ -64,6 +65,7 @@ Map<String, dynamic> _liveJson({
     'couponId': couponId,
     'rtmpUrl': null,
     'voiceId': voiceId,
+    'volcPresetId': volcPresetId,
     'scriptId': scriptId,
     'status': status,
     'aiBadgeShown': true,
@@ -199,7 +201,9 @@ void main() {
     // 选择音色：pending 禁用、ready 可点
     await tester.tap(find.byKey(const Key('liveVoiceSelector')));
     await tester.pumpAndSettle();
-    expect(find.text('选择音色（仅「可用」音色可选）'), findsOneWidget);
+    expect(find.text('选择音色'), findsOneWidget);
+    expect(find.text('我的音色（克隆）'), findsOneWidget);
+    expect(find.text('火山预设音色'), findsOneWidget);
     expect(
       _widget<ListTile>(tester, const Key('liveVoiceOption_v-pending')).enabled,
       isFalse,
@@ -304,19 +308,21 @@ void main() {
     );
     await _pumpFormPage(tester, backend, liveId: 'live-001');
 
-    // 尚未上传：展示空态文案，上传 / 生成按钮均禁用
+    // 已绑可用克隆音色但未传实景视频：进入「纯 AI 语音」就绪态，
+    // 上传按钮仍需先填路径，prepare 已可直接就绪（纯 AI 不合成）
     final uploadButtonFinder = find.byKey(const Key('liveVideoUploadButton'));
     await _scrollTo(tester, uploadButtonFinder);
     expect(find.byKey(const Key('liveVideoSourceText')), findsOneWidget);
-    expect(find.text('尚未上传实景视频'), findsOneWidget);
+    expect(find.text('未传实景视频 · 纯 AI 语音模式'), findsOneWidget);
     expect(
       _widget<FilledButton>(tester, const Key('liveVideoUploadButton'))
           .onPressed,
       isNull,
     );
+    expect(find.text('纯 AI 就绪开播'), findsOneWidget);
     expect(
       _widget<FilledButton>(tester, const Key('livePrepareButton')).onPressed,
-      isNull,
+      isNotNull,
     );
 
     // 输入本机路径后上传按钮点亮（真实调用由 ApiClient 单测覆盖）
@@ -370,7 +376,7 @@ void main() {
     await tester.tap(prepareButtonFinder);
     await tester.pumpAndSettle();
 
-    expect(find.text('已生成，可开播（T12）'), findsOneWidget);
+    expect(find.text('已生成直播视频，可开播'), findsOneWidget);
     expect(find.text('已生成：live-001.mp4'), findsOneWidget);
     expect(backend.lives.single['status'], 'ready');
     expect(
@@ -490,5 +496,114 @@ void main() {
     expect(created['voiceId'], 'v-ready');
     expect(created['scriptId'], 'script-001');
     expect(created['couponId'], 'c-001-mock');
+  });
+
+  testWidgets('端到端：新建选火山预设音色 → 保存 → 列表摘要展示预设且 voiceId 为空', (WidgetTester tester) async {
+    final backend = FakeBackend(
+      douyinBound: true,
+      scripts: <Map<String, dynamic>>[
+        _scriptJson(id: 'script-001', title: '火锅套餐话术', status: 'ready'),
+      ],
+    );
+    await _pumpListRouter(tester, backend);
+    expect(find.text('还没有开播配置，点击 + 创建第一个草稿'), findsOneWidget);
+
+    // 进入新建页并填标题
+    await tester.tap(find.byKey(const Key('liveAddButton')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('liveTitleField')),
+      '火锅店午市循环直播',
+    );
+    await tester.pump();
+
+    // 音色选火山预设：无克隆音色时只展示预设组，选中后展示「名称（火山预设）」
+    await tester.tap(find.byKey(const Key('liveVoiceSelector')));
+    await tester.pumpAndSettle();
+    expect(find.text('火山预设音色'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const Key('livePresetOption_zh_female_vv_uranus_bigtts')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<Text>(find.byKey(const Key('liveVoiceValue'))).data,
+      'Vivi 2.0（火山预设）',
+    );
+
+    // 绑定就绪话术
+    await tester.tap(find.byKey(const Key('liveScriptSelector')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('liveScriptOption_script-001')));
+    await tester.pumpAndSettle();
+
+    // 保存草稿：pop 回列表并展示火山预设摘要
+    final saveButton = find.byKey(const Key('liveSaveButton'));
+    await _scrollTo(tester, saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('liveCard_live-001')), findsOneWidget);
+    expect(find.textContaining('音色：Vivi 2.0（火山预设）'), findsOneWidget);
+    // 落库语义：预设 id 落库、克隆音色互斥置空
+    final created = backend.lives.single;
+    expect(created['volcPresetId'], 'zh_female_vv_uranus_bigtts');
+    expect(created['voiceId'], isNull);
+    expect(created['scriptId'], 'script-001');
+  });
+
+  testWidgets('纯 AI 就绪开播：火山预设音色 + 无实景视频 → prepare 直接 ready 且不合成回填', (WidgetTester tester) async {
+    final backend = FakeBackend(
+      douyinBound: true,
+      scripts: <Map<String, dynamic>>[
+        _scriptJson(id: 'script-001', title: '火锅套餐话术', status: 'ready'),
+      ],
+      lives: <Map<String, dynamic>>[
+        _liveJson(
+          id: 'live-001',
+          title: '火锅店循环直播',
+          status: 'idle',
+          volcPresetId: 'zh_female_vv_uranus_bigtts',
+          scriptId: 'script-001',
+        ),
+      ],
+    );
+    await _pumpFormPage(tester, backend, liveId: 'live-001');
+
+    // 编辑预填：音色值展示火山预设；无实景视频时展示纯 AI 就绪入口
+    expect(
+      tester.widget<Text>(find.byKey(const Key('liveVoiceValue'))).data,
+      'Vivi 2.0（火山预设）',
+    );
+    final prepareButton = find.byKey(const Key('livePrepareButton'));
+    await _scrollTo(tester, prepareButton);
+    expect(find.text('纯 AI 就绪开播'), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.byKey(const Key('liveVideoSourceText'))).data,
+      '未传实景视频 · 纯 AI 语音模式',
+    );
+
+    await tester.tap(prepareButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('已就绪，可开播（纯 AI 语音模式）'), findsOneWidget);
+    expect(backend.lives.single['status'], 'ready');
+    // 纯 AI 就绪不触发视频合成：videoSourceUrl 保持空、无 /uploads/lives 回填
+    expect(
+      backend.lives.single['videoSourceUrl'],
+      isNot(contains('/uploads/lives/')),
+    );
+    expect(
+      tester.widget<Text>(find.byKey(const Key('liveVideoSourceText'))).data,
+      '已就绪（纯 AI 语音模式，可直接开播）',
+    );
+    // 已就绪后按钮置灰，防止重复就绪
+    expect(
+      _widget<FilledButton>(tester, const Key('livePrepareButton')).onPressed,
+      isNull,
+    );
+
+    // 等待 SnackBar 自动消失，避免遗留计时器
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
   });
 }

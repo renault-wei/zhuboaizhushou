@@ -4,6 +4,7 @@ import 'package:starvoice_app/core/models/coupon.dart';
 import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/models/script.dart';
 import 'package:starvoice_app/core/models/voice.dart';
+import 'package:starvoice_app/core/models/volc_preset.dart';
 import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 
@@ -13,6 +14,7 @@ class LiveFormState {
   const LiveFormState({
     this.initial,
     this.voices = const <Voice>[],
+    this.presets = const <VolcPresetVoice>[],
     this.scripts = const <Script>[],
     this.coupons = const <Coupon>[],
     this.loading = false,
@@ -25,6 +27,9 @@ class LiveFormState {
 
   /// 可选音色（仅 status=ready 的可选，其余禁用展示）
   final List<Voice> voices;
+
+  /// 火山预设音色目录（只读内置，全部可选中）
+  final List<VolcPresetVoice> presets;
 
   /// 可选话术（仅 status=ready 的可选，blocked/draft 禁用展示）
   final List<Script> scripts;
@@ -44,6 +49,7 @@ class LiveFormState {
   LiveFormState copyWith({
     Live? initial,
     List<Voice>? voices,
+    List<VolcPresetVoice>? presets,
     List<Script>? scripts,
     List<Coupon>? coupons,
     bool? loading,
@@ -54,6 +60,7 @@ class LiveFormState {
     return LiveFormState(
       initial: initial ?? this.initial,
       voices: voices ?? this.voices,
+      presets: presets ?? this.presets,
       scripts: scripts ?? this.scripts,
       coupons: coupons ?? this.coupons,
       loading: loading ?? this.loading,
@@ -82,6 +89,8 @@ class LiveFormController extends StateNotifier<LiveFormState> {
     try {
       final voices = await _apiClient.listVoices();
       final scripts = await _apiClient.listScripts();
+      // 火山预设音色目录尽力而为：失败不阻塞表单，音色区只剩克隆组
+      final presets = await _loadPresetsBestEffort();
       // 团购券需先绑定抖音；未绑定等失败不阻塞表单，券名降级为券 id
       final coupons = await _loadCouponsBestEffort();
       Live? initial;
@@ -94,6 +103,7 @@ class LiveFormController extends StateNotifier<LiveFormState> {
       state = LiveFormState(
         initial: initial,
         voices: voices,
+        presets: presets,
         scripts: scripts,
         coupons: coupons,
         loading: false,
@@ -109,6 +119,7 @@ class LiveFormController extends StateNotifier<LiveFormState> {
   /// 保存草稿：新建走 createLive，编辑走 updateLive；失败向上抛给页面弹提示。
   Future<Live> save({
     required String title,
+    String? volcPresetId,
     String? voiceId,
     String? scriptId,
     String? loopScriptId,
@@ -120,6 +131,7 @@ class LiveFormController extends StateNotifier<LiveFormState> {
         return await _apiClient.updateLive(
           id: liveId,
           title: title,
+          volcPresetId: volcPresetId,
           voiceId: voiceId,
           scriptId: scriptId,
           loopScriptId: loopScriptId,
@@ -128,6 +140,7 @@ class LiveFormController extends StateNotifier<LiveFormState> {
       }
       return await _apiClient.createLive(
         title: title,
+        volcPresetId: volcPresetId,
         voiceId: voiceId,
         scriptId: scriptId,
         loopScriptId: loopScriptId,
@@ -147,6 +160,15 @@ class LiveFormController extends StateNotifier<LiveFormState> {
       return await _apiClient.fetchCoupons();
     } on ApiException {
       return <Coupon>[];
+    }
+  }
+
+  /// 火山预设音色目录尽力而为：失败返回空列表（音色选择区只显示克隆音色组）。
+  Future<List<VolcPresetVoice>> _loadPresetsBestEffort() async {
+    try {
+      return await _apiClient.listVolcPresetVoices();
+    } on ApiException {
+      return <VolcPresetVoice>[];
     }
   }
 }

@@ -1,5 +1,6 @@
 /// 开播配置表单页：/lives/new（新建）与 /lives/:id（编辑）共用同一页面。
-/// 商家绑定：音色（来自我的音色，仅 ready 可选）+ 话术（仅 ready 可选）+
+/// 商家绑定：音色（我的克隆音色仅 ready 可选 / 火山预设音色全可选，二选一互斥）+
+/// 话术（仅 ready 可选）+
 /// 循环台本（push /loop-scripts?select=1 点选后 pop 回整本）+ 团购券
 /// （push /coupons 点选后 pop 回券 id）+ 直播标题。
 /// T11 点亮实景视频区：上传实景视频（MVP 简化为本机 mp4 路径输入）+「生成直播视频」合成，
@@ -16,6 +17,7 @@ import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/models/loop_script.dart';
 import 'package:starvoice_app/core/models/script.dart';
 import 'package:starvoice_app/core/models/voice.dart';
+import 'package:starvoice_app/core/models/volc_preset.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/core/theme/app_colors.dart';
 import 'package:starvoice_app/core/theme/theme_tokens.dart';
@@ -39,6 +41,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
 
   /// 已选择的绑定项：null 表示未绑定（提交时置空对应字段）。
   String? _voiceId;
+  String? _volcPresetId;
   String? _scriptId;
   String? _couponId;
 
@@ -122,7 +125,9 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     }
     setState(() {
       _titleController.text = initial.title;
-      _voiceId = initial.voiceId;
+      // 克隆音色与火山预设互斥：服务端保证不同时非空，这里仍做一次兜底
+      _volcPresetId = initial.volcPresetId;
+      _voiceId = initial.volcPresetId != null ? null : initial.voiceId;
       _scriptId = initial.scriptId;
       _loopScriptId = initial.loopScriptId;
       _couponId = initial.couponId;
@@ -210,6 +215,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
           .read(liveFormControllerProvider(widget.liveId).notifier)
           .save(
             title: title,
+            volcPresetId: _volcPresetId,
             voiceId: _voiceId,
             scriptId: _scriptId,
             loopScriptId: _loopScriptId,
@@ -276,7 +282,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         _videoSourceUrl = live.videoSourceUrl;
         _composed = true;
       });
-      _showSnack('已生成，可开播（T12）');
+      final hasComposed = live.videoSourceUrl.isNotEmpty;
+      _showSnack(hasComposed ? '已生成直播视频，可开播' : '已就绪，可开播（纯 AI 语音模式）');
     } on ApiException catch (error) {
       if (mounted) {
         _showSnack('生成失败：${error.message}');
@@ -370,7 +377,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         ),
         const SizedBox(height: 4),
         Text(
-          '绑定素材：音色来自「我的音色」，话术来自话术库，团购券来自已绑定的抖音号。',
+          '绑定素材：音色可选「我的音色」（克隆）或火山预设音色，话术来自话术库，'
+          '团购券来自已绑定的抖音号。',
           style: TextStyle(fontSize: 12, color: context.tokenTextBody),
         ),
         const SizedBox(height: 12),
@@ -405,7 +413,15 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
 
   /// 音色选择：弹底部面板，仅 status=ready 的音色可选中。
   Widget _buildVoicePicker(LiveFormState state, Voice? voice) {
-    final value = voice?.name ?? (_voiceId == null ? '未选择' : _voiceId!);
+    final preset = _selectedPreset(state);
+    String value;
+    if (preset != null) {
+      value = '${preset.name}（火山预设）';
+    } else if (voice != null) {
+      value = voice.name;
+    } else {
+      value = _voiceId == null ? '未选择' : _voiceId!;
+    }
     return ListTile(
       key: const Key('liveVoiceSelector'),
       contentPadding: EdgeInsets.zero,
@@ -591,11 +607,27 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     // 仅编辑模式且初始为草稿（idle）可操作；合成中/就绪等由服务端保护
     final canOperate = _isEdit && !busy && (state.initial?.isEditable ?? false);
     final hasSource = _videoSourceUrl.isNotEmpty;
+    // 克隆音色（就绪）或火山预设音色任一绑定即视为「纯 AI 语音」来源
+    final voice = _selectedVoice(state);
+    final preset = _selectedPreset(state);
+    final cloneVoiceReady = voice?.isReady ?? false;
+    final hasVoiceChoice = preset != null || cloneVoiceReady;
     final canUpload = canOperate && _videoPathController.text.trim().isNotEmpty;
-    final canPrepare = canOperate && hasSource && !_composed;
-    final sourceLabel = _composed
-        ? '已生成：${_videoFileName(_videoSourceUrl)}'
-        : (hasSource ? '已上传：${_videoFileName(_videoSourceUrl)}' : '尚未上传实景视频');
+    final canPrepare = canOperate && !_composed && (hasSource || hasVoiceChoice);
+    final String sourceLabel;
+    if (_composed && hasSource) {
+      sourceLabel = '已生成：${_videoFileName(_videoSourceUrl)}';
+    } else if (_composed) {
+      sourceLabel = '已就绪（纯 AI 语音模式，可直接开播）';
+    } else if (hasSource) {
+      sourceLabel = '已上传：${_videoFileName(_videoSourceUrl)}';
+    } else if (hasVoiceChoice) {
+      sourceLabel = '未传实景视频 · 纯 AI 语音模式';
+    } else {
+      sourceLabel = '尚未上传实景视频';
+    }
+    // 状态为积极（可生成 / 已就绪）时以绿色对勾呈现，避免看起来像报错
+    final sourceReady = hasSource || hasVoiceChoice || _composed;
     return Container(
       key: const Key('liveVideoSection'),
       width: double.infinity,
@@ -620,13 +652,14 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
           ),
           const SizedBox(height: 4),
           Text(
-            '上传本机实景视频，再生成直播视频（循环播放 + 音轨 + 角标合成到本地文件）。',
+            '实景视频可选：上传后生成合成直播视频（循环播放 + 音轨 + 角标）；'
+            '不上传则绑定可用音色后纯 AI 语音直接就绪、可开播。',
             style: TextStyle(fontSize: 12, color: context.tokenTextBody),
           ),
           if (!_isEdit) ...[
             const SizedBox(height: 8),
             Text(
-              '新建草稿先保存，再从列表进入编辑后上传实景视频并生成',
+              '新建草稿先保存，再从列表进入编辑后绑定可用音色即可就绪（实景视频可选上传）',
               key: const Key('liveVideoNewModeHint'),
               style: TextStyle(fontSize: 12, color: context.tokenTextBody),
             ),
@@ -663,9 +696,9 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
             Row(
               children: [
                 Icon(
-                  hasSource ? Icons.check_circle_outline : Icons.info_outline,
+                  sourceReady ? Icons.check_circle_outline : Icons.info_outline,
                   size: 16,
-                  color: hasSource ? AppColors.live : context.tokenTextHint,
+                  color: sourceReady ? AppColors.live : context.tokenTextHint,
                 ),
                 const SizedBox(width: 6),
                 Expanded(
@@ -674,7 +707,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
                     key: const Key('liveVideoSourceText'),
                     style: TextStyle(
                       fontSize: 12,
-                      color: hasSource ? AppColors.live : context.tokenTextBody,
+                      color: sourceReady ? AppColors.live : context.tokenTextBody,
                     ),
                   ),
                 ),
@@ -689,7 +722,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
                 style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(44),
                 ),
-                child: const Text('生成直播视频'),
+                child: Text(hasSource ? '生成直播视频' : '纯 AI 就绪开播'),
               ),
             ),
             if (_isEdit && !canOperate)
@@ -771,6 +804,20 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     return null;
   }
 
+  /// 当前选中的火山预设音色对象；失效等异常情况返回 null（摘要退化为 id）。
+  VolcPresetVoice? _selectedPreset(LiveFormState state) {
+    final id = _volcPresetId;
+    if (id == null) {
+      return null;
+    }
+    for (final preset in state.presets) {
+      if (preset.id == id) {
+        return preset;
+      }
+    }
+    return null;
+  }
+
   /// 当前选中的话术对象；已被删除等失效情况返回 null（摘要退化为 id）。
   Script? _selectedScript(LiveFormState state) {
     final id = _scriptId;
@@ -800,7 +847,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   }
 
   Future<void> _pickVoice(LiveFormState state) async {
-    final result = await showModalBottomSheet<String>(
+    final result = await showModalBottomSheet<({String kind, String id})>(
       context: context,
       isScrollControlled: true,
       builder: (sheetContext) {
@@ -809,10 +856,21 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Padding(
-                padding: EdgeInsets.all(16),
-                child: Text(
-                  '选择音色（仅「可用」音色可选）',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                padding: EdgeInsets.fromLTRB(16, 16, 16, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '选择音色',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      '我的克隆音色需「可用」才可选；火山预设音色全可选',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ],
                 ),
               ),
               Flexible(
@@ -823,10 +881,19 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
                       key: const Key('liveVoiceClearOption'),
                       leading: const Icon(Icons.block),
                       title: const Text('不绑定音色'),
-                      onTap: () => Navigator.of(sheetContext).pop(''),
+                      onTap: () => Navigator.of(sheetContext)
+                          .pop((kind: 'clone', id: '')),
                     ),
-                    for (final voice in state.voices)
-                      _buildVoiceSheetItem(sheetContext, voice),
+                    if (state.voices.isNotEmpty) ...[
+                      _buildSheetGroupHeader('我的音色（克隆）'),
+                      for (final voice in state.voices)
+                        _buildVoiceSheetItem(sheetContext, voice),
+                    ],
+                    if (state.presets.isNotEmpty) ...[
+                      _buildSheetGroupHeader('火山预设音色'),
+                      for (final preset in state.presets)
+                        _buildPresetSheetItem(sheetContext, preset),
+                    ],
                   ],
                 ),
               ),
@@ -839,7 +906,17 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       return;
     }
     setState(() {
-      _voiceId = result.isEmpty ? null : result;
+      final id = result.id;
+      if (id.isEmpty) {
+        _voiceId = null;
+        _volcPresetId = null;
+      } else if (result.kind == 'preset') {
+        _volcPresetId = id;
+        _voiceId = null;
+      } else {
+        _voiceId = id;
+        _volcPresetId = null;
+      }
     });
   }
 
@@ -854,10 +931,49 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         '${style.label} · 时长 ${(voice.sampleDurationSeconds / 60).floor()} 分',
         style: TextStyle(fontSize: 12, color: context.tokenTextBody),
       ),
-      trailing: enabled && voice.id == _voiceId
+      trailing: enabled && _volcPresetId == null && voice.id == _voiceId
           ? Icon(Icons.check, color: AppColors.live)
           : null,
-      onTap: enabled ? () => Navigator.of(sheetContext).pop(voice.id) : null,
+      onTap: enabled
+          ? () => Navigator.of(sheetContext)
+              .pop((kind: 'clone', id: voice.id))
+          : null,
+    );
+  }
+
+  /// 底部面板分组标题。
+  Widget _buildSheetGroupHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          title,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: context.tokenTextHint,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 火山预设音色条目：全可选，选中后与克隆音色互斥。
+  Widget _buildPresetSheetItem(
+      BuildContext sheetContext, VolcPresetVoice preset) {
+    return ListTile(
+      key: Key('livePresetOption_${preset.id}'),
+      title: Text(preset.name),
+      subtitle: Text(
+        '${preset.isFemale ? '女声' : '男声'} · 火山预设',
+        style: TextStyle(fontSize: 12, color: context.tokenTextBody),
+      ),
+      trailing: preset.id == _volcPresetId
+          ? Icon(Icons.check, color: AppColors.live)
+          : null,
+      onTap: () => Navigator.of(sheetContext)
+          .pop((kind: 'preset', id: preset.id)),
     );
   }
 
