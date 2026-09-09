@@ -25,19 +25,20 @@
 > - 更新时间：2026-09-09（云版 v0.3.0+83 真机安装冒烟批次 — App 版本升至 0.3.0+83（b210219）出云版基线 APK 并归档 outputs/，adb install 到华为 ELS-AN10 成功（versionCode 82→83）；云端已核实 = 最新 server 代码无需重复部署；App 启动正常、首页保持登录态渲染；UI 走查中 USB 瞬断，待重连续测，见 §6 第 40 条）
 > - 更新时间：2026-09-09（UI v2 三 Tab 改造批次 — App 三 Tab 外壳（首页/直播/我的）落地：账号信息、收银台与退出登录收敛到「我的」，首页移除抖音绑定入口由券列表承接；竞品「直播/个人信息」UI 调研归档 docs/ui-v2-research.md；flutter analyze 0 issue、App 全量 138/138，见 §6 第 42 条）
 > - 更新时间：2026-09-09（首页「AI 语音开播」主入口批次 — 首页新增状态化主行动卡片（直播中/已就绪直达工作台、空态引导新建、草稿无音色提示去完善）；列表页 idle 草稿按钮「编辑」→「去完善」透传状态；Live 模型补 hasVoiceSource；新增 widget 冒烟 3 例，flutter analyze 0 issue、相邻套件全绿，见 §6 第 41 条）
+> - 更新时间：2026-09-09（云端出声修复部署 + 真机出声闭环批次 — liveSpeaker 平台门槛下沉（remoteOutput：平台限制只约束本机出声，phone 远程出声队列任意平台可入队），云端 Linux LIVE_SPEAKER_OUTPUT=phone 恢复出声链路并部署重启；App 版本升至 0.3.0+84 云版包真机复测：现场工作台「助播机出声」开关拉取 /api/out/speech/next 真实播出火山音色 AI 语音（用户听声确认）；服务端 32 文件 311/311，见 §6 第 43 条）
 
 ## 0. 当前大局
 
 | 指标 | 现状 |
 |---|---|
 | 仓库 | `github.com/renault-wei/zhuboaizhushou`（feature/atmosphere-and-loopCaster） |
-| 服务端测试 | ✅ 308 / 308（31 个测试文件；全量并行本机偶发 PG 文件锁，用 `npx vitest run --no-file-parallelism` 复跑稳定） |
+| 服务端测试 | ✅ 311 / 311（32 个测试文件；全量并行本机偶发 PG 文件锁，用 `npx vitest run --no-file-parallelism` 复跑稳定） |
 | 前端静态检查 | ✅ `flutter analyze` No issues found（Flutter 3.47.2 @ `E:\dev\flutter`） |
 | 管理后台 | ✅ `npm run build` / `npm run lint` 0 issue（React + AntD，公司端任务台 M1~M4 页面全接通） |
-| 最近提交 | UI v2 三 Tab 改造批次（见 §6 第 42 条）；首页「AI 语音开播」主入口批次（8e245fb，见 §6 第 41 条）；云版 v0.3.0+83 真机安装批次（b210219，见 §6 第 40 条）；火山预设音色 + 纯 AI 语音批次：server 159e906（prepare 解除实景强制 + volc_preset_id）+ app f6dca27（音色两组 UI），见 §6 第 39 条；云端部署基线 2465584 见 §6 第 38 条；G7 示例台本×3（ba4055e，见 §6 第 37 条） |
+| 最近提交 | 云端出声修复部署 + 真机出声闭环批次（见 §6 第 43 条）；UI v2 三 Tab 改造批次（见 §6 第 42 条）；首页「AI 语音开播」主入口批次（8e245fb，见 §6 第 41 条）；云版 v0.3.0+83 真机安装批次（b210219，见 §6 第 40 条）；火山预设音色 + 纯 AI 语音批次：server 159e906（prepare 解除实景强制 + volc_preset_id）+ app f6dca27（音色两组 UI），见 §6 第 39 条；云端部署基线 2465584 见 §6 第 38 条；G7 示例台本×3（ba4055e，见 §6 第 37 条） |
 | 主推进路线 | v0.2 G 清单（形态已定 = 画面真人出镜 + 后台 AI 语音主播，取消双模式 A/B；托管线 G1→G2 暂停待抖音 key） |
 | 产品定位（2026-09-08 定稿） | 平台无关 AI 语音助播：真人 / 实景开播 + 后台 AI 语音；只出声不推流；弹幕 = 外挂适配（口径见 docs/PLATFORM-NEUTRAL-VOICE.md） |
-| 当前推进 | 首页「AI 语音开播」主入口已打通（首页直达 /lives 列表、空态引导新建、就绪直达工作台）；火山预设音色 + 纯 AI 语音就绪落地并同步云端（lives 增 volc_preset_id、presets 只读目录、prepare 无视频直接 ready，ECS 113.44.226.189 已迁移重启 /health 200）；公司端任务台 M1~M7 全落地，商业闭环只剩真实收款（M8，待支付凭证）；真机出声复验、贴片/素材包与演示脚本、UI-3 真机视觉走查待手机线批次；弹幕 = 外挂适配口径（docs/PLATFORM-NEUTRAL-VOICE.md）；UI v2 三 Tab（首页/直播/我的）+「我的」页落地、竞品「直播/个人信息」UI 调研已归档 docs/ui-v2-research.md（见 §6 第 42 条） |
+| 当前推进 | 云端 remoteOutput 修复已部署（Linux 云端 LIVE_SPEAKER_OUTPUT=phone 可入远程出声队列），真机出声闭环达成 — 工作台「助播机出声」开关轮询 /api/out/speech/next 已真实播出 AI 语音（用户听声确认）；首页「AI 语音开播」主入口已打通（首页直达 /lives 列表、空态引导新建、就绪直达工作台）；火山预设音色 + 纯 AI 语音就绪落地并同步云端（lives 增 volc_preset_id、presets 只读目录、prepare 无视频直接 ready，ECS 113.44.226.189 已迁移重启 /health 200）；公司端任务台 M1~M7 全落地，商业闭环只剩真实收款（M8，待支付凭证）；真机出声复验、贴片/素材包与演示脚本、UI-3 真机视觉走查待手机线批次；弹幕 = 外挂适配口径（docs/PLATFORM-NEUTRAL-VOICE.md）；UI v2 三 Tab（首页/直播/我的）+「我的」页落地、竞品「直播/个人信息」UI 调研已归档 docs/ui-v2-research.md（见 §6 第 42 条） |
 
 ## 1. 能力基线（✅ 已完成，含旧仓库导入部分）
 
@@ -191,3 +192,5 @@
 40. ✅ 云版 APK v0.3.0+83 真机安装冒烟（2026-09-09，b210219）：App 版本 0.3.0+82→+83（versionCode 83，旧包可覆盖升级），`flutter build apk --release --dart-define=API_BASE_URL=http://113.44.226.189:3000` 出 53.3MB 云版包，归档 outputs/starvoice-app-release-cloud.apk（*.apk 已在 .gitignore，不入库）。SSH 核实云端 /opt/starvoice/server = 最新 server 代码（src 含 volcPresets.ts、schema 含 volc_preset_id、dist 构建 16:49 与 159e906 批次一致，systemd starvoice.service 常驻 /health 200），无需重复部署。华为 ELS-AN10（GMG0220616000176）adb install -r 成功（versionCode 82→83），启动 MainActivity 无崩溃，uiautomator 语义树确认首页已登录（147****9030、声音授权已签署）正常渲染。阻塞项：随后 USB 连接瞬断，开播表单「火山预设音色」两组 UI 走查与出声复验待手机重连后继续。
 42. ✅ UI v2 三 Tab 改造（2026-09-09）：App 底部三 Tab（首页 / 直播 / 我的，StatefulShellRoute.indexedStack + AppShell，Keys tabHome/tabLive/tabMe）——首页重排为「品牌头 + AI 直播主行动卡 + 声音克隆区（授权 / 克隆录音 / 我的音色）+ 话术区」三个能力区；抖音绑定入口从首页移除（券列表「去绑定」仍走 /douyin-bind，顶层路由保留）；账号信息 / 收银台 / 声音授权协议 / 退出登录收敛到「我的」Tab（/me，新增 ProfilePage）；/lives、/voices、/scripts、/wallet 等保持全屏路由。首页卡片处于懒加载 ListView 纵深，涉及首页卡片的声音/话术流程用例补 scroll 适配（声音授权用例放大视口规避返回偏移）；douyin 绑定用例改为直达绑定页独立冒烟。竞品「直播 / 个人信息」UI 调研归档 docs/ui-v2-research.md（只抄结构与视觉方向、不搬代码）。flutter analyze 0 issue、App 全量 138/138。
 41. ✅ 首页「AI 语音开播」主入口（2026-09-09，8e245fb）：首页顶部原「开播配置」文字卡升级为状态化主行动卡片（主色渐变 + 状态文案）——直播中/已就绪场次直达现场直播工作台 /lives/:id/monitor，空态引导创建 /lives/new，有草稿未绑音色提示「去完善」进列表，从子页返回自动刷新与列表页状态一致；移除含「T11 接入视频源」旧文案（与 v0.3 纯 AI 语音口径一致）。列表页 idle 草稿无音色时按钮「编辑」→「去完善」透传，Live 模型补 hasVoiceSource（voiceId / volcPresetId 任一）判定。新增 widget 冒烟 3 例（空态创建 / 草稿引导 / 就绪直达工作台），flutter analyze 0 issue、相邻套件（clone_voice_entry / live_list / live_monitor）全绿。
+
+43. ✅ 云端出声修复部署 + 真机出声闭环（2026-09-09）：liveSpeaker 平台门槛下沉 — createLiveSpeaker 新增 remoteOutput 判定（env LIVE_SPEAKER_OUTPUT=phone），平台限制只约束「本机出声」（Windows SAPI / 本机播放器），phone 远程出声队列任意平台可入队，云端 Linux 因此可正常合成入远程队列（此前非 Windows 一律 unsupported，云端纯 AI 语音不出声）；配套单测 liveSpeaker.test.ts 覆盖 Linux 本机 unsupported / Windows 本机合成播放 / phone 远程队列 Linux 可入队，既有非 Windows 用例补 remoteOutput:false 显式化。App 版本 0.3.0+83→+84（versionCode 84）出云版 APK（API_BASE_URL=http://113.44.226.189:3000）安装到华为 ELS-AN10 复测。部署：scp liveSpeaker.ts → npm run build → systemctl restart starvoice.service（/health 200，云端 .env LIVE_SPEAKER_OUTPUT=phone）。云端 API 闭环 E2E：Vivi 2.0 预设音色 + 火山 TTS + loopScript + ready-pass 话术 → prepare ready → start live → 远程队列取到 328KB wav → end ended（0 分钟）→ 清理测试场次。真机复测：现场直播工作台「助播机出声（手机线）」开关开启（监听中 · 累计播报递增至 5+ 条），测试弹幕 POST 进日志，手机轮询 /api/out/speech/next 真实播出 AI 语音（循环播报推进至第 3 轮），用户听声确认闭环达成；测试场次「真机出声测试」21:10:59 正常结束。服务端 typecheck / lint 通过、全量 311/311（32 文件）。
