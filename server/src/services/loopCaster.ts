@@ -1,7 +1,12 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { lives as livesTable, loopScriptItems as loopScriptItemsTable } from '../db/schema';
-import { liveSpeaker, speechLinePendingCount } from './liveSpeaker';
+import {
+  liveSpeaker,
+  speechLinePendingCount,
+  type SpeechOverrides,
+} from './liveSpeaker';
+import { loadLiveSpeechOverrides } from './liveVoice';
 
 // 循环台本播出引擎（M4，P-循环台本 & P-播出里程碑 §8）：
 // 开播（ready→live）后按台本顺序循环口播产品/团购券；与弹幕回复共用 liveSpeaker 全局出声链路，
@@ -35,10 +40,12 @@ export interface LoopCasterStatus {
 
 /** 引擎依赖：全部可注入（生产用默认实现，测试全替身，不出真实声音） */
 export interface LoopCasterOptions {
-  /** 把一句口播交给出声链路；本地端播完才 resolve，远程端入队即 resolve */
-  speak?(text: string): Promise<{ spoken: boolean; reason?: string }>;
+  /** 把一句口播交给出声链路（可带本场音色覆盖）；本地端播完才 resolve，远程端入队即 resolve */
+  speak?(text: string, overrides?: SpeechOverrides): Promise<{ spoken: boolean; reason?: string }>;
   /** 开播时读一次台本快照：null = 未绑定台本（不启动循环，只回弹幕） */
   loadItems?(liveId: string): Promise<LoopCastItem[] | null>;
+  /** 开播时读一次本场音色：null = 未绑定音色（回落默认音色） */
+  loadVoice?(liveId: string): Promise<SpeechOverrides | null>;
   /** 睡眠（条间间隔 / 轮间休息 / 避让轮询共用）；测试注入假时钟 */
   sleep?(ms: number): Promise<void>;
   /** 出声链路忙闲判定：忙 = 有排队未播的音频（回复排队 / 远程积压） */
@@ -66,9 +73,12 @@ interface RunnerState {
 
 // ---------- 默认实现 ----------
 
-/** 默认出声：全局 liveSpeaker（本地播完 resolve / 远程入队即返回） */
-function defaultSpeak(text: string): Promise<{ spoken: boolean; reason?: string }> {
-  return liveSpeaker.speak(text);
+/** 默认出声：全局 liveSpeaker（本地播完 resolve / 远程入队即返回），带本场音色覆盖 */
+function defaultSpeak(
+  text: string,
+  overrides?: SpeechOverrides,
+): Promise<{ spoken: boolean; reason?: string }> {
+  return liveSpeaker.speak(text, overrides);
 }
 
 /** 默认睡眠：真实 setTimeout */
@@ -110,12 +120,16 @@ export async function loadBoundLoopItems(liveId: string): Promise<LoopCastItem[]
 
 /** 逐句出声的容错包装：合成/播放失败只记日志，节奏照走，不让循环卡死（§8.3） */
 async function speakSafely(
-  speak: (text: string) => Promise<{ spoken: boolean; reason?: string }>,
+  speak: (
+    text: string,
+    overrides?: SpeechOverrides,
+  ) => Promise<{ spoken: boolean; reason?: string }>,
   liveId: string,
   text: string,
+  overrides: SpeechOverrides | null,
 ): Promise<void> {
   try {
-    const result = await speak(text);
+    const result = await speak(text, overrides ?? undefined);
     if (!result.spoken) {
       console.info(
         `[loopCaster] 场次 ${liveId} 循环句未出声（${result.reason ?? 'unknown'}），继续下一句`,
@@ -138,7 +152,9 @@ async function speakSafely(
 async function runLoop(
   liveId: string,
   state: RunnerState,
-  options: Required<Pick<LoopCasterOptions, 'speak' | 'loadItems' | 'sleep' | 'isBusy'>>,
+  options: Required<
+    Pick<LoopCasterOptions, 'speak' | 'loadItems' | 'loadVoice' | 'sleep' | 'isBusy'>
+  >,
   itemGapSeconds: number,
   loopRestSeconds: number,
   idlePollMs: number,
@@ -162,6 +178,17 @@ async function runLoop(
     console.info(`[loopCaster] 场次 ${liveId} 未绑定循环台本，本场只回弹幕`);
     return;
   }
+  // 本场音色：只读一次（开播后改库不影响本场）；读失败回落默认音色，不打断循环
+  let voice: SpeechOverrides | null = null;
+  try {
+    voice = await options.loadVoice(liveId);
+  } catch (err) {
+    console.warn(
+      `[loopCaster] 场次 ${liveId} 音色解析失败，回落默认音色：${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
   state.running = true;
   try {
     while (!state.cancelled) {
@@ -182,7 +209,7 @@ async function runLoop(
         if (!item) {
           break;
         }
-        await speakSafely(options.speak, liveId, item.text);
+        await speakSafely(options.speak, liveId, item.text, voice);
         if (state.cancelled) {
           break;
         }
@@ -207,6 +234,8 @@ async function runLoop(
 export function createLoopCaster(options: LoopCasterOptions = {}): LoopCaster {
   const speak = options.speak ?? defaultSpeak;
   const loadItems = options.loadItems ?? loadBoundLoopItems;
+  // 音色解析默认不读库：引擎核心保持无 DB 依赖（单测全替身）；生产由全局单例注入真实实现
+  const loadVoice = options.loadVoice ?? (async () => null);
   const sleep = options.sleep ?? defaultSleep;
   const isBusy = options.isBusy ?? defaultIsBusy;
   const itemGapSeconds = options.itemGapSeconds ?? DEFAULT_ITEM_GAP_SECONDS;
@@ -225,7 +254,7 @@ export function createLoopCaster(options: LoopCasterOptions = {}): LoopCaster {
     void runLoop(
       liveId,
       state,
-      { speak, loadItems, sleep, isBusy },
+      { speak, loadItems, loadVoice, sleep, isBusy },
       itemGapSeconds,
       loopRestSeconds,
       idlePollMs,
@@ -263,5 +292,5 @@ export function createLoopCaster(options: LoopCasterOptions = {}): LoopCaster {
   return { start, stop, isRunning, status };
 }
 
-/** 全局单例：routes/lives 的 start/end 接线 + liveSession 监控读取共用 */
-export const loopCaster = createLoopCaster();
+/** 全局单例：routes/lives 的 start/end 接线 + liveSession 监控读取共用；显式注入本场音色解析 */
+export const loopCaster = createLoopCaster({ loadVoice: loadLiveSpeechOverrides });

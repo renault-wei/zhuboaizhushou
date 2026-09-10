@@ -291,24 +291,55 @@ class ApiClient {
     }
   }
 
-  /// 火山预设音色目录（只读内置，不调火山接口）：音色选择在「克隆音色 /
-  /// 火山预设」两组之间互斥切换，live 落库走 volcPresetId。
-  Future<List<VolcPresetVoice>> listVolcPresetVoices() async {
+  /// 火山预设音色目录（只读内置，不调火山接口）：返回 presets + 分组顺序 +
+  /// 默认音色，音色选择在「克隆音色 / 火山预设」两组之间互斥，live 落库走
+  /// volcPresetId。
+  Future<VolcPresetCatalog> fetchVolcPresetCatalog() async {
     try {
       final response = await _dio.get<Map<String, dynamic>>(
         '/api/voices/presets',
       );
-      final raw = response.data?['presets'];
-      if (raw is List) {
-        return raw
-            .whereType<Map>()
-            .map((item) =>
-                VolcPresetVoice.fromJson(Map<String, dynamic>.from(item)))
-            .toList();
-      }
-      return <VolcPresetVoice>[];
+      return VolcPresetCatalog.fromJson(response.data ?? <String, dynamic>{});
     } on DioException catch (error) {
       throw _toApiException(error);
+    }
+  }
+
+  /// 火山预设音色列表（仅需音色本身的调用方用）。
+  Future<List<VolcPresetVoice>> listVolcPresetVoices() async {
+    return (await fetchVolcPresetCatalog()).presets;
+  }
+
+  /// 音色试听（档 A）：服务端用固定演示短句做一次真实合成，返回 wav 字节。
+  /// demoFallback=true 表示请求的是克隆音色、服务端回落演示预设音色
+  /// （X-Voice-Preview-Fallback 头），客户端据此如实提示用户。
+  Future<({Uint8List bytes, bool demoFallback})> previewVoice({
+    String? presetId,
+    String? voiceId,
+  }) async {
+    try {
+      final response = await _dio.post<Uint8List>(
+        '/api/voices/preview',
+        data: <String, dynamic>{
+          if (presetId != null && presetId.isNotEmpty) 'presetId': presetId,
+          if (voiceId != null && voiceId.isNotEmpty) 'voiceId': voiceId,
+        },
+        options: Options(responseType: ResponseType.bytes),
+      );
+      final bytes = response.data;
+      if (bytes == null || bytes.isEmpty) {
+        throw const ApiException(
+          code: 'VOICE_PREVIEW_EMPTY',
+          message: '试听音频为空，请稍后重试',
+        );
+      }
+      return (
+        bytes: bytes,
+        demoFallback:
+            response.headers.value('x-voice-preview-fallback') != null,
+      );
+    } on DioException catch (error) {
+      throw _toBytesApiException(error);
     }
   }
 

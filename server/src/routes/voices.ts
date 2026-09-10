@@ -1,10 +1,18 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { readFile, unlink } from 'node:fs/promises';
 import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { users, voiceAgreements, voices } from '../db/schema';
 import { getLatestVoiceAgreement } from '../services/agreement';
+import { env } from '../config/env';
 import { cosyVoiceService } from '../services/voice';
-import { VOLC_PRESET_VOICES } from '../services/volcPresets';
+import {
+  DEFAULT_VOLC_PRESET_ID,
+  isVolcPresetId,
+  VOLC_PRESET_GROUPS,
+  VOLC_PRESET_VOICES,
+} from '../services/volcPresets';
+import { VolcTtsError, volcTtsSynth } from '../services/volcTTS';
 
 // ---------- 常量 ----------
 
@@ -19,6 +27,21 @@ const MAX_NAME_LENGTH = 50;
 
 interface VoiceIdParams {
   id: string;
+}
+
+/** 试听演示短句：固定 30 字左右的小额演示调用，与正式口播话术无关 */
+export const VOICE_PREVIEW_TEXT =
+  '大家好，欢迎来到直播间，今天给大家介绍咱们的团购套餐，喜欢的可以点个关注。';
+
+/** 读取试听请求体：{ presetId? , voiceId? }——预设与克隆二选一 */
+function readPreviewBody(body: unknown): { presetId: string | null; voiceId: string | null } {
+  if (typeof body !== 'object' || body === null) {
+    return { presetId: null, voiceId: null };
+  }
+  const record = body as Record<string, unknown>;
+  const read = (value: unknown): string | null =>
+    typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+  return { presetId: read(record.presetId), voiceId: read(record.voiceId) };
 }
 
 /** 读取创建克隆任务请求体：{ name, sampleDurationSeconds, sampleFingerprint } */
@@ -152,7 +175,62 @@ export const voicesRoutes: FastifyPluginAsync = async (app) => {
 
   // 火山预设音色目录（只读内置，不调火山接口）：须注册在 /api/voices/:id 之前，避免被 id 路由吞掉
   app.get('/api/voices/presets', { preHandler: app.authenticate }, async () => {
-    return { presets: VOLC_PRESET_VOICES };
+    return {
+      presets: VOLC_PRESET_VOICES,
+      groups: VOLC_PRESET_GROUPS,
+      defaultPresetId: DEFAULT_VOLC_PRESET_ID,
+    };
+  });
+
+  // 音色试听（档 A）：用固定演示短句做一次真实火山合成，直接回 wav 字节。
+  // 计费口径：试听是固定短句的小额演示调用，不计入商家额度、不落 usage_logs
+  // （T5 计量只覆盖正式口播合成链路）；克隆音色尚未接入真复刻，试听回落演示预设音色并回告知头。
+  app.post('/api/voices/preview', { preHandler: app.authenticate }, async (request, reply) => {
+    const { presetId, voiceId } = readPreviewBody(request.body);
+    let speaker: string | null = presetId;
+    let cloneFallback = false;
+    if (!speaker && voiceId) {
+      const owned = await db
+        .select({ id: voices.id })
+        .from(voices)
+        .where(and(eq(voices.id, voiceId), eq(voices.userId, request.user.userId)))
+        .limit(1);
+      if (owned.length === 0) {
+        return reply.code(404).send({ error: 'VOICE_NOT_FOUND', message: '音色不存在' });
+      }
+      speaker = DEFAULT_VOLC_PRESET_ID;
+      cloneFallback = true;
+    }
+    if (!speaker || !isVolcPresetId(speaker)) {
+      return reply
+        .code(400)
+        .send({ error: 'VOICE_INVALID', message: '音色不可试听，请选择内置预设音色' });
+    }
+    if (!env.volcTTS.apiKey) {
+      return reply.code(503).send({
+        error: 'TTS_NOT_CONFIGURED',
+        message: '试听需要火山语音 API Key（VOLC_TTS_API_KEY），请先在服务端配置',
+      });
+    }
+
+    let wavPath: string | null = null;
+    try {
+      const synthesized = await volcTtsSynth.synthesize(VOICE_PREVIEW_TEXT, { speaker });
+      wavPath = synthesized.wavPath;
+      const bytes = await readFile(wavPath);
+      reply.header('Content-Type', 'audio/wav');
+      if (cloneFallback) {
+        reply.header('X-Voice-Preview-Fallback', 'demo-preset');
+      }
+      return reply.send(bytes);
+    } catch (err) {
+      const message = err instanceof VolcTtsError ? err.message : '试听合成失败，请稍后重试';
+      return reply.code(503).send({ error: 'VOICE_PREVIEW_FAILED', message });
+    } finally {
+      if (wavPath) {
+        await unlink(wavPath).catch(() => undefined);
+      }
+    }
   });
 
   // 单个音色状态（克隆进度轮询）：归属校验 + mock 状态惰性推进

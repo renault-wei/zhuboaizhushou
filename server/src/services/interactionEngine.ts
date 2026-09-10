@@ -7,6 +7,7 @@ import type { LiveStatus } from './live';
 import { replyProvider, type GenerateReplyInput } from './reply';
 import { scanSensitive } from './sensitive';
 import { liveSpeaker } from './liveSpeaker';
+import { presetSpeechOverrides } from './liveVoice';
 
 // 实时互动引擎（G4）：订阅 G3 弹幕事件 → 加载商家上下文 → 决策（频控/是否回复）
 // → DeepSeek 生成 1~2 句口播 → 敏感词兜底 → 交给出口（G5 TTS/播放队列）。
@@ -37,6 +38,8 @@ export interface LiveInteractionContext {
   scriptContent: string | null;
   /** 话术商品快照：回答价格/套餐类问题的依据，可为 null */
   productSnapshot: Record<string, string> | null;
+  /** 场次绑定的火山预设音色 id：回复出口据此换发音人，null = 用默认音色 */
+  volcPresetId: string | null;
 }
 
 /** 引擎产出的一条待播回复（出口交给 G5 TTS/播放队列） */
@@ -53,6 +56,8 @@ export interface InteractionReply {
   source: 'generated' | 'fallback';
   /** 生成完成时间（ISO8601） */
   createdAt: string;
+  /** 本场音色（火山预设 id）：出口合成时透传，null = 默认音色 */
+  volcPresetId: string | null;
 }
 
 export type InteractionSkipReason =
@@ -106,6 +111,7 @@ export async function loadLiveInteractionContext(
       status: livesTable.status,
       scriptContent: scriptsTable.content,
       productSnapshot: scriptsTable.productSnapshot,
+      volcPresetId: livesTable.volcPresetId,
     })
     .from(livesTable)
     .leftJoin(scriptsTable, eq(livesTable.scriptId, scriptsTable.id))
@@ -122,6 +128,7 @@ export async function loadLiveInteractionContext(
     status: row.status,
     scriptContent: row.scriptContent ?? null,
     productSnapshot: readProductSnapshot(row.productSnapshot),
+    volcPresetId: row.volcPresetId ?? null,
   };
 }
 
@@ -222,6 +229,7 @@ class InteractionEngineImpl implements InteractionEngine {
       text: replyText,
       source: useFallback ? 'fallback' : 'generated',
       createdAt: new Date(repliedAt).toISOString(),
+      volcPresetId: context.volcPresetId,
     };
 
     // 记频控时间点（以实际产出回复为准，期间失败的生成不占额度）
@@ -273,5 +281,8 @@ export function createInteractionEngine(
 // 全局单例：index.ts 启动时 subscribe() 即接入实时链路
 // G5：引擎出口接现场口播 —— 回复文字 → 本机语音合成 → 播放队列（失败由引擎吞掉，不影响直播主线）
 export const interactionEngine = createInteractionEngine({
-  onReply: (reply) => liveSpeaker.speak(reply.text).then(() => undefined),
+  onReply: (reply) =>
+    liveSpeaker
+      .speak(reply.text, presetSpeechOverrides(reply.volcPresetId) ?? undefined)
+      .then(() => undefined),
 });

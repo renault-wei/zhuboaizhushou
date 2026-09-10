@@ -32,6 +32,9 @@ class VoiceLibraryPage extends ConsumerStatefulWidget {
 }
 
 class _VoiceLibraryPageState extends ConsumerState<VoiceLibraryPage> {
+  /// 正在试听的音色 id（null = 空闲）：试听期间禁用其他试听按钮防重复合成。
+  String? _previewingVoiceId;
+
   @override
   void initState() {
     super.initState();
@@ -54,9 +57,31 @@ class _VoiceLibraryPageState extends ConsumerState<VoiceLibraryPage> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  /// 试听占位：mock 阶段不加载真实音频，仅提示后续接入 CosyVoice。
-  void _showListenHint(Voice voice) {
-    _showSnack('试听需接入真实 CosyVoice（当前为 mock 模式）');
+  /// 试听（档 A）：调服务端真实合成接口取 wav 字节，再用本机播放器播出。
+  /// 克隆音色尚未接入真实复刻，服务端会回落演示预设音色并回告知头，这里如实提示。
+  Future<void> _preview(Voice voice) async {
+    if (_previewingVoiceId != null) {
+      return;
+    }
+    setState(() => _previewingVoiceId = voice.id);
+    try {
+      final preview = await ref
+          .read(apiClientProvider)
+          .previewVoice(voiceId: voice.id);
+      if (!mounted) {
+        return;
+      }
+      if (preview.demoFallback) {
+        _showSnack('克隆音色真实复刻待接入，当前用演示音色试听');
+      }
+      await ref.read(speechOutPlayerProvider).play(preview.bytes);
+    } on ApiException catch (error) {
+      _showSnack('试听失败：${error.message}');
+    } finally {
+      if (mounted) {
+        setState(() => _previewingVoiceId = null);
+      }
+    }
   }
 
   Future<void> _confirmDelete(Voice voice) async {
@@ -140,7 +165,10 @@ class _VoiceLibraryPageState extends ConsumerState<VoiceLibraryPage> {
           final voice = state.voices[index];
           return _VoiceCard(
             voice: voice,
-            onListen: voice.isReady ? () => _showListenHint(voice) : null,
+            previewing: _previewingVoiceId == voice.id,
+            onListen: voice.isReady && _previewingVoiceId == null
+                ? () => _preview(voice)
+                : null,
             onDelete: () => _confirmDelete(voice),
           );
         },
@@ -222,11 +250,15 @@ class _VoiceLibraryPageState extends ConsumerState<VoiceLibraryPage> {
 class _VoiceCard extends StatelessWidget {
   const _VoiceCard({
     required this.voice,
+    required this.previewing,
     required this.onListen,
     required this.onDelete,
   });
 
   final Voice voice;
+
+  /// 该音色正在试听（按钮位置显示加载态）
+  final bool previewing;
   final VoidCallback? onListen;
   final VoidCallback onDelete;
 
@@ -295,8 +327,12 @@ class _VoiceCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    '时长 ${formatRecordingDuration(voice.sampleDurationSeconds)} · '
-                    '创建于 ${_formatCreatedAt(voice.createdAt)}',
+                    <String>[
+                      '时长 ${formatRecordingDuration(voice.sampleDurationSeconds)}',
+                      '创建于 ${_formatCreatedAt(voice.createdAt)}',
+                      // 档 A 口径：声音复刻未接入，可试听但走演示音色
+                      if (voice.isReady) '复刻待接入（试听为演示音色）',
+                    ].join(' · '),
                     style: TextStyle(
                       fontSize: 12,
                       color: context.tokenTextBody,
@@ -305,7 +341,19 @@ class _VoiceCard extends StatelessWidget {
                 ],
               ),
             ),
-            if (onListen != null) ...[
+            if (previewing) ...[
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12),
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    key: Key('voiceListenLoading'),
+                    strokeWidth: 2,
+                  ),
+                ),
+              ),
+            ] else if (onListen != null) ...[
               TextButton(
                 key: Key('voiceListen_${voice.id}'),
                 onPressed: onListen,

@@ -41,6 +41,12 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   /// 已选择的绑定项：null 表示未绑定（提交时置空对应字段）。
   String? _voiceId;
   String? _volcPresetId;
+
+  /// 用户是否主动改选/清空过音色：为 true 后不再回填默认音色。
+  bool _voiceTouched = false;
+
+  /// 新建模式是否已尝试回填默认音色（只调度一次，避免重复回填）。
+  bool _defaultPresetApplied = false;
   String? _scriptId;
   String? _couponId;
 
@@ -120,6 +126,33 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     if (initial.loopScriptId != null) {
       _refreshLoopSummary();
     }
+  }
+
+  /// 新建模式：预设目录到达后自动选中服务端下发的默认音色（推荐女声），
+  /// 让商家不选音色也能直接开播；用户主动改选 / 清空后不再回填。
+  void _maybeApplyDefaultPreset(LiveFormState state) {
+    if (_defaultPresetApplied || _isEdit || _voiceTouched) {
+      return;
+    }
+    if (_volcPresetId != null || _voiceId != null) {
+      _defaultPresetApplied = true;
+      return;
+    }
+    final defaultId = state.defaultPresetId;
+    if (defaultId.isEmpty ||
+        !state.presets.any((preset) => preset.id == defaultId)) {
+      return;
+    }
+    _defaultPresetApplied = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          _voiceTouched ||
+          _volcPresetId != null ||
+          _voiceId != null) {
+        return;
+      }
+      setState(() => _volcPresetId = defaultId);
+    });
   }
 
   /// 拉取我的循环台本列表，匹配已绑定 id 的标题与条数摘要（尽力而为，
@@ -299,6 +332,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   }
 
   Widget _buildForm(LiveFormState state) {
+    // 新建模式：目录到达后回填默认音色（只调度一次）
+    _maybeApplyDefaultPreset(state);
     final canSave = !state.saving && _titleController.text.trim().isNotEmpty;
     final voice = _selectedVoice(state);
     final script = _selectedScript(state);
@@ -774,7 +809,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
                     ),
                     SizedBox(height: 4),
                     Text(
-                      '我的克隆音色需「可用」才可选；火山预设音色全可选',
+                      '我的克隆音色需「可用」才可选（真实复刻待接入，开播暂用演示音色）；'
+                      '火山预设音色全可选，推荐音色已置顶',
                       style: TextStyle(fontSize: 12),
                     ),
                   ],
@@ -798,8 +834,13 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
                     ],
                     if (state.presets.isNotEmpty) ...[
                       _buildSheetGroupHeader('火山预设音色'),
-                      for (final preset in state.presets)
-                        _buildPresetSheetItem(sheetContext, preset),
+                      for (final group in _presetGroups(state)) ...[
+                        // 旧服务端未下发分组时只有一组，省掉多余的分组标题
+                        if (state.presetGroups.isNotEmpty)
+                          _buildSheetSubHeader(group.label),
+                        for (final preset in group.voices)
+                          _buildPresetSheetItem(sheetContext, preset),
+                      ],
                     ],
                   ],
                 ),
@@ -813,6 +854,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       return;
     }
     setState(() {
+      _voiceTouched = true;
       final id = result.id;
       if (id.isEmpty) {
         _voiceId = null;
@@ -835,7 +877,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       enabled: enabled,
       title: Text(voice.name),
       subtitle: Text(
-        '${style.label} · 时长 ${(voice.sampleDurationSeconds / 60).floor()} 分',
+        '${style.label} · 时长 ${(voice.sampleDurationSeconds / 60).floor()} 分'
+        '${enabled ? ' · 复刻待接入（开播暂用演示音色）' : ''}',
         style: TextStyle(fontSize: 12, color: context.tokenTextBody),
       ),
       trailing: enabled && _volcPresetId == null && voice.id == _voiceId
@@ -866,14 +909,51 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     );
   }
 
-  /// 火山预设音色条目：全可选，选中后与克隆音色互斥。
+  /// 预设音色的二级分组标题（带货口播 / 讲解解说 / 客服营销）。
+  Widget _buildSheetSubHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
+      child: Text(
+        title,
+        style: TextStyle(fontSize: 11, color: context.tokenTextHint),
+      ),
+    );
+  }
+
+  /// 预设音色按服务端分组顺序整理（推荐置顶；旧服务端未下发分组时退化为单组）。
+  List<PresetVoiceGroup> _presetGroups(LiveFormState state) {
+    return groupVolcPresets(state.presets, state.presetGroups);
+  }
+
+  /// 火山预设音色条目：全可选，选中后与克隆音色互斥；推荐音色带「推荐」标。
   Widget _buildPresetSheetItem(
       BuildContext sheetContext, VolcPresetVoice preset) {
     return ListTile(
       key: Key('livePresetOption_${preset.id}'),
-      title: Text(preset.name),
+      title: Row(
+        children: <Widget>[
+          Flexible(
+            child: Text(preset.name, overflow: TextOverflow.ellipsis),
+          ),
+          if (preset.recommended) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: AppColors.live.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                '推荐',
+                key: Key('livePresetRecommended_${preset.id}'),
+                style: TextStyle(fontSize: 11, color: AppColors.live),
+              ),
+            ),
+          ],
+        ],
+      ),
       subtitle: Text(
-        '${preset.isFemale ? '女声' : '男声'} · 火山预设',
+        '${preset.isFemale ? '女声' : '男声'} · 火山预设音色',
         style: TextStyle(fontSize: 12, color: context.tokenTextBody),
       ),
       trailing: preset.id == _volcPresetId

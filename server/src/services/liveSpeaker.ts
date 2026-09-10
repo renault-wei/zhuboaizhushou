@@ -40,12 +40,26 @@ export interface SpeakResult {
   error?: string;
 }
 
-/** 合成器抽象：未来商用 / 克隆 TTS 只需实现同一接口 */
-export interface LocalWavSynth {
-  synthesize(text: string): Promise<{ wavPath: string }>;
+/**
+ * 单次合成的音色覆盖项（可选）：缺省时合成器回落自身构造 / 环境变量默认值。
+ * speaker = 火山发音人 ID（预设音色）；克隆音色档 A 未接入真复刻，不走这里。
+ */
+export interface SpeechOverrides {
+  /** 本次合成音色（火山发音人 ID） */
+  speaker?: string;
+  /** 本次合成语速 [-50, 100]，0 为正常语速 */
+  speechRate?: number;
 }
 
-/** Windows 本机语音合成实现（System.Speech）：把文字念成 PCM wav */
+/** 合成器抽象：未来商用 / 克隆 TTS 只需实现同一接口 */
+export interface LocalWavSynth {
+  synthesize(text: string, overrides?: SpeechOverrides): Promise<{ wavPath: string }>;
+}
+
+/**
+ * Windows 本机语音合成实现（System.Speech）：把文字念成 PCM wav。
+ * 本机 SAPI 音色名与火山发音人 ID 不同源，档 A 忽略 overrides（保持 .env LOCAL_TTS_VOICE）。
+ */
 export class WindowsLocalSpeechSynth implements LocalWavSynth {
   private readonly voice: string;
   private readonly rate: number;
@@ -55,7 +69,7 @@ export class WindowsLocalSpeechSynth implements LocalWavSynth {
     this.rate = options.rate;
   }
 
-  async synthesize(text: string): Promise<{ wavPath: string }> {
+  async synthesize(text: string, _overrides?: SpeechOverrides): Promise<{ wavPath: string }> {
     const wavPath = join(tmpdir(), `starvoice-live-${randomUUID()}.wav`);
     const command = buildSapiSpeakCommand(text, wavPath, this.voice, this.rate);
     const result = await runHiddenPowerShell(command);
@@ -204,8 +218,11 @@ export function speechLinePendingCount(): number {
 }
 
 export interface LiveSpeaker {
-  /** 把一段口播文字合成语音并交给当前出声端播放；任何失败都不上抛，由调用方看结果决定是否告警 */
-  speak(text: string): Promise<SpeakResult>;
+  /**
+   * 把一段口播文字合成语音并交给当前出声端播放；任何失败都不上抛，由调用方看结果决定是否告警。
+   * overrides 指定本场音色（火山预设）；不传则用合成器默认音色，既有调用行为不变。
+   */
+  speak(text: string, overrides?: SpeechOverrides): Promise<SpeakResult>;
 }
 
 export interface CreateLiveSpeakerOptions {
@@ -237,7 +254,7 @@ export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveS
   const remoteOutput = options.remoteOutput ?? env.liveSpeaker.output === 'phone';
 
   return {
-    async speak(text: string): Promise<SpeakResult> {
+    async speak(text: string, overrides?: SpeechOverrides): Promise<SpeakResult> {
       if (!enabled) {
         return { spoken: false, reason: 'disabled' };
       }
@@ -247,7 +264,7 @@ export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveS
       }
       let sinkReached = false;
       try {
-        const { wavPath } = await synth.synthesize(text);
+        const { wavPath } = await synth.synthesize(text, overrides);
         sinkReached = true;
         const outcome = await sink.play(wavPath);
         if (outcome === 'played') {

@@ -87,17 +87,30 @@ const List<Map<String, dynamic>> fakeLoopScriptSamples = <Map<String, dynamic>>[
 
 /// 内置火山预设音色目录：镜像服务端 /api/voices/presets 载荷
 /// （与服务端 volcPresets.ts 保持一致，供音色两组选择与 live.volcPresetId 测试）。
+const String fakeDefaultVolcPresetId = 'zh_female_vv_uranus_bigtts';
+
+/// 内置预设分组：镜像服务端 VOLC_PRESET_GROUPS（展示分组顺序）。
+const List<Map<String, dynamic>> fakeVolcPresetGroups = <Map<String, dynamic>>[
+  <String, dynamic>{'id': 'broadcast', 'label': '带货口播'},
+  <String, dynamic>{'id': 'narration', 'label': '讲解解说'},
+  <String, dynamic>{'id': 'service', 'label': '客服营销'},
+];
+
 const List<Map<String, dynamic>> fakeVolcPresetVoices =
     <Map<String, dynamic>>[
       <String, dynamic>{
         'id': 'zh_female_vv_uranus_bigtts',
         'name': 'Vivi 2.0',
         'gender': 'female',
+        'group': 'broadcast',
+        'recommended': true,
       },
       <String, dynamic>{
         'id': 'zh_male_m191_uranus_bigtts',
         'name': '云舟 2.0',
         'gender': 'male',
+        'group': 'broadcast',
+        'recommended': true,
       },
     ];
 
@@ -127,6 +140,7 @@ class FakeBackend implements HttpClientAdapter {
     List<Map<String, dynamic>>? danmaku,
     List<Uint8List>? speechOut,
     this.failSpeechOut = false,
+    this.failVoicePreview = false,
     this.balanceMinutes = 120,
     this.monthlyQuotaMinutes = 600,
     this.monthlyUsedMinutes = 120,
@@ -196,6 +210,14 @@ class FakeBackend implements HttpClientAdapter {
 
   /// 模拟出声队列接口 500（测试轮询错误分支）。
   bool failSpeechOut;
+
+  /// 模拟音色试听接口 503（测试试听失败分支）。
+  bool failVoicePreview;
+
+  /// 试听返回的演示 wav 字节（内容不重要，测试只断言调用与播放）。
+  static final Uint8List previewWavBytes = Uint8List.fromList(<int>[
+    82, 73, 70, 70, 36, 0, 0, 0, 87, 65, 86, 69, 102, 109, 116, 32,
+  ]);
 
   /// 已被助播机拉走的条数（也用作 jobId 序号）。
   int speechOutPulledCount = 0;
@@ -393,10 +415,17 @@ class FakeBackend implements HttpClientAdapter {
       return _createLoopScript(options);
     }
     if (options.method == 'GET' && path.endsWith('/api/voices/presets')) {
-      return _jsonResponse({'presets': List<Map<String, dynamic>>.from(volcPresets)});
+      return _jsonResponse({
+        'presets': List<Map<String, dynamic>>.from(volcPresets),
+        'groups': List<Map<String, dynamic>>.from(fakeVolcPresetGroups),
+        'defaultPresetId': fakeDefaultVolcPresetId,
+      });
     }
     if (options.method == 'GET' && path.endsWith('/api/voices')) {
       return _jsonResponse(List<Map<String, dynamic>>.from(voices));
+    }
+    if (options.method == 'POST' && path.endsWith('/api/voices/preview')) {
+      return _previewVoice(options);
     }
     if (options.method == 'POST' && path.endsWith('/api/voices')) {
       return _createVoice(options);
@@ -789,6 +818,46 @@ class FakeBackend implements HttpClientAdapter {
       'videoSourceUrl': live['videoSourceUrl'],
       'aiBadgeShown': live['aiBadgeShown'],
     });
+  }
+
+  /// 音色试听（镜像服务端 POST /api/voices/preview）：返回演示 wav 字节。
+  /// 克隆音色（voiceId）回落演示预设音色并回 X-Voice-Preview-Fallback 头；
+  /// 未知预设 400、服务不可用 503，形状与服务端保持一致。
+  ResponseBody _previewVoice(RequestOptions options) {
+    if (failVoicePreview) {
+      return _jsonResponse({
+        'error': 'VOICE_PREVIEW_FAILED',
+        'message': '试听合成失败，请稍后重试',
+      }, 503);
+    }
+    final body = _readBody(options);
+    final presetId = _liveNullable(body['presetId']);
+    final voiceId = _liveNullable(body['voiceId']);
+    var cloneFallback = false;
+    var speaker = presetId;
+    if (speaker == null && voiceId != null) {
+      if (voices.indexWhere((voice) => voice['id'] == voiceId) < 0) {
+        return _jsonResponse({'error': 'VOICE_NOT_FOUND', 'message': '音色不存在'}, 404);
+      }
+      speaker = fakeDefaultVolcPresetId;
+      cloneFallback = true;
+    }
+    if (speaker == null ||
+        volcPresets.indexWhere((preset) => preset['id'] == speaker) < 0) {
+      return _jsonResponse({
+        'error': 'VOICE_INVALID',
+        'message': '音色不可试听，请选择内置预设音色',
+      }, 400);
+    }
+    return ResponseBody.fromBytes(
+      previewWavBytes,
+      200,
+      headers: <String, List<String>>{
+        'content-type': <String>['audio/wav'],
+        if (cloneFallback)
+          'x-voice-preview-fallback': <String>['demo-preset'],
+      },
+    );
   }
 
   /// 远程出声队列拉取（镜像服务端 /api/out/speech/next）：空队列 204；

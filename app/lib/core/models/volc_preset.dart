@@ -1,4 +1,4 @@
-/// 火山预设音色目录条目：对应 GET /api/voices/presets 返回数组的元素。
+/// 火山预设音色目录条目：对应 GET /api/voices/presets 返回 presets 数组的元素。
 /// 只读内置目录（不调火山接口），与「我的音色」（克隆）并列成为两种音色来源；
 /// live 上以 volcPresetId 存 id，与 voiceId（克隆音色）互斥，二选一。
 class VolcPresetVoice {
@@ -6,6 +6,8 @@ class VolcPresetVoice {
     required this.id,
     required this.name,
     required this.gender,
+    this.group = '',
+    this.recommended = false,
   });
 
   factory VolcPresetVoice.fromJson(Map<String, dynamic> json) {
@@ -13,6 +15,8 @@ class VolcPresetVoice {
       id: json['id']?.toString() ?? '',
       name: json['name']?.toString() ?? '',
       gender: json['gender']?.toString() ?? '',
+      group: json['group']?.toString() ?? '',
+      recommended: json['recommended'] == true,
     );
   }
 
@@ -22,8 +26,131 @@ class VolcPresetVoice {
   /// 客户端展示名（如 Vivi 2.0 / 云舟 2.0）
   final String name;
 
-  /// 音色分组：female 女声 / male 男声
+  /// 性别：female 女声 / male 男声
   final String gender;
 
+  /// 所属分组 id（对应 [VolcPresetGroup.id]；旧服务端未下发时为空串）
+  final String group;
+
+  /// 是否推荐：组内置顶并标「推荐」
+  final bool recommended;
+
   bool get isFemale => gender == 'female';
+}
+
+/// 音色分组元数据：服务端下发分组顺序，客户端按此顺序分组展示。
+class VolcPresetGroup {
+  const VolcPresetGroup({required this.id, required this.label});
+
+  factory VolcPresetGroup.fromJson(Map<String, dynamic> json) {
+    return VolcPresetGroup(
+      id: json['id']?.toString() ?? '',
+      label: json['label']?.toString() ?? '',
+    );
+  }
+
+  final String id;
+  final String label;
+}
+
+/// 分组后的预设音色：分组标题 + 组内音色（推荐已置顶）。
+class PresetVoiceGroup {
+  const PresetVoiceGroup({
+    required this.id,
+    required this.label,
+    required this.voices,
+  });
+
+  final String id;
+  final String label;
+  final List<VolcPresetVoice> voices;
+}
+
+/// 按服务端分组顺序分组：未在 [groups] 中登记的分组按出现顺序追加在末尾；
+/// 组内推荐音色置顶（分区实现，不改动组内其余顺序）。
+List<PresetVoiceGroup> groupVolcPresets(
+  List<VolcPresetVoice> presets,
+  List<VolcPresetGroup> groups,
+) {
+  final order = <String>[];
+  final labels = <String, String>{};
+  for (final group in groups) {
+    if (!labels.containsKey(group.id)) {
+      order.add(group.id);
+    }
+    labels[group.id] = group.label;
+  }
+  for (final preset in presets) {
+    if (!labels.containsKey(preset.group)) {
+      order.add(preset.group);
+      labels[preset.group] = preset.group.isEmpty ? '其他' : preset.group;
+    }
+  }
+  final result = <PresetVoiceGroup>[];
+  for (final id in order) {
+    final voices = presets.where((preset) => preset.group == id).toList();
+    if (voices.isEmpty) {
+      continue;
+    }
+    result.add(
+      PresetVoiceGroup(
+        id: id,
+        label: labels[id] ?? id,
+        voices: <VolcPresetVoice>[
+          ...voices.where((preset) => preset.recommended),
+          ...voices.where((preset) => !preset.recommended),
+        ],
+      ),
+    );
+  }
+  return result;
+}
+
+/// 预设音色目录：presets（全部音色）+ groups（分组顺序）+ defaultPresetId（默认音色）。
+class VolcPresetCatalog {
+  const VolcPresetCatalog({
+    required this.presets,
+    required this.groups,
+    required this.defaultPresetId,
+  });
+
+  const VolcPresetCatalog.empty()
+    : presets = const <VolcPresetVoice>[],
+      groups = const <VolcPresetGroup>[],
+      defaultPresetId = '';
+
+  factory VolcPresetCatalog.fromJson(Map<String, dynamic> json) {
+    final rawPresets = json['presets'];
+    final rawGroups = json['groups'];
+    return VolcPresetCatalog(
+      presets: rawPresets is List
+          ? rawPresets
+                .whereType<Map>()
+                .map(
+                  (item) =>
+                      VolcPresetVoice.fromJson(Map<String, dynamic>.from(item)),
+                )
+                .toList()
+          : const <VolcPresetVoice>[],
+      groups: rawGroups is List
+          ? rawGroups
+                .whereType<Map>()
+                .map(
+                  (item) =>
+                      VolcPresetGroup.fromJson(Map<String, dynamic>.from(item)),
+                )
+                .toList()
+          : const <VolcPresetGroup>[],
+      defaultPresetId: json['defaultPresetId']?.toString() ?? '',
+    );
+  }
+
+  final List<VolcPresetVoice> presets;
+  final List<VolcPresetGroup> groups;
+
+  /// 新建场次的默认音色 id（服务端下发；空串 = 未提供）
+  final String defaultPresetId;
+
+  /// 按分组顺序整理后的音色（音色选择面板用）
+  List<PresetVoiceGroup> get groupedPresets => groupVolcPresets(presets, groups);
 }

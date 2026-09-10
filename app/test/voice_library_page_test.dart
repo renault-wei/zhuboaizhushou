@@ -1,11 +1,30 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:starvoice_app/features/assistant_speaker/application/speech_out_player.dart';
 import 'package:starvoice_app/features/voices/presentation/voice_library_page.dart';
 import 'package:starvoice_app/providers.dart';
 
 import 'fake_backend.dart';
+
+/// 试听假播放器：不碰真实音频通道，记录播放次数与最后一次字节。
+class _RecordingSpeechOutPlayer implements SpeechOutPlayer {
+  final List<Uint8List> played = <Uint8List>[];
+
+  @override
+  Future<void> play(Uint8List wavBytes) async {
+    played.add(wavBytes);
+  }
+
+  @override
+  Future<void> stop() async {}
+
+  @override
+  Future<void> dispose() async {}
+}
 
 Map<String, dynamic> _voiceJson({
   required String id,
@@ -26,11 +45,15 @@ Map<String, dynamic> _voiceJson({
 
 Future<void> _pumpVoiceLibrary(
   WidgetTester tester,
-  FakeBackend backend,
-) async {
+  FakeBackend backend, {
+  SpeechOutPlayer? player,
+}) async {
   await tester.pumpWidget(
     ProviderScope(
-      overrides: [dioProvider.overrideWithValue(buildMockDio(backend))],
+      overrides: [
+        dioProvider.overrideWithValue(buildMockDio(backend)),
+        if (player != null) speechOutPlayerProvider.overrideWithValue(player),
+      ],
       child: const MaterialApp(home: VoiceLibraryPage()),
     ),
   );
@@ -100,19 +123,43 @@ void main() {
     expect(find.text('克隆中'), findsNothing);
   });
 
-  testWidgets('试听：mock 阶段以 SnackBar 占位提示', (WidgetTester tester) async {
+  testWidgets('试听：调服务端真实合成接口并本机播放（档 A）', (WidgetTester tester) async {
     final backend = FakeBackend(
       voices: <Map<String, dynamic>>[
         _voiceJson(id: 'v-ready', name: '主播小美', status: 'ready'),
       ],
     );
-    await _pumpVoiceLibrary(tester, backend);
+    final player = _RecordingSpeechOutPlayer();
+    await _pumpVoiceLibrary(tester, backend, player: player);
 
     await tester.tap(find.byKey(const Key('voiceListen_v-ready')));
-    await tester.pump();
-    expect(find.text('试听需接入真实 CosyVoice（当前为 mock 模式）'), findsOneWidget);
+    await tester.pumpAndSettle();
 
-    // 等待 SnackBar 自动消失，避免遗留计时器
+    // 走真实试听接口并交由本机播放器播出，不再有 mock 占位文案
+    expect(player.played, hasLength(1));
+    expect(player.played.single, isNotEmpty);
+    expect(find.text('试听需接入真实 CosyVoice（当前为 mock 模式）'), findsNothing);
+
+    // 克隆音色回落演示音色时给出如实提示
+    expect(find.textContaining('克隆音色真实复刻待接入'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('试听：服务端不可用时提示试听失败', (WidgetTester tester) async {
+    final backend = FakeBackend(
+      voices: <Map<String, dynamic>>[
+        _voiceJson(id: 'v-ready', name: '主播小美', status: 'ready'),
+      ],
+    )..failVoicePreview = true;
+    final player = _RecordingSpeechOutPlayer();
+    await _pumpVoiceLibrary(tester, backend, player: player);
+
+    await tester.tap(find.byKey(const Key('voiceListen_v-ready')));
+    await tester.pumpAndSettle();
+
+    expect(player.played, isEmpty);
+    expect(find.textContaining('试听失败'), findsOneWidget);
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
   });

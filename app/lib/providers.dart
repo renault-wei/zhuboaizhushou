@@ -12,6 +12,7 @@ import 'package:starvoice_app/features/lives/application/live_form_controller.da
 import 'package:starvoice_app/features/lives/application/live_list_controller.dart';
 import 'package:starvoice_app/features/loop_scripts/application/loop_script_controller.dart';
 import 'package:starvoice_app/features/assistant_speaker/application/assistant_speaker_controller.dart';
+import 'package:starvoice_app/features/assistant_speaker/application/speech_out_player.dart';
 import 'package:starvoice_app/features/assistant_speaker/data/audioplayers_speech_out_player.dart';
 import 'package:starvoice_app/features/recording/application/recorder_controller.dart';
 import 'package:starvoice_app/features/scripts/application/script_controller.dart';
@@ -75,6 +76,14 @@ final apiClientProvider = Provider<ApiClient>((ref) {
   return ApiClient(ref.watch(dioProvider));
 });
 
+/// 本机出声播放器：助播机出声端与音色试听共用同一实现，抽成 provider
+/// 便于 Widget 测试注入假播放器（不触碰平台音频通道）。
+final speechOutPlayerProvider = Provider<SpeechOutPlayer>((ref) {
+  final player = AudioplayersSpeechOutPlayer();
+  ref.onDispose(player.dispose);
+  return player;
+});
+
 /// 助播机出声端控制器（P1 手机线）：工作台启用后轮询远程出声队列并本机播放。
 /// 全局单例（非 autoDispose）：直播中需持续出声，不随某个页面销毁而停；
 /// 停用与页面收尾由调用方（工作台）负责调 stop。
@@ -84,7 +93,7 @@ final assistantSpeakerControllerProvider =
     ) {
       return AssistantSpeakerController(
         ref.watch(apiClientProvider),
-        AudioplayersSpeechOutPlayer(),
+        ref.watch(speechOutPlayerProvider),
       );
     });
 

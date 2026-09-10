@@ -15,6 +15,8 @@ class LiveFormState {
     this.initial,
     this.voices = const <Voice>[],
     this.presets = const <VolcPresetVoice>[],
+    this.presetGroups = const <VolcPresetGroup>[],
+    this.defaultPresetId = '',
     this.scripts = const <Script>[],
     this.coupons = const <Coupon>[],
     this.loading = false,
@@ -30,6 +32,12 @@ class LiveFormState {
 
   /// 火山预设音色目录（只读内置，全部可选中）
   final List<VolcPresetVoice> presets;
+
+  /// 预设音色的分组元数据（服务端下发顺序，客户端据此分组展示）
+  final List<VolcPresetGroup> presetGroups;
+
+  /// 新建场次的默认音色 id（服务端下发；空串 = 未提供）
+  final String defaultPresetId;
 
   /// 可选话术（仅 status=ready 的可选，blocked/draft 禁用展示）
   final List<Script> scripts;
@@ -50,6 +58,8 @@ class LiveFormState {
     Live? initial,
     List<Voice>? voices,
     List<VolcPresetVoice>? presets,
+    List<VolcPresetGroup>? presetGroups,
+    String? defaultPresetId,
     List<Script>? scripts,
     List<Coupon>? coupons,
     bool? loading,
@@ -61,6 +71,8 @@ class LiveFormState {
       initial: initial ?? this.initial,
       voices: voices ?? this.voices,
       presets: presets ?? this.presets,
+      presetGroups: presetGroups ?? this.presetGroups,
+      defaultPresetId: defaultPresetId ?? this.defaultPresetId,
       scripts: scripts ?? this.scripts,
       coupons: coupons ?? this.coupons,
       loading: loading ?? this.loading,
@@ -89,8 +101,8 @@ class LiveFormController extends StateNotifier<LiveFormState> {
     try {
       final voices = await _apiClient.listVoices();
       final scripts = await _apiClient.listScripts();
-      // 火山预设音色目录尽力而为：失败不阻塞表单，音色区只剩克隆组
-      final presets = await _loadPresetsBestEffort();
+      // 火山预设音色目录（含分组与默认音色）尽力而为：失败不阻塞表单，音色区只剩克隆组
+      final catalog = await _loadPresetsBestEffort();
       // 团购券需先绑定抖音；未绑定等失败不阻塞表单，券名降级为券 id
       final coupons = await _loadCouponsBestEffort();
       Live? initial;
@@ -103,7 +115,9 @@ class LiveFormController extends StateNotifier<LiveFormState> {
       state = LiveFormState(
         initial: initial,
         voices: voices,
-        presets: presets,
+        presets: catalog.presets,
+        presetGroups: catalog.groups,
+        defaultPresetId: catalog.defaultPresetId,
         scripts: scripts,
         coupons: coupons,
         loading: false,
@@ -163,12 +177,12 @@ class LiveFormController extends StateNotifier<LiveFormState> {
     }
   }
 
-  /// 火山预设音色目录尽力而为：失败返回空列表（音色选择区只显示克隆音色组）。
-  Future<List<VolcPresetVoice>> _loadPresetsBestEffort() async {
+  /// 火山预设音色目录尽力而为：失败返回空目录（音色选择区只显示克隆音色组）。
+  Future<VolcPresetCatalog> _loadPresetsBestEffort() async {
     try {
-      return await _apiClient.listVolcPresetVoices();
+      return await _apiClient.fetchVolcPresetCatalog();
     } on ApiException {
-      return <VolcPresetVoice>[];
+      return const VolcPresetCatalog.empty();
     }
   }
 }
