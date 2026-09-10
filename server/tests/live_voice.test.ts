@@ -221,4 +221,18 @@ describe('POST /api/voices/preview（音色试听）', () => {
     expect(res.json().error).toBe('VOICE_NOT_FOUND');
     expect(synth).not.toHaveBeenCalled();
   });
+
+  it('voiceId 形态非法（非 uuid）：404 VOICE_NOT_FOUND，不发合成请求', async () => {
+    const token = await tokenFor(PHONE);
+    const synth = vi.spyOn(volcTtsSynth, 'synthesize');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/voices/preview',
+      headers: bearer(token),
+      payload: { voiceId: 'not-a-uuid' },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('VOICE_NOT_FOUND');
+    expect(synth).not.toHaveBeenCalled();
+  });
 });

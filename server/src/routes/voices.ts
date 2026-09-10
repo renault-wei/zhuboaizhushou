@@ -29,6 +29,11 @@ interface VoiceIdParams {
   id: string;
 }
 
+// 音色 id 为数据库 uuid：形态不符时直接按「不存在」处理，
+// 避免把非法字符串透传给 PostgreSQL 触发 uuid 转换 500。
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** 试听演示短句：固定 30 字左右的小额演示调用，与正式口播话术无关 */
 export const VOICE_PREVIEW_TEXT =
   '大家好，欢迎来到直播间，今天给大家介绍咱们的团购套餐，喜欢的可以点个关注。';
@@ -190,6 +195,9 @@ export const voicesRoutes: FastifyPluginAsync = async (app) => {
     let speaker: string | null = presetId;
     let cloneFallback = false;
     if (!speaker && voiceId) {
+      if (!UUID_PATTERN.test(voiceId)) {
+        return reply.code(404).send({ error: 'VOICE_NOT_FOUND', message: '音色不存在' });
+      }
       const owned = await db
         .select({ id: voices.id })
         .from(voices)
