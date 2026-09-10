@@ -13,6 +13,7 @@ import {
   VOLC_PRESET_VOICES,
 } from '../services/volcPresets';
 import { VolcTtsError, volcTtsSynth } from '../services/volcTTS';
+import { findCachedTtsAudio, storeCachedTtsAudio } from '../services/ttsCache';
 
 // ---------- 常量 ----------
 
@@ -47,6 +48,32 @@ function readPreviewBody(body: unknown): { presetId: string | null; voiceId: str
   const read = (value: unknown): string | null =>
     typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
   return { presetId: read(record.presetId), voiceId: read(record.voiceId) };
+}
+
+/** 读取用户默认音色（服务端为准）：未设置返回 null，历史脏值（不在白名单）同样按未设置处理 */
+async function loadUserDefaultPreset(userId: string): Promise<string | null> {
+  const rows = await db
+    .select({ defaultVolcPresetId: users.defaultVolcPresetId })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  const value = rows[0]?.defaultVolcPresetId ?? null;
+  return value && isVolcPresetId(value) ? value : null;
+}
+
+/** 读取默认音色请求体：{ presetId: string | null }；结构不合法返回 undefined（与「清空」的 null 区分） */
+function readDefaultPresetBody(body: unknown): string | null | undefined {
+  if (typeof body !== 'object' || body === null) {
+    return undefined;
+  }
+  const value = (body as Record<string, unknown>).presetId;
+  if (value === null) {
+    return null;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value.trim();
+  }
+  return undefined;
 }
 
 /** 读取创建克隆任务请求体：{ name, sampleDurationSeconds, sampleFingerprint } */
@@ -179,12 +206,37 @@ export const voicesRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // 火山预设音色目录（只读内置，不调火山接口）：须注册在 /api/voices/:id 之前，避免被 id 路由吞掉
-  app.get('/api/voices/presets', { preHandler: app.authenticate }, async () => {
+  // 商家默认音色（服务端为准）：defaultPresetId = 生效值（用户默认 ?? 全局默认），
+  // userDefaultPresetId = 用户自己设定的值（null = 没设过，客户端据此展示「默认」标记）。
+  app.get('/api/voices/presets', { preHandler: app.authenticate }, async (request) => {
+    const userDefaultPresetId = await loadUserDefaultPreset(request.user.userId);
     return {
       presets: VOLC_PRESET_VOICES,
       groups: VOLC_PRESET_GROUPS,
-      defaultPresetId: DEFAULT_VOLC_PRESET_ID,
+      defaultPresetId: userDefaultPresetId ?? DEFAULT_VOLC_PRESET_ID,
+      userDefaultPresetId,
     };
+  });
+
+  // 设置 / 清空商家默认音色：{ presetId: string } 设为默认，{ presetId: null } 清空回落全局默认。
+  // 只影响「新建开播配置」的预填，不回改已有场次各自记住的音色（场次换音色走 updateLive）。
+  app.put('/api/voices/default', { preHandler: app.authenticate }, async (request, reply) => {
+    const next = readDefaultPresetBody(request.body);
+    if (next === undefined) {
+      return reply
+        .code(400)
+        .send({ error: 'VOICE_INVALID', message: '参数 presetId 需为音色 id 或 null' });
+    }
+    if (next !== null && !isVolcPresetId(next)) {
+      return reply
+        .code(400)
+        .send({ error: 'VOICE_INVALID', message: '音色不可用，请选择内置预设音色' });
+    }
+    await db
+      .update(users)
+      .set({ defaultVolcPresetId: next })
+      .where(eq(users.id, request.user.userId));
+    return { defaultPresetId: next ?? DEFAULT_VOLC_PRESET_ID, userDefaultPresetId: next };
   });
 
   // 音色试听（档 A）：用固定演示短句做一次真实火山合成，直接回 wav 字节。
@@ -221,10 +273,30 @@ export const voicesRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
+    // 试听命中 T3 分句缓存：同一音色同一演示句只真合成一次，避免用户反复点试听重复计费
+    const cacheKey = {
+      userId: request.user.userId,
+      voiceKey: speaker,
+      rate: 0,
+      text: VOICE_PREVIEW_TEXT,
+    };
+    const cached = await findCachedTtsAudio(cacheKey);
+    if (cached) {
+      const cachedBytes = await readFile(cached.audioPath);
+      reply.header('Content-Type', 'audio/wav');
+      reply.header('X-Voice-Preview-Cache', 'hit');
+      if (cloneFallback) {
+        reply.header('X-Voice-Preview-Fallback', 'demo-preset');
+      }
+      return reply.send(cachedBytes);
+    }
+
     let wavPath: string | null = null;
     try {
       const synthesized = await volcTtsSynth.synthesize(VOICE_PREVIEW_TEXT, { speaker });
       wavPath = synthesized.wavPath;
+      // 落缓存失败不阻断本次试听（缓存是省钱优化，不是功能前提）
+      await storeCachedTtsAudio(cacheKey, wavPath).catch(() => undefined);
       const bytes = await readFile(wavPath);
       reply.header('Content-Type', 'audio/wav');
       if (cloneFallback) {

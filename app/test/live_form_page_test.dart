@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:starvoice_app/features/coupons/presentation/coupon_list_page.dart';
 import 'package:starvoice_app/features/lives/presentation/live_form_page.dart';
@@ -147,6 +148,9 @@ T _widget<T extends Widget>(WidgetTester tester, Key key) {
 }
 
 void main() {
+  // 开播表单会读写音色本地缓存（服务端为准、本地回落），测试统一用内存实现隔离
+  setUp(() => SharedPreferences.setMockInitialValues(<String, Object>{}));
+
   testWidgets('新建模式：标题为空 / 纯空白时保存按钮禁用，输入后可用', (WidgetTester tester) async {
     final backend = FakeBackend();
     await _pumpFormPage(tester, backend);

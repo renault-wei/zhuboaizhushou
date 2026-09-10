@@ -44,18 +44,18 @@ Future<void> _scrollHomeTo(WidgetTester tester, Finder finder) async {
 }
 
 void main() {
-  testWidgets('首页「我的音色」入口：显示音色数量并进入音色库、空态引导录音', (WidgetTester tester) async {
+  testWidgets('首页「音色库」入口：显示音色数量并进入音色库、空态引导录音', (WidgetTester tester) async {
     final backend = FakeBackend();
     await _pumpLoggedInHome(tester, backend);
 
-    // 首页出现「我的音色」卡片，数量为 0（卡片在首页纵深，先滚动到可视区）
+    // 首页出现「音色库」卡片，克隆音色为 0、预设音色取自内置目录（卡片在首页纵深，先滚动到可视区）
     await _scrollHomeTo(tester, find.byKey(const Key('voiceLibraryCard')));
     expect(find.byKey(const Key('voiceLibraryCard')), findsOneWidget);
-    expect(find.text('我的音色'), findsOneWidget);
+    expect(find.text('音色库'), findsOneWidget);
     final countLabel = tester.widget<Text>(
       find.byKey(const Key('voiceLibraryCountLabel')),
     );
-    expect(countLabel.data, '0 个');
+    expect(countLabel.data, '0 个声音 · 2 个预设');
 
     // 点击进入音色库页：空态文案 + 引导按钮
     final openButton = find.byKey(const Key('voiceLibraryOpenButton'));
@@ -64,7 +64,7 @@ void main() {
     await tester.tap(openButton);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('voiceLibraryPage')), findsOneWidget);
-    expect(find.text('还没有音色，去录制你的第一段声音吧'), findsOneWidget);
+    expect(find.text('还没有克隆音色，去录制你的第一段声音吧'), findsOneWidget);
 
     // 空态「去录制」跳转录音页
     await tester.tap(find.byKey(const Key('voiceLibraryGoRecordButton')));

@@ -82,4 +82,37 @@ void main() {
 
     controller.dispose();
   });
+
+  test('load 不会清空已拉取的预设目录（下拉刷新并发场景回归）', () async {
+    final backend = FakeBackend();
+    final controller = VoiceLibraryController(
+      ApiClient(buildMockDio(backend)),
+    );
+
+    await controller.loadCatalog();
+    final presetCount = controller.state.catalog.presets.length;
+    expect(presetCount, greaterThan(0));
+
+    // 并发刷新时 load 与 loadCatalog 赛跑：load 先/后完成都不能清空目录
+    await controller.load();
+    expect(controller.state.catalog.presets.length, presetCount);
+
+    controller.dispose();
+  });
+
+  test('setDefaultPreset 成功回填生效默认音色，且 load 后仍保留', () async {
+    final backend = FakeBackend();
+    final controller = VoiceLibraryController(
+      ApiClient(buildMockDio(backend)),
+    );
+
+    await controller.loadCatalog();
+    await controller.setDefaultPreset(fakeVolcPresetVoices[1]['id'] as String);
+    expect(controller.state.catalog.userDefaultPresetId, fakeVolcPresetVoices[1]['id']);
+
+    await controller.load();
+    expect(controller.state.catalog.userDefaultPresetId, fakeVolcPresetVoices[1]['id']);
+
+    controller.dispose();
+  });
 }

@@ -6,6 +6,7 @@ import 'package:starvoice_app/core/config/api_config.dart';
 import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/core/network/auth_interceptor.dart';
 import 'package:starvoice_app/core/storage/session_storage.dart';
+import 'package:starvoice_app/core/storage/voice_cache_store.dart';
 import 'package:starvoice_app/features/auth/application/auth_controller.dart';
 import 'package:starvoice_app/features/coupons/application/coupon_controller.dart';
 import 'package:starvoice_app/features/lives/application/live_form_controller.dart';
@@ -23,6 +24,12 @@ import 'package:starvoice_app/router/app_router.dart';
 /// 本地会话存储
 final sessionStorageProvider = Provider<SessionStorage>((ref) {
   return SessionStorage();
+});
+
+/// 音色本地缓存：服务端为准，本地仅作网络失败时的回落
+/// （预设目录快照 + 生效默认音色 id，供音色库页与开播表单复用）。
+final voiceCacheStoreProvider = Provider<VoiceCacheStore>((ref) {
+  return VoiceCacheStore();
 });
 
 /// 401 事件总线：dio 拦截器与认证控制器解耦，避免 provider 之间的初始化环。
@@ -137,7 +144,10 @@ final voiceLibraryControllerProvider =
       VoiceLibraryController,
       VoiceLibraryState
     >((ref) {
-      return VoiceLibraryController(ref.watch(apiClientProvider));
+      return VoiceLibraryController(
+        ref.watch(apiClientProvider),
+        cacheStore: ref.watch(voiceCacheStoreProvider),
+      );
     });
 
 /// 话术库控制器：话术生成页使用（列表加载 + DeepSeek 生成）。
@@ -181,5 +191,9 @@ final liveListControllerProvider =
 /// autoDispose：离开表单页即销毁；编辑页预填依赖 family 参数读取 /api/lives/:id。
 final liveFormControllerProvider = StateNotifierProvider.autoDispose
     .family<LiveFormController, LiveFormState, String>((ref, liveId) {
-      return LiveFormController(ref.watch(apiClientProvider), liveId);
+      return LiveFormController(
+        ref.watch(apiClientProvider),
+        liveId,
+        cacheStore: ref.watch(voiceCacheStoreProvider),
+      );
     });

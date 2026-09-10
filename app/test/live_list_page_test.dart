@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:starvoice_app/features/lives/presentation/live_form_page.dart';
 import 'package:starvoice_app/features/lives/presentation/live_list_page.dart';
@@ -86,6 +87,8 @@ Future<void> _pumpListRouter(WidgetTester tester, FakeBackend backend) async {
 }
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues(<String, Object>{}));
+
   testWidgets('空态：无开播配置时展示引导文案与「去创建」按钮', (WidgetTester tester) async {
     final backend = FakeBackend();
     await _pumpListPage(tester, backend);

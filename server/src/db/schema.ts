@@ -83,6 +83,8 @@ export const users = pgTable(
     phone: varchar('phone', { length: 20 }).notNull(),
     nickname: varchar('nickname', { length: 50 }),
     avatarUrl: text('avatar_url'),
+    // 商家默认音色（火山预设 id）：新建开播配置时预填；null = 未设置，回落服务端全局默认
+    defaultVolcPresetId: varchar('default_volc_preset_id', { length: 64 }),
     // 抖音开放平台 OAuth 绑定信息
     douyinOpenId: text('douyin_open_id'),
     douyinAccessToken: text('douyin_access_token'),

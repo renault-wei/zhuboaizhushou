@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync as writeWav } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,7 +14,8 @@ import { volcTtsSynth } from '../src/services/volcTTS';
 
 // 档 A「音色接线」测试：
 // - liveVoice.presetSpeechOverrides：预设音色白名单 → 合成覆盖项（纯函数，不碰 DB）
-// - POST /api/voices/preview：鉴权 / 非法音色 / 未配 Key / 预设试听 / 克隆音色回落
+// - POST /api/voices/preview：鉴权 / 非法音色 / 未配 Key / 预设试听 / 克隆音色回落 / 缓存命中
+// - 商家默认音色：GET /api/voices/presets 生效值语义 + PUT /api/voices/default 设置与清空
 // 第三方合成全部 mock（写临时 wav），测试不真调火山，不花钱。
 
 const app: FastifyInstance = buildApp();
@@ -41,6 +42,19 @@ afterAll(async () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+// 每个用例前复位试听缓存与默认音色，保证「首次合成 / 未设置默认」的初态可复现
+beforeEach(async () => {
+  if (!dbAvailable) {
+    return;
+  }
+  await pool.query(
+    `DELETE FROM tts_audio_cache
+      WHERE user_id IN (SELECT id FROM users WHERE phone = $1)`,
+    [PHONE],
+  );
+  await pool.query('UPDATE users SET default_volc_preset_id = NULL WHERE phone = $1', [PHONE]);
 });
 
 const PHONE = '13900000021';
@@ -234,5 +248,125 @@ describe('POST /api/voices/preview（音色试听）', () => {
     expect(res.statusCode).toBe(404);
     expect(res.json().error).toBe('VOICE_NOT_FOUND');
     expect(synth).not.toHaveBeenCalled();
+  });
+});
+
+describe('商家默认音色（GET /api/voices/presets · PUT /api/voices/default）', () => {
+  it('未登录：401', async () => {
+    const read = await app.inject({ method: 'GET', url: '/api/voices/presets' });
+    expect(read.statusCode).toBe(401);
+    const write = await app.inject({
+      method: 'PUT',
+      url: '/api/voices/default',
+      payload: { presetId: DEFAULT_VOLC_PRESET_ID },
+    });
+    expect(write.statusCode).toBe(401);
+  });
+
+  dbIt('未设置默认音色：defaultPresetId = 全局默认，userDefaultPresetId = null', async () => {
+    const token = await tokenFor(PHONE);
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/voices/presets',
+      headers: bearer(token),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().defaultPresetId).toBe(DEFAULT_VOLC_PRESET_ID);
+    expect(res.json().userDefaultPresetId).toBeNull();
+  });
+
+  dbIt('设为默认：目录接口的 defaultPresetId 变为该音色（新建开播配置据此预填）', async () => {
+    const token = await tokenFor(PHONE);
+    const presetId = 'zh_male_m191_uranus_bigtts';
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/voices/default',
+      headers: bearer(token),
+      payload: { presetId },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(put.json()).toEqual({ defaultPresetId: presetId, userDefaultPresetId: presetId });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/voices/presets',
+      headers: bearer(token),
+    });
+    expect(res.json().defaultPresetId).toBe(presetId);
+    expect(res.json().userDefaultPresetId).toBe(presetId);
+
+    // 服务端为准：确实落了库
+    const row = await pool.query('SELECT default_volc_preset_id FROM users WHERE phone = $1', [
+      PHONE,
+    ]);
+    expect(row.rows[0].default_volc_preset_id).toBe(presetId);
+  });
+
+  dbIt('清空默认（presetId: null）：回落全局默认，userDefaultPresetId 归 null', async () => {
+    const token = await tokenFor(PHONE);
+    await app.inject({
+      method: 'PUT',
+      url: '/api/voices/default',
+      headers: bearer(token),
+      payload: { presetId: 'zh_male_m191_uranus_bigtts' },
+    });
+    const clear = await app.inject({
+      method: 'PUT',
+      url: '/api/voices/default',
+      headers: bearer(token),
+      payload: { presetId: null },
+    });
+    expect(clear.statusCode).toBe(200);
+    expect(clear.json()).toEqual({
+      defaultPresetId: DEFAULT_VOLC_PRESET_ID,
+      userDefaultPresetId: null,
+    });
+  });
+
+  dbIt('音色不在白名单 / 请求体结构不合法：400 VOICE_INVALID，不落库', async () => {
+    const token = await tokenFor(PHONE);
+    for (const payload of [{ presetId: 'not-a-preset' }, {}, { presetId: 123 }, { presetId: '' }]) {
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/api/voices/default',
+        headers: bearer(token),
+        payload,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('VOICE_INVALID');
+    }
+    const row = await pool.query('SELECT default_volc_preset_id FROM users WHERE phone = $1', [
+      PHONE,
+    ]);
+    expect(row.rows[0].default_volc_preset_id).toBeNull();
+  });
+});
+
+describe('试听命中 T3 缓存（同一音色同一演示句只真合成一次）', () => {
+  dbIt('首次合成落缓存、二次直接命中：不再调供应商且回命中头', async () => {
+    const token = await tokenFor(PHONE);
+    const synth = mockSynthOnce();
+    const payload = { presetId: 'zh_female_vv_uranus_bigtts' };
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/voices/preview',
+      headers: bearer(token),
+      payload,
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.headers['x-voice-preview-cache']).toBeUndefined();
+    expect(synth).toHaveBeenCalledTimes(1);
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/voices/preview',
+      headers: bearer(token),
+      payload,
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.headers['x-voice-preview-cache']).toBe('hit');
+    expect(synth).toHaveBeenCalledTimes(1);
+    expect(second.rawPayload.length).toBe(first.rawPayload.length);
   });
 });

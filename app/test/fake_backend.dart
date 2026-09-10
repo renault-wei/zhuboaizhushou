@@ -141,6 +141,7 @@ class FakeBackend implements HttpClientAdapter {
     List<Uint8List>? speechOut,
     this.failSpeechOut = false,
     this.failVoicePreview = false,
+    this.failVolcPresets = false,
     this.balanceMinutes = 120,
     this.monthlyQuotaMinutes = 600,
     this.monthlyUsedMinutes = 120,
@@ -184,6 +185,10 @@ class FakeBackend implements HttpClientAdapter {
   /// 火山预设音色目录（内存）：结构与服务端 /api/voices/presets 返回保持一致。
   final List<Map<String, dynamic>> volcPresets;
 
+  /// 商家自己设定的默认音色（内存）：镜像服务端 users.defaultVolcPresetId；
+  /// null = 没设过（GET presets 回 null，PUT /api/voices/default 写入或清空）。
+  String? userDefaultPresetId;
+
   /// 我的话术（内存）：结构与服务端 /api/scripts 返回保持一致。
   final List<Map<String, dynamic>> scripts;
   int _scriptSeq = 0;
@@ -213,6 +218,9 @@ class FakeBackend implements HttpClientAdapter {
 
   /// 模拟音色试听接口 503（测试试听失败分支）。
   bool failVoicePreview;
+
+  /// 预设音色目录接口是否不可用（模拟服务端故障，供音色库页缓存回落断言使用）
+  bool failVolcPresets;
 
   /// 试听返回的演示 wav 字节（内容不重要，测试只断言调用与播放）。
   static final Uint8List previewWavBytes = Uint8List.fromList(<int>[
@@ -415,11 +423,18 @@ class FakeBackend implements HttpClientAdapter {
       return _createLoopScript(options);
     }
     if (options.method == 'GET' && path.endsWith('/api/voices/presets')) {
+      if (failVolcPresets) {
+        return _serverError('预设音色服务暂不可用');
+      }
       return _jsonResponse({
         'presets': List<Map<String, dynamic>>.from(volcPresets),
         'groups': List<Map<String, dynamic>>.from(fakeVolcPresetGroups),
-        'defaultPresetId': fakeDefaultVolcPresetId,
+        'defaultPresetId': userDefaultPresetId ?? fakeDefaultVolcPresetId,
+        'userDefaultPresetId': userDefaultPresetId,
       });
+    }
+    if (options.method == 'PUT' && path.endsWith('/api/voices/default')) {
+      return _setDefaultVoice(options);
     }
     if (options.method == 'GET' && path.endsWith('/api/voices')) {
       return _jsonResponse(List<Map<String, dynamic>>.from(voices));
@@ -817,6 +832,25 @@ class FakeBackend implements HttpClientAdapter {
       'status': live['status'],
       'videoSourceUrl': live['videoSourceUrl'],
       'aiBadgeShown': live['aiBadgeShown'],
+    });
+  }
+
+  /// 设置 / 清空商家默认音色（镜像服务端 PUT /api/voices/default）：
+  /// presetId 为空表示清空、回落全局默认；未知预设 400，形状与服务端一致。
+  ResponseBody _setDefaultVoice(RequestOptions options) {
+    final body = _readBody(options);
+    final presetId = _liveNullable(body['presetId']);
+    if (presetId != null &&
+        volcPresets.indexWhere((preset) => preset['id'] == presetId) < 0) {
+      return _jsonResponse({
+        'error': 'VOICE_INVALID',
+        'message': '音色不可用，请选择内置预设音色',
+      }, 400);
+    }
+    userDefaultPresetId = presetId;
+    return _jsonResponse({
+      'defaultPresetId': presetId ?? fakeDefaultVolcPresetId,
+      'userDefaultPresetId': userDefaultPresetId,
     });
   }
 

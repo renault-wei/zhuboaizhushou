@@ -7,6 +7,7 @@ import 'package:starvoice_app/core/models/voice.dart';
 import 'package:starvoice_app/core/models/volc_preset.dart';
 import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/core/storage/voice_cache_store.dart';
 
 /// 开播配置表单页 UI 状态（新建与编辑共用）。
 /// 除可选项下拉数据（音色/话术/团购券）外，编辑模式还缓存初始 Live 用于预填。
@@ -86,9 +87,14 @@ class LiveFormState {
 /// 负责拉取下拉数据与初始配置、统一走 createLive / updateLive 提交。
 /// 合规说明：status / aiBadgeShown 无提交入口，角标由服务端写死 true，客户端不可篡改。
 class LiveFormController extends StateNotifier<LiveFormState> {
-  LiveFormController(this._apiClient, this.liveId) : super(const LiveFormState());
+  LiveFormController(this._apiClient, this.liveId, {VoiceCacheStore? cacheStore})
+    : _cache = cacheStore,
+      super(const LiveFormState());
 
   final ApiClient _apiClient;
+
+  /// 音色本地缓存（服务端为准，仅作失败回落）；测试可不注入
+  final VoiceCacheStore? _cache;
 
   /// provider family 参数：空串表示新建，非空为编辑的 live id
   final String liveId;
@@ -177,12 +183,24 @@ class LiveFormController extends StateNotifier<LiveFormState> {
     }
   }
 
-  /// 火山预设音色目录尽力而为：失败返回空目录（音色选择区只显示克隆音色组）。
+  /// 火山预设音色目录尽力而为：服务端成功即覆盖本地缓存；
+  /// 失败回落本地缓存快照 + 上次记住的默认音色，弱网下仍能预填默认音色；
+  /// 连缓存都没有时返回空目录（音色选择区只显示克隆音色组）。
   Future<VolcPresetCatalog> _loadPresetsBestEffort() async {
     try {
-      return await _apiClient.fetchVolcPresetCatalog();
+      final catalog = await _apiClient.fetchVolcPresetCatalog();
+      await _cache?.saveCatalog(catalog);
+      await _cache?.saveDefaultPresetId(catalog.defaultPresetId);
+      return catalog;
     } on ApiException {
-      return const VolcPresetCatalog.empty();
+      final cached = await _cache?.readCatalog();
+      if (cached == null) {
+        return const VolcPresetCatalog.empty();
+      }
+      final cachedDefault = await _cache?.readDefaultPresetId();
+      return cached.copyWith(
+        defaultPresetId: cachedDefault ?? cached.defaultPresetId,
+      );
     }
   }
 }

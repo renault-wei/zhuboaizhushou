@@ -94,7 +94,14 @@ void main() {
     // 创建成功并跳转音色库：能看到 pending 的「克隆中」卡片
     expect(find.byKey(const Key('voiceLibraryPage')), findsOneWidget);
     expect(find.byKey(const Key('voiceCard_voice-001')), findsOneWidget);
-    expect(find.text('我的声音'), findsOneWidget);
+    // 「我的声音」既是克隆音色区标题，也是该克隆音色的名字，故限定在卡片内断言。
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('voiceCard_voice-001')),
+        matching: find.text('我的声音'),
+      ),
+      findsOneWidget,
+    );
     expect(find.text('克隆中'), findsOneWidget);
     expect(backend.voices.length, 1);
     expect(backend.voices.single['name'], '我的声音');

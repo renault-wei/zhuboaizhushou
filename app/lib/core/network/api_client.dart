@@ -292,8 +292,8 @@ class ApiClient {
   }
 
   /// 火山预设音色目录（只读内置，不调火山接口）：返回 presets + 分组顺序 +
-  /// 默认音色，音色选择在「克隆音色 / 火山预设」两组之间互斥，live 落库走
-  /// volcPresetId。
+  /// 默认音色（生效值 = 商家默认 ?? 全局默认）+ 商家自己设过的默认音色，
+  /// 音色选择在「克隆音色 / 火山预设」两组之间互斥，live 落库走 volcPresetId。
   Future<VolcPresetCatalog> fetchVolcPresetCatalog() async {
     try {
       final response = await _dio.get<Map<String, dynamic>>(
@@ -308,6 +308,21 @@ class ApiClient {
   /// 火山预设音色列表（仅需音色本身的调用方用）。
   Future<List<VolcPresetVoice>> listVolcPresetVoices() async {
     return (await fetchVolcPresetCatalog()).presets;
+  }
+
+  /// 设置 / 清空商家默认音色（服务端为准）：presetId 传 null 表示清空、
+  /// 回落服务端全局默认。返回服务端生效的默认音色 id（供本地缓存对齐）。
+  /// 只影响新建开播配置的预填，不改动已有场次各自记住的音色。
+  Future<String> setDefaultVoice({String? presetId}) async {
+    try {
+      final response = await _dio.put<Map<String, dynamic>>(
+        '/api/voices/default',
+        data: <String, dynamic>{'presetId': presetId},
+      );
+      return response.data?['defaultPresetId']?.toString() ?? '';
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
   }
 
   /// 音色试听（档 A）：服务端用固定演示短句做一次真实合成，返回 wav 字节。

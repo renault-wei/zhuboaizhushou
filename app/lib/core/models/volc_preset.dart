@@ -20,6 +20,17 @@ class VolcPresetVoice {
     );
   }
 
+  /// 序列化：本机音色缓存落盘用（服务端为准，本地仅作失败回落）
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'id': id,
+      'name': name,
+      'gender': gender,
+      'group': group,
+      'recommended': recommended,
+    };
+  }
+
   /// 火山发音人 ID（TTS speaker 参数，亦为落库外键值）
   final String id;
 
@@ -47,6 +58,10 @@ class VolcPresetGroup {
       id: json['id']?.toString() ?? '',
       label: json['label']?.toString() ?? '',
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{'id': id, 'label': label};
   }
 
   final String id;
@@ -112,12 +127,14 @@ class VolcPresetCatalog {
     required this.presets,
     required this.groups,
     required this.defaultPresetId,
+    this.userDefaultPresetId,
   });
 
   const VolcPresetCatalog.empty()
     : presets = const <VolcPresetVoice>[],
       groups = const <VolcPresetGroup>[],
-      defaultPresetId = '';
+      defaultPresetId = '',
+      userDefaultPresetId = null;
 
   factory VolcPresetCatalog.fromJson(Map<String, dynamic> json) {
     final rawPresets = json['presets'];
@@ -142,15 +159,50 @@ class VolcPresetCatalog {
                 .toList()
           : const <VolcPresetGroup>[],
       defaultPresetId: json['defaultPresetId']?.toString() ?? '',
+      // 用户自己设过的默认音色：null = 没设过（服务端显式回 null 才算没设过）
+      userDefaultPresetId: json['userDefaultPresetId']?.toString(),
     );
   }
 
   final List<VolcPresetVoice> presets;
   final List<VolcPresetGroup> groups;
 
-  /// 新建场次的默认音色 id（服务端下发；空串 = 未提供）
+  /// 新建场次的默认音色 id（服务端下发的「生效值」= 用户默认 ?? 全局默认；空串 = 未提供）
   final String defaultPresetId;
+
+  /// 商家自己设定的默认音色 id（null = 没设过，音色库页据此展示「默认」标记）
+  final String? userDefaultPresetId;
 
   /// 按分组顺序整理后的音色（音色选择面板用）
   List<PresetVoiceGroup> get groupedPresets => groupVolcPresets(presets, groups);
+
+  /// 序列化：本机音色缓存落盘用
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'presets': presets.map((preset) => preset.toJson()).toList(),
+      'groups': groups.map((group) => group.toJson()).toList(),
+      'defaultPresetId': defaultPresetId,
+      'userDefaultPresetId': userDefaultPresetId,
+    };
+  }
+
+  /// 目录是否为空（无任何音色）：缓存回落时用于判断是否有可用数据
+  bool get isEmpty => presets.isEmpty;
+
+  VolcPresetCatalog copyWith({
+    List<VolcPresetVoice>? presets,
+    List<VolcPresetGroup>? groups,
+    String? defaultPresetId,
+    String? userDefaultPresetId,
+    bool clearUserDefault = false,
+  }) {
+    return VolcPresetCatalog(
+      presets: presets ?? this.presets,
+      groups: groups ?? this.groups,
+      defaultPresetId: defaultPresetId ?? this.defaultPresetId,
+      userDefaultPresetId: clearUserDefault
+          ? null
+          : userDefaultPresetId ?? this.userDefaultPresetId,
+    );
+  }
 }

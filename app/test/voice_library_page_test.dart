@@ -3,7 +3,10 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:starvoice_app/core/models/volc_preset.dart';
+import 'package:starvoice_app/core/storage/voice_cache_store.dart';
 import 'package:starvoice_app/features/assistant_speaker/application/speech_out_player.dart';
 import 'package:starvoice_app/features/voices/presentation/voice_library_page.dart';
 import 'package:starvoice_app/providers.dart';
@@ -47,7 +50,15 @@ Future<void> _pumpVoiceLibrary(
   WidgetTester tester,
   FakeBackend backend, {
   SpeechOutPlayer? player,
+  VolcPresetCatalog? seedCatalog,
 }) async {
+  SharedPreferences.setMockInitialValues(<String, Object>{});
+  if (seedCatalog != null) {
+    // 用真实缓存存储预置快照，覆盖「服务端不可用回落本机缓存」链路
+    final store = VoiceCacheStore();
+    await store.saveCatalog(seedCatalog);
+    await store.saveDefaultPresetId(seedCatalog.defaultPresetId);
+  }
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
@@ -60,16 +71,109 @@ Future<void> _pumpVoiceLibrary(
   await tester.pumpAndSettle();
 }
 
+/// 点按指定 Key：先滚动到可视区（页面较长时按钮可能在屏幕外）再点按。
+Future<void> _tapKey(WidgetTester tester, String key) async {
+  final finder = find.byKey(Key(key));
+  await tester.ensureVisible(finder);
+  await tester.pumpAndSettle();
+  await tester.tap(finder);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('空态：无音色时提示去录制并展示引导按钮', (WidgetTester tester) async {
     final backend = FakeBackend();
     await _pumpVoiceLibrary(tester, backend);
 
     expect(find.byKey(const Key('voiceLibraryPage')), findsOneWidget);
-    expect(find.text('我的音色'), findsOneWidget);
-    expect(find.text('还没有音色，去录制你的第一段声音吧'), findsOneWidget);
+    expect(find.text('音色库'), findsOneWidget);
+    expect(find.text('还没有克隆音色，去录制你的第一段声音吧'), findsOneWidget);
     expect(find.byKey(const Key('voiceLibraryGoRecordButton')), findsOneWidget);
     expect(find.byKey(const Key('voiceLibraryRefreshButton')), findsOneWidget);
+  });
+
+  testWidgets('预设音色：分组默认折叠，展开后可试听、可设为默认并刷新默认卡', (
+    WidgetTester tester,
+  ) async {
+    final backend = FakeBackend();
+    final player = _RecordingSpeechOutPlayer();
+    await _pumpVoiceLibrary(tester, backend, player: player);
+
+    // 顶部默认卡先展示服务端生效默认音色（内置目录默认 Vivi 2.0）
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('voiceLibraryDefaultName')))
+          .data,
+      'Vivi 2.0',
+    );
+
+    // 预设区按分组展示，默认折叠：组头可见、组内行不可见
+    expect(find.byKey(const Key('presetVoiceSection')), findsOneWidget);
+    expect(find.byKey(const Key('presetGroup_broadcast')), findsOneWidget);
+    expect(
+      find.byKey(const Key('presetVoiceRow_zh_male_m191_uranus_bigtts')),
+      findsNothing,
+    );
+
+    // 展开分组：组内音色行与试听 / 设为默认按钮出现
+    await _tapKey(tester, 'presetGroupHeader_broadcast');
+    expect(
+      find.byKey(const Key('presetVoiceRow_zh_male_m191_uranus_bigtts')),
+      findsOneWidget,
+    );
+
+    // 试听：走服务端合成接口并交由本机播放器播出
+    await _tapKey(tester, 'presetListen_zh_male_m191_uranus_bigtts');
+    expect(player.played, hasLength(1));
+
+    // 设为默认：服务端落库 + 本地「默认」标记 + 顶部默认卡切换为新音色
+    await _tapKey(tester, 'presetSetDefault_zh_male_m191_uranus_bigtts');
+    expect(backend.userDefaultPresetId, 'zh_male_m191_uranus_bigtts');
+    expect(
+      find.byKey(const Key('presetDefaultMark_zh_male_m191_uranus_bigtts')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('voiceLibraryDefaultName')))
+          .data,
+      '云舟 2.0',
+    );
+    // 等提示条自动消失，避免测试结束时仍有未完成定时器
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('预设音色：服务端不可用时回落本机缓存并如实标注', (WidgetTester tester) async {
+    final backend = FakeBackend()..failVolcPresets = true;
+    await _pumpVoiceLibrary(
+      tester,
+      backend,
+      seedCatalog: const VolcPresetCatalog(
+        presets: <VolcPresetVoice>[
+          VolcPresetVoice(
+            id: 'zh_female_vv_uranus_bigtts',
+            name: 'Vivi 2.0',
+            gender: 'female',
+            group: 'broadcast',
+            recommended: true,
+          ),
+        ],
+        groups: <VolcPresetGroup>[
+          VolcPresetGroup(id: 'broadcast', label: '带货口播'),
+        ],
+        defaultPresetId: 'zh_female_vv_uranus_bigtts',
+      ),
+    );
+
+    // 如实标注当前展示的是本机缓存，且缓存分组仍可展开查看音色
+    expect(find.byKey(const Key('presetCatalogCacheBanner')), findsOneWidget);
+    expect(find.byKey(const Key('presetGroup_broadcast')), findsOneWidget);
+    await _tapKey(tester, 'presetGroupHeader_broadcast');
+    expect(
+      find.byKey(const Key('presetVoiceRow_zh_female_vv_uranus_bigtts')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('列表：渲染音色名称、状态徽章与时长', (WidgetTester tester) async {
@@ -189,7 +293,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('voiceCard_v-del')), findsNothing);
-    expect(find.text('还没有音色，去录制你的第一段声音吧'), findsOneWidget);
+    expect(find.text('还没有克隆音色，去录制你的第一段声音吧'), findsOneWidget);
     expect(backend.voices, isEmpty);
   });
 
@@ -207,6 +311,6 @@ void main() {
     await tester.tap(find.byKey(const Key('voiceLibraryRefreshButton')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('voiceCard_v-del')), findsNothing);
-    expect(find.text('还没有音色，去录制你的第一段声音吧'), findsOneWidget);
+    expect(find.text('还没有克隆音色，去录制你的第一段声音吧'), findsOneWidget);
   });
 }

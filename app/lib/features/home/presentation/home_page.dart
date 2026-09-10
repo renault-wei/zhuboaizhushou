@@ -794,8 +794,8 @@ class _CloneVoiceCardState extends ConsumerState<_CloneVoiceCard> {
   }
 }
 
-/// 「我的音色」入口卡片：位于「克隆我的声音」卡片下方。
-/// 展示音色数量（拉取列表长度），点击进入音色库页 /voices。
+/// 「音色库」入口卡片：位于「克隆我的声音」卡片下方。
+/// 展示克隆音色数量与预设音色数量，点击进入音色库页 /voices（列表模式）。
 class _VoiceLibraryCard extends ConsumerStatefulWidget {
   const _VoiceLibraryCard();
 
@@ -808,6 +808,9 @@ class _VoiceLibraryCardState extends ConsumerState<_VoiceLibraryCard> {
   bool _busy = false;
   String? _error;
   int _count = 0;
+
+  /// 预设音色条数（服务端目录；拿不到时按 0 展示，不影响入口可用）
+  int _presetCount = 0;
 
   @override
   void initState() {
@@ -825,11 +828,21 @@ class _VoiceLibraryCardState extends ConsumerState<_VoiceLibraryCard> {
     }
     try {
       final voices = await ref.read(apiClientProvider).listVoices();
+      var presetCount = 0;
+      try {
+        final catalog = await ref
+            .read(apiClientProvider)
+            .fetchVolcPresetCatalog();
+        presetCount = catalog.presets.length;
+      } on ApiException {
+        // 预设目录为只读内置目录，拉取失败不阻塞入口：退化成只显示克隆音色数
+      }
       if (!mounted) {
         return;
       }
       setState(() {
         _count = voices.length;
+        _presetCount = presetCount;
         _loading = false;
       });
     } on ApiException catch (error) {
@@ -863,7 +876,10 @@ class _VoiceLibraryCardState extends ConsumerState<_VoiceLibraryCard> {
 
   @override
   Widget build(BuildContext context) {
-    final hint = _error ?? (_loading ? '正在同步音色…' : '已有 $_count 个音色，可查看克隆进度或删除');
+    final hint = _error ??
+        (_loading
+            ? '正在同步音色…'
+            : '已有 $_count 个克隆音色，另有 $_presetCount 个预设音色可选');
     return Card(
       key: const Key('voiceLibraryCard'),
       margin: EdgeInsets.zero,
@@ -877,12 +893,14 @@ class _VoiceLibraryCardState extends ConsumerState<_VoiceLibraryCard> {
                 const Icon(Icons.record_voice_over_outlined, size: 20),
                 const SizedBox(width: 8),
                 const Text(
-                  '我的音色',
+                  '音色库',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
                 const Spacer(),
                 Text(
-                  _loading && _error == null ? '同步中' : '$_count 个',
+                  _loading && _error == null
+                      ? '同步中'
+                      : '$_count 个声音 · $_presetCount 个预设',
                   key: const Key('voiceLibraryCountLabel'),
                   style: TextStyle(
                     fontSize: 12,
@@ -915,7 +933,7 @@ class _VoiceLibraryCardState extends ConsumerState<_VoiceLibraryCard> {
   }
 }
 
-/// 「话术生成」入口卡片：位于「我的音色」卡片下方。
+/// 「话术生成」入口卡片：位于「音色库」卡片下方。
 /// 展示已有话术数量，点击进入话术生成页 /scripts。
 class _ScriptLibraryCard extends ConsumerStatefulWidget {
   const _ScriptLibraryCard();
