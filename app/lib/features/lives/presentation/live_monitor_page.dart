@@ -12,6 +12,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -22,6 +23,7 @@ import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/core/theme/app_colors.dart';
 import 'package:starvoice_app/core/theme/app_theme.dart';
 import 'package:starvoice_app/features/assistant_speaker/application/assistant_speaker_controller.dart';
+import 'package:starvoice_app/features/assistant_speaker/presentation/keep_alive_guide_dialog.dart';
 import 'package:starvoice_app/providers.dart';
 
 /// 现场直播工作台：真人出镜 + 后台 AI 语音主播的直播间控制台，
@@ -45,6 +47,9 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
 
   /// 「助播机出声」常开偏好键：直播进入时按该记忆自动恢复出声。
   static const _speakerAlwaysOnKey = 'assistant_speaker_always_on';
+
+  /// 后台保活引导是否已展示过：仅首次启用出声时弹一次，不重复打扰。
+  static const _keepAliveGuidedKey = 'assistant_keep_alive_guided';
 
   Timer? _monitorTimer;
   Timer? _danmakuTimer;
@@ -582,7 +587,8 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
           const Text(
             '启用后本机轮询播报队列并出声，经音频转接线送入开播手机；'
             '需服务端 LIVE_SPEAKER_OUTPUT=phone。开启后记忆为常开，'
-            '下次进入直播将自动启用。',
+            '下次进入直播将自动启用；首次开启请按引导放行后台，'
+            '避免切后台 / 锁屏时被系统冻结而中断出声。',
             style: TextStyle(
               fontSize: 12,
               color: AppColors.nightTextDim,
@@ -629,6 +635,8 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                   );
                   if (value) {
                     notifier.start();
+                    // 首次启用出声时引导一次后台保活；不阻断开播
+                    await _maybeShowKeepAliveGuide();
                   } else {
                     notifier.stop();
                   }
@@ -639,6 +647,34 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
         ],
       ),
     );
+  }
+
+  /// 首次启用助播出声时弹一次后台保活引导：透明玻璃卡片告知「切后台 /
+  /// 锁屏可能被系统冻结导致出声中断」，并给一键去系统设置放行的入口。
+  /// 仅 Android 有效（电池优化设置是 Android 概念）；仅引导一次、不阻断。
+  Future<void> _maybeShowKeepAliveGuide() async {
+    if (!mounted || defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted || (prefs.getBool(_keepAliveGuidedKey) ?? false)) {
+        return;
+      }
+      await prefs.setBool(_keepAliveGuidedKey, true);
+      final bridge = ref.read(keepAliveBridgeProvider);
+      final exempt = await bridge.isIgnoringBatteryOptimizations();
+      if (!mounted) {
+        return;
+      }
+      await showKeepAliveGuideDialog(
+        context,
+        batteryExempt: exempt,
+        onOpenSettings: bridge.openBatteryOptimizationSettings,
+      );
+    } catch (_) {
+      // 引导只是锦上添花：原生桥不可用 / 读写偏好失败时静默跳过，不阻断开播
+    }
   }
 
   /// 出声端状态文案：未启用 / 监听中 / 播报中 / 连接异常。
