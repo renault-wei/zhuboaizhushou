@@ -1,5 +1,6 @@
 import { readFile, unlink } from 'node:fs/promises';
 import { createVolcTtsSynth } from '../src/services/volcTTS';
+import { VOLC_PRESET_VOICES } from '../src/services/volcPresets';
 
 // 火山预制音色目录静默探测：
 // - 对一批候选 speaker ID 各合成一句短口播，验证在当前账号 / seed-tts-2.0 资源下是否可用；
@@ -9,25 +10,12 @@ import { createVolcTtsSynth } from '../src/services/volcTTS';
 const PROBE_TEXT =
   '欢迎来到我们直播间，今天给大家带来一份双人火锅福利套餐，只要九十九元，喜欢的朋友别错过。';
 
-/** 候选火山 2.0 通用音色（推测命名：行星系列，女 vv_ / 男 m19x_） */
-const CANDIDATE_SPEAKERS = [
-  'zh_female_vv_uranus_bigtts',
-  'zh_male_m191_uranus_bigtts',
-  'zh_female_vv_mars_bigtts',
-  'zh_male_m192_mars_bigtts',
-  'zh_female_vv_jupiter_bigtts',
-  'zh_male_m193_jupiter_bigtts',
-  'zh_female_vv_earth_bigtts',
-  'zh_male_m194_earth_bigtts',
-  'zh_female_vv_venus_bigtts',
-  'zh_male_m195_venus_bigtts',
-  'zh_female_vv_saturn_bigtts',
-  'zh_male_m196_saturn_bigtts',
-  'zh_female_vv_neptune_bigtts',
-  'zh_male_m197_neptune_bigtts',
-  'zh_female_vv_mercury_bigtts',
-  'zh_male_m198_mercury_bigtts',
-] as const;
+/**
+ * 候选火山音色：直接取内置白名单（src/services/volcPresets.ts），保证探测范围与线上一致。
+ * 命名规则是 zh_{gender}_{音色名}_uranus_bigtts（豆包语音合成模型 2.0），并非行星系列轮换；
+ * 早期按 mars/jupiter/earth 猜测的一批 ID 全部不匹配，已废弃。
+ */
+const CANDIDATE_SPEAKERS = VOLC_PRESET_VOICES.map((preset) => preset.id);
 
 /** 语速方向探针：只对已确认可用的音色做，避免无效调用 */
 const RATE_PROBE_SPEAKER = 'zh_female_vv_uranus_bigtts';

@@ -33,6 +33,7 @@
 > - 更新时间：2026-09-10（「我的」页补齐批次 — ProfilePage 收敛「账号与协议 / 帮助与支持」两组：新增钱包时长摘要卡（预充余额 + 本月免费剩余、进 /wallet 返回自刷新、showCharge 控制充值徽标显隐）+ 新增隐私政策 / 用户服务协议 / AI 语音直播说明 / 官方客服 / 关于 5 个静态子页与顶层路由 + app_meta 收敛版本展示；flutter analyze 0 issue、App 全量 141/141，见 §6 第 47 条）
 
 > - 更新时间：2026-09-10（微信收款码接入支付批次 — 收银台扫码弹窗改为展示内置公司微信收款码（真 http(s) 地址仍走服务端下发），充值/到账文案收敛为「微信扫一扫 + 运营人工确权」；flutter analyze 0 issue、App 全量 141/141，真机已装待扫码验收，见 §6 第 48 条）
+> - 更新时间：2026-09-10（火山音色库扩容批次 — 预设白名单 2 → 44 条（女 24 / 男 20），修正命名规则为 zh_{gender}_{音色名}_uranus_bigtts，逐条真合成复测 42/44 通过（3 条 1.0 系列 _moon_bigtts 因资源 ID 不匹配剔除）；App 无需改动（预设目录动态拉取）；云端已重建重启并冒烟，见 §6 第 51 条）
 
 ## 0. 当前大局
 
@@ -42,10 +43,10 @@
 | 服务端测试 | ✅ 321 / 321（34 个测试文件；全量并行本机偶发 PG 文件锁，用 `npx vitest run --no-file-parallelism` 复跑稳定） |
 | 前端静态检查 | ✅ `flutter analyze` No issues found（Flutter 3.47.2 @ `E:\dev\flutter`） |
 | 管理后台 | ✅ `npm run build` / `npm run lint` 0 issue（React + AntD，公司端任务台 M1~M4 页面全接通） |
-| 最近提交 | T3 云端部署批次 + App 0.3.0+85 云版包（见 §6 第 46 条）；T3 TTS 分句缓存服务端首查 + 计量埋点（见 §6 第 45 条）；云端出声修复部署 + 真机出声闭环批次（见 §6 第 43 条）；UI v2 三 Tab 改造批次（见 §6 第 42 条）；首页「AI 语音开播」主入口批次（8e245fb，见 §6 第 41 条）；云版 v0.3.0+83 真机安装批次（b210219，见 §6 第 40 条）；火山预设音色 + 纯 AI 语音批次：server 159e906（prepare 解除实景强制 + volc_preset_id）+ app f6dca27（音色两组 UI），见 §6 第 39 条；云端部署基线 2465584 见 §6 第 38 条；G7 示例台本×3（ba4055e，见 §6 第 37 条） |
+| 最近提交 | 火山音色库扩容批次：预设白名单 2→44 且命名规则纠正（见 §6 第 51 条）；T3 云端部署批次 + App 0.3.0+85 云版包（见 §6 第 46 条）；T3 TTS 分句缓存服务端首查 + 计量埋点（见 §6 第 45 条）；云端出声修复部署 + 真机出声闭环批次（见 §6 第 43 条）；UI v2 三 Tab 改造批次（见 §6 第 42 条）；首页「AI 语音开播」主入口批次（8e245fb，见 §6 第 41 条）；云版 v0.3.0+83 真机安装批次（b210219，见 §6 第 40 条）；火山预设音色 + 纯 AI 语音批次：server 159e906（prepare 解除实景强制 + volc_preset_id）+ app f6dca27（音色两组 UI），见 §6 第 39 条；云端部署基线 2465584 见 §6 第 38 条；G7 示例台本×3（ba4055e，见 §6 第 37 条） |
 | 主推进路线 | v0.2 G 清单（形态已定 = 画面真人出镜 + 后台 AI 语音主播，取消双模式 A/B；托管线 G1→G2 暂停待抖音 key） |
 | 产品定位（2026-09-08 定稿） | 平台无关 AI 语音助播：真人 / 实景开播 + 后台 AI 语音；只出声不推流；弹幕 = 外挂适配（口径见 docs/PLATFORM-NEUTRAL-VOICE.md） |
-| 当前推进 | 云端 remoteOutput 修复已部署（Linux 云端 LIVE_SPEAKER_OUTPUT=phone 可入远程出声队列），真机出声闭环达成 — 工作台「助播机出声」开关轮询 /api/out/speech/next 已真实播出 AI 语音（用户听声确认）；首页「AI 语音开播」主入口已打通（首页直达 /lives 列表、空态引导新建、就绪直达工作台）；火山预设音色 + 纯 AI 语音就绪落地并同步云端（lives 增 volc_preset_id、presets 只读目录、prepare 无视频直接 ready，ECS 113.44.226.189 已迁移重启 /health 200）；公司端任务台 M1~M7 全落地，商业闭环只剩真实收款（M8，待支付凭证）；真机出声复验、贴片/素材包与演示脚本、UI-3 真机视觉走查待手机线批次；弹幕 = 外挂适配口径（docs/PLATFORM-NEUTRAL-VOICE.md）；UI v2 三 Tab（首页/直播/我的）+「我的」页落地、竞品「直播/个人信息」UI 调研已归档 docs/ui-v2-research.md（见 §6 第 42 条）；T3 分句缓存服务端基础设施已落地并随本批同步部署云端（tts_audio_cache + ttsCache/ttsUsage/volcTTS 覆盖层，liveSpeaker 旁路与预热接线属 T4 待办，见 §6 第 45/46 条） |
+| 当前推进 | 火山音色库已扩容至 44 条（女 24 / 男 20）并随本批同步云端（白名单纠正为 zh_{gender}_{音色名}_uranus_bigtts，App 动态拉取零改动，重启即生效；1.0 方言系列 _moon_bigtts 需另配资源 ID 暂不收录，见 §6 第 51 条）；云端 remoteOutput 修复已部署（Linux 云端 LIVE_SPEAKER_OUTPUT=phone 可入远程出声队列），真机出声闭环达成 — 工作台「助播机出声」开关轮询 /api/out/speech/next 已真实播出 AI 语音（用户听声确认）；首页「AI 语音开播」主入口已打通（首页直达 /lives 列表、空态引导新建、就绪直达工作台）；火山预设音色 + 纯 AI 语音就绪落地并同步云端（lives 增 volc_preset_id、presets 只读目录、prepare 无视频直接 ready，ECS 113.44.226.189 已迁移重启 /health 200）；公司端任务台 M1~M7 全落地，商业闭环只剩真实收款（M8，待支付凭证）；真机出声复验、贴片/素材包与演示脚本、UI-3 真机视觉走查待手机线批次；弹幕 = 外挂适配口径（docs/PLATFORM-NEUTRAL-VOICE.md）；UI v2 三 Tab（首页/直播/我的）+「我的」页落地、竞品「直播/个人信息」UI 调研已归档 docs/ui-v2-research.md（见 §6 第 42 条）；T3 分句缓存服务端基础设施已落地并随本批同步部署云端（tts_audio_cache + ttsCache/ttsUsage/volcTTS 覆盖层，liveSpeaker 旁路与预热接线属 T4 待办，见 §6 第 45/46 条） |
 
 ## 1. 能力基线（✅ 已完成，含旧仓库导入部分）
 
@@ -212,3 +213,5 @@
 49. ✅ 助播机出声「常开」记忆（App 批，2026-09-10，Q5）：偏好持久化键 `assistant_speaker_always_on`（SharedPreferences）；现场直播工作台进入即懒加载偏好，场次为直播中（live）时自动拉起助播机出声（无需每次手动开启），手动开关切换写回偏好；助播机控制器 `stop()` 补 `_disposed` 防护、`dispose()` 先停后标记；出声卡片卸载改 `scheduleMicrotask` 异步收口规避 defunct-element 断言。live_monitor_test 新增 Q5 用例（偏好预置 true → 进入 live 监控页自动开启出声，状态「监听中」/开关值 true）并补 SharedPreferences mock 参数；flutter analyze 0 issue、live_monitor 9/9、controller 与 live_list 套件 15/15 通过。
 
 50. ✅ 真机验证（0.3.0+86，App 批，2026-09-10）：华为 ELS-AN10（GMG0220616000176）adb 覆盖安装 versionCode 85→86 成功，逐项走查 —— ① 首页登录态 / 三 Tab / 声音克隆区渲染正常；② 直播 Tab 已结束场次「再来一场」可用（Q2）；③ 编辑开播配置无「实景视频」项、纯 AI 语音「纯 AI 就绪开播」预检直接就绪（Q3）；④ 进入监控 → 开始直播后出现「助播机出声（手机线）」卡，开启为「监听中」，退出列表再进监控自动恢复开启 = 常开记忆生效（Q5）；⑤ 结束直播弹出「本场结算 共结算 1 分钟 · 免费时长抵扣 1 分钟」，免费配额由 20000 分钟扣至 19984（按分钟计费链路）；⑥ 「我的」页余额 / 免费剩余 / 协议子页齐全，关于与页脚版本 0.3.0+86；⑦ 收银台「生成收款码」弹窗正确渲染内置微信收款码（第 48 条待人工验收项闭环）。测试场次与副本已清理，账号回到验证前状态。本批仅版本号 bump（pubspec.yaml / app_meta.dart，+85→+86），未动业务代码；云版 APK 已重出并归档 outputs/starvoice-app-release-cloud.apk。
+
+51. ✅ 火山音色库扩容（服务端批，2026-09-10）：排查「音色只有 2 个」根因 = 白名单过窄 + voice_type 命名猜错（早期按 mars/jupiter/earth 行星轮换猜测，实测全部不匹配）。核实真实命名规则为 zh_{gender}_{音色名}_uranus_bigtts（豆包语音合成模型 2.0，与现有资源 ID seed-tts-2.0 匹配），ICL_ 前缀为客服 / 营销线音色。server/src/services/volcPresets.ts 白名单 2 → 44 条（female 24 / male 20，按「通用带货 / 讲解解说 / 客服营销」分组注释）；server/scripts/volc-voice-catalog-probe.ts 候选清单改为直接引用 VOLC_PRESET_VOICES，保证探测范围与线上白名单永久一致。全量实合成复测 45 条候选 → 42 可用，3 条失败为 1.0 系列（_moon_bigtts：呆萌川妹 / 豫州子轩 / 广州德哥）报 55000000 resource ID is mismatched，需另配 1.0 资源 ID，本目录暂不收录。App 端零改动：voice_library_page / live_form_page 均从 GET /api/voices/presets 动态拉取，服务重启后自动生效；音色不单独收费（按合成字符计费），故音色数量不影响成本。验证：本机 typecheck / lint 0 error；vitest 30 passed | 4 skipped（本机 PostgreSQL 未启动，DB 用例静默 skip，需起 PG 方为全绿）。云端 ECS 113.44.226.189 已同步两文件 + npm run build 0 error + restart，dist 核实 count 44（女 24 / 男 20）、isVolcPresetId 校验通过，真实合成冒烟（zh_male_taocheng_uranus_bigtts）出 wav 正常；/health 200。
