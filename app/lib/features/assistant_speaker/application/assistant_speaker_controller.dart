@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
+import 'package:starvoice_app/core/platform/keep_alive_bridge.dart';
 
 import 'speech_out_player.dart';
 
@@ -63,16 +64,23 @@ class AssistantSpeakerState {
 /// 取到 wav 就交给本机播放器出声（一条播完再取下一条，天然串行）。
 /// 队列拉空（204）即回到「监听中」；失败不清除队列（交付即删、无重试），
 /// 只记录错误并等下一个轮询周期自愈。停用 = 停表 + 打断播放 + 回到 idle。
+///
+/// 同时联动「保活」（M9 手机线）：启用出声时拉起 Android 前台服务，
+/// 停用时释放，避免切后台 / 锁屏后轮询与放音被系统冻结；保活失败静默降级，
+/// 不影响前台正常播报。
 class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   AssistantSpeakerController(
     this._api,
     this._player, [
     this._pollInterval = const Duration(milliseconds: 1000),
-  ]) : super(AssistantSpeakerState.idle());
+    KeepAliveBridge? keepAlive,
+  ]) : _keepAlive = keepAlive ?? const NoopKeepAliveBridge(),
+       super(AssistantSpeakerState.idle());
 
   final ApiClient _api;
   final SpeechOutPlayer _player;
   final Duration _pollInterval;
+  final KeepAliveBridge _keepAlive;
 
   Timer? _timer;
 
@@ -93,6 +101,7 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
       playedCount: state.playedCount,
     );
     _timer = Timer.periodic(_pollInterval, (_) => unawaited(pollOnce()));
+    unawaited(_syncKeepAlive(true));
     unawaited(pollOnce());
   }
 
@@ -108,6 +117,24 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     _timer = null;
     state = AssistantSpeakerState.idle();
     unawaited(_player.stop());
+    unawaited(_syncKeepAlive(false));
+  }
+
+  /// 保活联动：启用出声时拉起前台服务，停用时释放。
+  /// 失败只吞掉 —— 保活最多决定「切后台会不会被冻结」，不应影响前台出声。
+  Future<void> _syncKeepAlive(bool enabled) async {
+    try {
+      if (enabled) {
+        await _keepAlive.start(
+          title: 'AI 语音助播运行中',
+          content: '正在轮询播报队列并出声，请勿清理后台',
+        );
+      } else {
+        await _keepAlive.stop();
+      }
+    } catch (_) {
+      // 原生桥不可用（非 Android / 通道缺失）时静默降级
+    }
   }
 
   /// 执行一轮「拉取 → 播放」：空队列等待、有播报则串行播完再等下一条。

@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:starvoice_app/core/network/api_client.dart';
+import 'package:starvoice_app/core/platform/keep_alive_bridge.dart';
 import 'package:starvoice_app/features/assistant_speaker/application/assistant_speaker_controller.dart';
 import 'package:starvoice_app/features/assistant_speaker/application/speech_out_player.dart';
 
@@ -56,6 +57,37 @@ class _FakeSpeechOutPlayer implements SpeechOutPlayer {
 
 Uint8List _wavBytes(int seed) {
   return Uint8List.fromList(List<int>.generate(16, (i) => (seed + i) & 0xff));
+}
+
+/// 测试用保活桥：记录启停次数，可模拟原生抛错验证「保活失败不影响出声」。
+class _FakeKeepAliveBridge implements KeepAliveBridge {
+  int startCount = 0;
+  int stopCount = 0;
+  int settingsOpenCount = 0;
+
+  /// true 时 start 抛错，模拟原生通道不可用。
+  bool failStart = false;
+
+  @override
+  Future<void> start({String? title, String? content}) async {
+    startCount += 1;
+    if (failStart) {
+      throw StateError('原生保活桥不可用');
+    }
+  }
+
+  @override
+  Future<void> stop() async {
+    stopCount += 1;
+  }
+
+  @override
+  Future<bool> isIgnoringBatteryOptimizations() async => true;
+
+  @override
+  Future<void> openBatteryOptimizationSettings() async {
+    settingsOpenCount += 1;
+  }
 }
 
 /// 轮询间隔拉大到一天：让 start 的即时拉取可控，测试期间不会自然再跳。
@@ -176,6 +208,47 @@ void main() {
     expect(player.played, hasLength(1));
     expect(controller.state.playedCount, 1);
     expect(controller.state.status, AssistantSpeakerStatus.waiting);
+    expect(controller.state.lastError, isNull);
+    controller.dispose();
+  });
+
+  test('启用出声拉起保活；停用释放（M9 手机线）', () async {
+    final bridge = _FakeKeepAliveBridge();
+    final controller = AssistantSpeakerController(
+      ApiClient(buildMockDio(FakeBackend())),
+      _FakeSpeechOutPlayer(),
+      const Duration(days: 1),
+      bridge,
+    );
+
+    controller.start();
+    await _waitUntil(() => bridge.startCount == 1);
+    expect(controller.state.enabled, isTrue);
+    // 停用前不应释放
+    expect(bridge.stopCount, 0);
+
+    controller.stop();
+    await _waitUntil(() => bridge.stopCount == 1);
+    expect(controller.state.enabled, isFalse);
+    controller.dispose();
+  });
+
+  test('保活桥 start 抛错不影响出声链路（静默降级）', () async {
+    final bridge = _FakeKeepAliveBridge()..failStart = true;
+    final player = _FakeSpeechOutPlayer();
+    final backend = FakeBackend(speechOut: <Uint8List>[_wavBytes(9)]);
+    final controller = AssistantSpeakerController(
+      ApiClient(buildMockDio(backend)),
+      player,
+      const Duration(days: 1),
+      bridge,
+    );
+
+    controller.start();
+    await _waitUntil(() => controller.state.playedCount == 1);
+    expect(bridge.startCount, 1);
+    expect(controller.state.enabled, isTrue);
+    expect(player.played, hasLength(1));
     expect(controller.state.lastError, isNull);
     controller.dispose();
   });

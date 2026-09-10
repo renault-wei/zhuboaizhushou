@@ -3,6 +3,11 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- 声音克隆录音：T4 需要麦克风权限 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- 助播保活（M9 手机线）：出声期间以前台服务固定进程优先级，避免切后台/锁屏被冻结 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- MVP 联调使用 http://10.0.2.2:3000，需允许明文流量；上线切 https 后可移除 -->
     <application
         android:label="starvoice_app"
@@ -33,6 +38,13 @@
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <!-- 助播保活前台服务：mediaPlayback 类型 + 常驻通知，开播期间保持出声不断 -->
+        <service
+            android:name=".AssistantKeepAliveService"
+            android:enabled="true"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="mediaPlayback"/>
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />

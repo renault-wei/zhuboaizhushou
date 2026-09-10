@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:starvoice_app/core/config/api_config.dart';
 import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/core/network/auth_interceptor.dart';
+import 'package:starvoice_app/core/platform/keep_alive_bridge.dart';
 import 'package:starvoice_app/core/storage/session_storage.dart';
 import 'package:starvoice_app/core/storage/voice_cache_store.dart';
 import 'package:starvoice_app/features/auth/application/auth_controller.dart';
@@ -94,6 +95,13 @@ final speechOutPlayerProvider = Provider<SpeechOutPlayer>((ref) {
 /// 助播机出声端控制器（P1 手机线）：工作台启用后轮询远程出声队列并本机播放。
 /// 全局单例（非 autoDispose）：直播中需持续出声，不随某个页面销毁而停；
 /// 停用与页面收尾由调用方（工作台）负责调 stop。
+///
+/// 保活桥（M9 手机线）：启用出声时拉起 Android 前台服务，避免切后台 /
+/// 锁屏后轮询与放音被系统冻结；非 Android 平台走空实现。
+final keepAliveBridgeProvider = Provider<KeepAliveBridge>((ref) {
+  return createDefaultKeepAliveBridge();
+});
+
 final assistantSpeakerControllerProvider =
     StateNotifierProvider<AssistantSpeakerController, AssistantSpeakerState>((
       ref,
@@ -101,6 +109,8 @@ final assistantSpeakerControllerProvider =
       return AssistantSpeakerController(
         ref.watch(apiClientProvider),
         ref.watch(speechOutPlayerProvider),
+        const Duration(milliseconds: 1000),
+        ref.watch(keepAliveBridgeProvider),
       );
     });
 
