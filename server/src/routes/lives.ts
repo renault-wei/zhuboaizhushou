@@ -18,6 +18,7 @@ import { endLive, getLiveMonitor, listDanmaku, startLive } from '../services/liv
 import { settleLiveSession } from '../services/liveBilling';
 import { danmakuGateway, DanmakuError } from '../services/danmaku';
 import { loopCaster } from '../services/loopCaster';
+import { atmosphereScheduler } from '../services/atmosphereScheduler';
 
 // 直播状态全集：用于列表 ?status= 过滤校验（与服务端 live_status 枚举一致）
 const LIVE_STATUSES: LiveStatus[] = ['idle', 'processing', 'ready', 'live', 'ended', 'failed'];
@@ -404,6 +405,8 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       }
       // M5：开播即启动循环台本 Runner（未绑定台本 → 快照为空自动退出，只回弹幕）
       loopCaster.start(live.id);
+      // M10：开播即读一次氛围语快照（空档插播取词用；无氛围语 → 空快照，不影响循环）
+      atmosphereScheduler.start(live.id);
       return { live };
     } catch (err) {
       if (err instanceof LiveError) {
@@ -423,6 +426,8 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       }
       // M5：结束直播 = 循环播报唯一停止入口（正在播的当前句播完即止，不打断真人接管）
       loopCaster.stop(live.id);
+      // M10：结束直播同时清掉氛围语快照与频控记账
+      atmosphereScheduler.stop(live.id);
       // v0.3 结算接线：结束即按已播整分钟欠费式结算（先余额后免费分钟，缺额仅告警不阻断）。
       // billing 随响应回给客户端：工作台结束弹层展示「本场结算时长与抵扣明细」。
       let billing: Awaited<ReturnType<typeof settleLiveSession>> | null = null;

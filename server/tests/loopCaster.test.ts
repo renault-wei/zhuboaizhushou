@@ -306,3 +306,141 @@ describe('M4 loopCaster 循环台本播出引擎（§8.2/§8.3）', () => {
     expect(caster.status(LIVE_ID)).toBeNull();
   });
 });
+
+describe('M10-A3 loopCaster 空档插播氛围语', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('命中氛围语：本句播完先插一条再走间隔，实际出声后按类别记账', async () => {
+    const events: string[] = [];
+    const marks: string[] = [];
+    let stopRequested = false;
+    const caster = createLoopCaster({
+      itemGapSeconds: 1,
+      loopRestSeconds: 2,
+      loadItems: async () => [
+        { text: '台本句一', gapAfterSeconds: 1 },
+        { text: '台本句二', gapAfterSeconds: 1 },
+      ],
+      isBusy: () => false,
+      speak: async (text) => {
+        events.push(text);
+        return { spoken: true, reason: 'spoken' };
+      },
+      pickAtmosphere: async () => ({ category: 'welcome' as const, text: '欢迎语一句' }),
+      markAtmosphereSpoken: (_liveId, category) => {
+        marks.push(category);
+      },
+      sleep: async () => {
+        if (!stopRequested && events.includes('台本句二')) {
+          stopRequested = true;
+          caster.stop(LIVE_ID);
+        }
+      },
+    });
+
+    caster.start(LIVE_ID);
+    await waitRunnerGone(caster, LIVE_ID);
+    // 每句台本播完后的空档各插一条：台本句 → 氛围语 → 台本句 → 氛围语
+    expect(events).toEqual(['台本句一', '欢迎语一句', '台本句二', '欢迎语一句']);
+    expect(marks).toEqual(['welcome', 'welcome']);
+  });
+
+  it('出声链路忙时让位：忙窗口不插播、空闲窗口才插播', async () => {
+    const events: string[] = [];
+    let busy = false;
+    let stopRequested = false;
+    const caster = createLoopCaster({
+      itemGapSeconds: 1,
+      loopRestSeconds: 2,
+      loadItems: async () => [
+        { text: '台本句一', gapAfterSeconds: 1 },
+        { text: '台本句二', gapAfterSeconds: 1 },
+      ],
+      // 第一句台本播完立即“忙”（模拟弹幕回复插进来），由 sleep 清空
+      isBusy: () => busy,
+      speak: async (text) => {
+        events.push(text);
+        if (text === '台本句一') {
+          busy = true;
+        }
+        return { spoken: true, reason: 'spoken' };
+      },
+      pickAtmosphere: async () => ({ category: 'welcome' as const, text: '欢迎语一句' }),
+      markAtmosphereSpoken: () => undefined,
+      sleep: async () => {
+        if (busy) {
+          busy = false;
+          return;
+        }
+        if (!stopRequested && events.includes('台本句二')) {
+          stopRequested = true;
+          caster.stop(LIVE_ID);
+        }
+      },
+    });
+
+    caster.start(LIVE_ID);
+    await waitRunnerGone(caster, LIVE_ID);
+    // 台本句一后的忙窗口未插播；台本句二后的空闲窗口才插播
+    expect(events).toEqual(['台本句一', '台本句二', '欢迎语一句']);
+  });
+
+  it('插播出声失败（disabled/skipped）不记账，节奏照走', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const marks: string[] = [];
+    let stopRequested = false;
+    const caster = createLoopCaster({
+      itemGapSeconds: 1,
+      loopRestSeconds: 2,
+      loadItems: async () => [{ text: '台本句一', gapAfterSeconds: 1 }],
+      isBusy: () => false,
+      speak: async (text) =>
+        text === '暖场一句'
+          ? { spoken: false, reason: 'disabled' }
+          : { spoken: true, reason: 'spoken' },
+      pickAtmosphere: async () => ({ category: 'custom' as const, text: '暖场一句' }),
+      markAtmosphereSpoken: (_liveId, category) => {
+        marks.push(category);
+      },
+      sleep: async () => {
+        if (!stopRequested) {
+          stopRequested = true;
+          caster.stop(LIVE_ID);
+        }
+      },
+    });
+
+    caster.start(LIVE_ID);
+    await waitRunnerGone(caster, LIVE_ID);
+    expect(marks).toEqual([]);
+    expect(info).toHaveBeenCalled();
+  });
+
+  it('未接氛围语调度（默认返回 null）时不影响既有循环节奏', async () => {
+    const items: LoopCastItem[] = [{ text: '只有循环句。', gapAfterSeconds: 1 }];
+    const spoken: string[] = [];
+    let stopRequested = false;
+    const caster = createLoopCaster({
+      itemGapSeconds: 1,
+      loopRestSeconds: 2,
+      loadItems: async () => items,
+      isBusy: () => false,
+      speak: async (text) => {
+        spoken.push(text);
+        return { spoken: true, reason: 'spoken' };
+      },
+      sleep: async () => {
+        if (!stopRequested) {
+          stopRequested = true;
+          caster.stop(LIVE_ID);
+        }
+      },
+    });
+
+    caster.start(LIVE_ID);
+    await waitRunnerGone(caster, LIVE_ID);
+    expect(spoken).toEqual(['只有循环句。']);
+  });
+});

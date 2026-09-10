@@ -275,6 +275,28 @@ export const atmosphereTemplates = pgTable(
   },
   (table) => [index('atmosphere_templates_user_id_idx').on(table.userId)],
 );
+
+// ---------- atmosphere_settings：氛围语插播频率（M10-A2：五类各一档，0 = 不插播）----------
+// 与 atmosphere_templates 配套：模板决定「说什么」，本表决定「多久说一次」。
+// 档位范围与默认值见 services/atmosphere.ts 的 ATMOSPHERE_FREQUENCY_RULES。
+export const atmosphereSettings = pgTable(
+  'atmosphere_settings',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // 类别：与 atmosphere_templates.category 同一白名单
+    category: varchar('category', { length: 20 }).notNull(),
+    // 插播间隔（秒）：0 = 该类不插播；其余范围由路由按类别规则校验
+    intervalSeconds: integer('interval_seconds').notNull(),
+    ...timestamps(),
+  },
+  (table) => [
+    uniqueIndex('atmosphere_settings_user_category_unique').on(table.userId, table.category),
+  ],
+);
+
 // ---------- live_danmaku：直播弹幕日志（T13 只读 + G3 弹幕网关写入）----------
 export const liveDanmaku = pgTable(
   'live_danmaku',

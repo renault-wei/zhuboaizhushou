@@ -7,6 +7,8 @@ import {
   type SpeechOverrides,
 } from './liveSpeaker';
 import { loadLiveSpeechOverrides } from './liveVoice';
+import type { AtmosphereCategory, AtmosphereInsertion } from './atmosphere';
+import { atmosphereScheduler } from './atmosphereScheduler';
 
 // 循环台本播出引擎（M4，P-循环台本 & P-播出里程碑 §8）：
 // 开播（ready→live）后按台本顺序循环口播产品/团购券；与弹幕回复共用 liveSpeaker 全局出声链路，
@@ -50,10 +52,31 @@ export interface LoopCasterOptions {
   sleep?(ms: number): Promise<void>;
   /** 出声链路忙闲判定：忙 = 有排队未播的音频（回复排队 / 远程积压） */
   isBusy?(): boolean;
+  /** 空档插播取词（M10-A3）：返回一条到期的氛围台词，无则 null；生产接 atmosphereScheduler */
+  pickAtmosphere?(liveId: string, nowMs: number): Promise<AtmosphereInsertion | null>;
+  /** 插播实际出声后的记账（按类别刷新频控计时） */
+  markAtmosphereSpoken?(liveId: string, category: AtmosphereCategory, atMs: number): void;
+  /** 时钟注入（测试用假时钟）；生产默认 Date.now */
+  now?(): number;
   itemGapSeconds?: number;
   loopRestSeconds?: number;
   idlePollMs?: number;
 }
+
+/** 运行期已解析依赖：默认实现在工厂里兜底，runLoop 内部不再判空 */
+type ResolvedLoopDeps = Required<
+  Pick<
+    LoopCasterOptions,
+    | 'speak'
+    | 'loadItems'
+    | 'loadVoice'
+    | 'sleep'
+    | 'isBusy'
+    | 'pickAtmosphere'
+    | 'markAtmosphereSpoken'
+    | 'now'
+  >
+>;
 
 /** 引擎公开接口：start 幂等、stop 幂等；每场次一条 Runner（内存态，进程重启不恢复） */
 export interface LoopCaster {
@@ -127,7 +150,7 @@ async function speakSafely(
   liveId: string,
   text: string,
   overrides: SpeechOverrides | null,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const result = await speak(text, overrides ?? undefined);
     if (!result.spoken) {
@@ -135,12 +158,48 @@ async function speakSafely(
         `[loopCaster] 场次 ${liveId} 循环句未出声（${result.reason ?? 'unknown'}），继续下一句`,
       );
     }
+    return result.spoken;
   } catch (err) {
     console.warn(
       `[loopCaster] 场次 ${liveId} 循环句播报异常：${
         err instanceof Error ? err.message : String(err)
       }`,
     );
+    return false;
+  }
+}
+
+/**
+ * 空档插播（M10-A3）：出声链路空闲且存在到期氛围语时插一条，绝不打断循环句。
+ * 完整优先级 = 弹幕回复 > 欢迎/关注/点赞 > 报时 > 自定义暖场 > 循环台本句：
+ * 回复由 liveSpeaker 队列天然优先 —— 链路忙（回复排队/远程积压）时本轮机会直接让位，不排队抢播。
+ * 只有真正出声成功才记账（该类别间隔从实际插入时点重新起算，与弹幕回复口径一致）。
+ */
+async function tryInsertAtmosphere(
+  liveId: string,
+  options: ResolvedLoopDeps,
+  overrides: SpeechOverrides | null,
+): Promise<void> {
+  if (options.isBusy()) {
+    return;
+  }
+  let insertion: AtmosphereInsertion | null;
+  try {
+    insertion = await options.pickAtmosphere(liveId, options.now());
+  } catch (err) {
+    console.warn(
+      `[loopCaster] 场次 ${liveId} 氛围语取词失败，跳过本次插播：${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return;
+  }
+  if (!insertion) {
+    return;
+  }
+  const spoken = await speakSafely(options.speak, liveId, insertion.text, overrides);
+  if (spoken) {
+    options.markAtmosphereSpoken(liveId, insertion.category, options.now());
   }
 }
 
@@ -152,9 +211,7 @@ async function speakSafely(
 async function runLoop(
   liveId: string,
   state: RunnerState,
-  options: Required<
-    Pick<LoopCasterOptions, 'speak' | 'loadItems' | 'loadVoice' | 'sleep' | 'isBusy'>
-  >,
+  options: ResolvedLoopDeps,
   itemGapSeconds: number,
   loopRestSeconds: number,
   idlePollMs: number,
@@ -213,6 +270,11 @@ async function runLoop(
         if (state.cancelled) {
           break;
         }
+        // 空档插播：本句播完的间隔就是氛围语的机会窗口（忙/未到期 → 本次不插，等下一个空档）
+        await tryInsertAtmosphere(liveId, options, voice);
+        if (state.cancelled) {
+          break;
+        }
         const gapMilliseconds = (item.gapAfterSeconds ?? itemGapSeconds) * 1000;
         if (gapMilliseconds > 0) {
           await options.sleep(gapMilliseconds);
@@ -238,6 +300,10 @@ export function createLoopCaster(options: LoopCasterOptions = {}): LoopCaster {
   const loadVoice = options.loadVoice ?? (async () => null);
   const sleep = options.sleep ?? defaultSleep;
   const isBusy = options.isBusy ?? defaultIsBusy;
+  // 空档插播默认关闭（引擎核心不依赖氛围语模块）；生产由全局单例注入真实调度器
+  const pickAtmosphere = options.pickAtmosphere ?? (async () => null);
+  const markAtmosphereSpoken = options.markAtmosphereSpoken ?? (() => undefined);
+  const now = options.now ?? (() => Date.now());
   const itemGapSeconds = options.itemGapSeconds ?? DEFAULT_ITEM_GAP_SECONDS;
   const loopRestSeconds = options.loopRestSeconds ?? DEFAULT_LOOP_REST_SECONDS;
   const idlePollMs = options.idlePollMs ?? DEFAULT_IDLE_POLL_MS;
@@ -254,7 +320,7 @@ export function createLoopCaster(options: LoopCasterOptions = {}): LoopCaster {
     void runLoop(
       liveId,
       state,
-      { speak, loadItems, loadVoice, sleep, isBusy },
+      { speak, loadItems, loadVoice, sleep, isBusy, pickAtmosphere, markAtmosphereSpoken, now },
       itemGapSeconds,
       loopRestSeconds,
       idlePollMs,
@@ -292,5 +358,13 @@ export function createLoopCaster(options: LoopCasterOptions = {}): LoopCaster {
   return { start, stop, isRunning, status };
 }
 
-/** 全局单例：routes/lives 的 start/end 接线 + liveSession 监控读取共用；显式注入本场音色解析 */
-export const loopCaster = createLoopCaster({ loadVoice: loadLiveSpeechOverrides });
+/**
+ * 全局单例：routes/lives 的 start/end 接线 + liveSession 监控读取共用；
+ * 显式注入本场音色解析与本场氛围语调度（空档插播）。
+ */
+export const loopCaster = createLoopCaster({
+  loadVoice: loadLiveSpeechOverrides,
+  pickAtmosphere: async (liveId, nowMs) => atmosphereScheduler.pickDue(liveId, nowMs),
+  markAtmosphereSpoken: (liveId, category, atMs) =>
+    atmosphereScheduler.markSpoken(liveId, category, atMs),
+});

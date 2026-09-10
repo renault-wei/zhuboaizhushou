@@ -5,6 +5,7 @@ import { authPlugin } from './plugins/auth';
 import { adminRoutes } from './routes/admin';
 import { agreementsRoutes } from './routes/agreements';
 import { atmosphereTemplatesRoutes } from './routes/atmosphereTemplates';
+import { atmosphereSettingsRoutes } from './routes/atmosphereSettings';
 import { authRoutes } from './routes/auth';
 import { billingAdminRoutes } from './routes/billingAdmin';
 import { billingRoutes } from './routes/billing';
@@ -46,6 +47,7 @@ export function buildApp() {
   app.register(douyinRoutes);
   app.register(agreementsRoutes);
   app.register(atmosphereTemplatesRoutes);
+  app.register(atmosphereSettingsRoutes);
   app.register(healthRoutes);
   app.register(scriptsRoutes);
   app.register(voicesRoutes);

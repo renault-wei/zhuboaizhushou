@@ -5,6 +5,7 @@ import { atmosphereTemplates as atmosphereTemplatesTable } from '../db/schema';
 import { scanSensitive } from '../services/sensitive';
 import {
   ATMOSPHERE_CATEGORIES,
+  ATMOSPHERE_DEFAULT_TEMPLATES,
   isAtmosphereCategory,
   MAX_ATMOSPHERE_TEXT_LENGTH,
 } from '../services/atmosphere';
@@ -146,6 +147,56 @@ export const atmosphereTemplatesRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(500).send({ error: 'CREATE_FAILED', message: '创建氛围台词失败' });
     }
     return reply.code(201).send(toApi(row));
+  });
+
+  // 一键填充默认模板（M10-A4）：只补「该商家尚无任何一条」的类别，已有内容的类别原样保留（幂等）。
+  // 默认文案同样过敏感词扫描：词表更新导致某类默认文案不合规时，该类不落库并回 blocked（宁可不填）。
+  app.post('/api/atmosphere-templates/defaults', { preHandler: app.authenticate }, async (request, reply) => {
+    const owned = await db
+      .select({ category: atmosphereTemplatesTable.category })
+      .from(atmosphereTemplatesTable)
+      .where(eq(atmosphereTemplatesTable.userId, request.user.userId));
+    const ownedCategories = new Set(owned.map((row) => row.category));
+
+    const kept: string[] = [];
+    const blocked: string[] = [];
+    const pending: { category: string; text: string }[] = [];
+    for (const category of ATMOSPHERE_CATEGORIES) {
+      if (ownedCategories.has(category)) {
+        kept.push(category);
+        continue;
+      }
+      const text = ATMOSPHERE_DEFAULT_TEMPLATES[category];
+      if (scanSensitive(text).status === 'blocked') {
+        blocked.push(category);
+        continue;
+      }
+      pending.push({ category, text });
+    }
+
+    const created =
+      pending.length === 0
+        ? []
+        : await db
+            .insert(atmosphereTemplatesTable)
+            .values(
+              pending.map((entry) => ({
+                userId: request.user.userId,
+                category: entry.category,
+                text: entry.text,
+                enabled: true,
+                sensitiveCheckStatus: 'pass' as const,
+                sensitiveMatchedWords: [],
+                sensitiveScannedAt: new Date(),
+              })),
+            )
+            .returning();
+
+    return reply.code(201).send({
+      created: created.map(toApi),
+      kept,
+      blocked,
+    });
   });
 
   // 单条详情

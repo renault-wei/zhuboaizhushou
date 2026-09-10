@@ -29,6 +29,8 @@ const PHONE_CREATE = '13940000001';
 const PHONE_OWNER = '13940000002';
 const PHONE_OTHER = '13940000003';
 const PHONE_BLOCKED = '13940000004';
+const PHONE_DEFAULTS = '13940000005';
+const PHONE_SETTINGS = '13940000006';
 
 async function registerAndGetToken(phone: string): Promise<string> {
   const send = await app.inject({
@@ -58,6 +60,7 @@ async function userIdOf(phone: string): Promise<string> {
 async function resetUserData(phone: string): Promise<void> {
   const userId = await userIdOf(phone);
   await pool.query('DELETE FROM atmosphere_templates WHERE user_id = $1', [userId]);
+  await pool.query('DELETE FROM atmosphere_settings WHERE user_id = $1', [userId]);
 }
 
 function bearer(token: string): { authorization: string } {
@@ -161,7 +164,7 @@ describe('氛围台词库 CRUD', () => {
       method: 'POST',
       url: '/api/atmosphere-templates',
       headers: bearer(token),
-      payload: { category: 'clock', text: '整'.repeat(201) },
+      payload: { category: 'clock', text: '整'.repeat(501) },
     });
     expect(tooLong.statusCode).toBe(400);
     expect((tooLong.json() as { error: string }).error).toBe('TEXT_TOO_LONG');
@@ -224,5 +227,202 @@ describe('氛围台词库 CRUD', () => {
       headers: bearer(tokenOwner),
     });
     expect(stillThere.statusCode).toBe(200);
+  });
+});
+
+describe('氛围语默认模板一键填充（M10-A4）', () => {
+  dbIt('未登录 401', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/atmosphere-templates/defaults' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  dbIt('首次填充五类，重复调用幂等（只补缺、不覆盖）', async () => {
+    const token = await registerAndGetToken(PHONE_DEFAULTS);
+    await resetUserData(PHONE_DEFAULTS);
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/atmosphere-templates/defaults',
+      headers: bearer(token),
+    });
+    expect(first.statusCode).toBe(201);
+    const firstBody = first.json() as { created: unknown[]; kept: string[]; blocked: string[] };
+    expect(firstBody.created).toHaveLength(5);
+    expect(firstBody.kept).toEqual([]);
+    expect(firstBody.blocked).toEqual([]);
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/atmosphere-templates/defaults',
+      headers: bearer(token),
+    });
+    expect(second.statusCode).toBe(201);
+    const secondBody = second.json() as { created: unknown[]; kept: string[] };
+    expect(secondBody.created).toEqual([]);
+    expect([...secondBody.kept].sort()).toEqual(['clock', 'custom', 'follow', 'thumb', 'welcome']);
+
+    const list = await app.inject({
+      method: 'GET',
+      url: '/api/atmosphere-templates',
+      headers: bearer(token),
+    });
+    expect((list.json() as unknown[]).length).toBe(5);
+  });
+
+  dbIt('只补缺类别：已有内容的类别原样保留', async () => {
+    const token = await registerAndGetToken(PHONE_DEFAULTS);
+    await resetUserData(PHONE_DEFAULTS);
+
+    const mine = await app.inject({
+      method: 'POST',
+      url: '/api/atmosphere-templates',
+      headers: bearer(token),
+      payload: { category: 'custom', text: '我自己的暖场词' },
+    });
+    expect(mine.statusCode).toBe(201);
+    const mineId = (mine.json() as { id: string }).id;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/atmosphere-templates/defaults',
+      headers: bearer(token),
+    });
+    const body = res.json() as { created: unknown[]; kept: string[] };
+    expect(body.created).toHaveLength(4);
+    expect(body.kept).toEqual(['custom']);
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/atmosphere-templates/${mineId}`,
+      headers: bearer(token),
+    });
+    expect((detail.json() as { text: string }).text).toBe('我自己的暖场词');
+  });
+});
+
+describe('氛围语插播频率设置（M10-A2）', () => {
+  dbIt('未登录 401', async () => {
+    const get = await app.inject({ method: 'GET', url: '/api/atmosphere-settings' });
+    expect(get.statusCode).toBe(401);
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/atmosphere-settings/welcome',
+      payload: { intervalSeconds: 90 },
+    });
+    expect(put.statusCode).toBe(401);
+  });
+
+  dbIt('GET 拉全五类、未设置回落默认档位；PUT 保存后可复读且不影响其他类别', async () => {
+    const token = await registerAndGetToken(PHONE_SETTINGS);
+    await resetUserData(PHONE_SETTINGS);
+
+    const before = await app.inject({
+      method: 'GET',
+      url: '/api/atmosphere-settings',
+      headers: bearer(token),
+    });
+    expect(before.statusCode).toBe(200);
+    const beforeBody = before.json() as {
+      settings: Array<{
+        category: string;
+        intervalSeconds: number;
+        isCustom: boolean;
+        rule: {
+          defaultSeconds: number;
+          minSeconds: number;
+          maxSeconds: number;
+          disabledSeconds: number;
+        };
+      }>;
+      placeholders: string[];
+      priority: string[];
+      maxTextLength: number;
+    };
+    expect(beforeBody.settings.map((s) => s.category)).toEqual([
+      'welcome',
+      'follow',
+      'thumb',
+      'clock',
+      'custom',
+    ]);
+    for (const setting of beforeBody.settings) {
+      expect(setting.isCustom).toBe(false);
+      expect(setting.intervalSeconds).toBe(setting.rule.defaultSeconds);
+    }
+    const clockBefore = beforeBody.settings.find((s) => s.category === 'clock');
+    expect(clockBefore?.intervalSeconds).toBe(180);
+    expect(clockBefore?.rule.minSeconds).toBe(60);
+    expect(beforeBody.maxTextLength).toBe(500);
+    expect(beforeBody.priority).toEqual(['welcome', 'follow', 'thumb', 'clock', 'custom']);
+    expect(beforeBody.placeholders).toContain('昵称');
+
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/atmosphere-settings/welcome',
+      headers: bearer(token),
+      payload: { intervalSeconds: 90 },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(put.json()).toMatchObject({ category: 'welcome', intervalSeconds: 90, isCustom: true });
+
+    const after = await app.inject({
+      method: 'GET',
+      url: '/api/atmosphere-settings',
+      headers: bearer(token),
+    });
+    const afterBody = after.json() as typeof beforeBody;
+    const welcome = afterBody.settings.find((s) => s.category === 'welcome');
+    expect(welcome?.intervalSeconds).toBe(90);
+    expect(welcome?.isCustom).toBe(true);
+    const follow = afterBody.settings.find((s) => s.category === 'follow');
+    expect(follow?.intervalSeconds).toBe(60);
+    expect(follow?.isCustom).toBe(false);
+  });
+
+  dbIt('PUT 边界：0=不插播合法；超范围/非整数/未知类别 → 400', async () => {
+    const token = await registerAndGetToken(PHONE_SETTINGS);
+
+    const zero = await app.inject({
+      method: 'PUT',
+      url: '/api/atmosphere-settings/clock',
+      headers: bearer(token),
+      payload: { intervalSeconds: 0 },
+    });
+    expect(zero.statusCode).toBe(200);
+    expect((zero.json() as { intervalSeconds: number }).intervalSeconds).toBe(0);
+
+    const belowMin = await app.inject({
+      method: 'PUT',
+      url: '/api/atmosphere-settings/clock',
+      headers: bearer(token),
+      payload: { intervalSeconds: 30 },
+    });
+    expect(belowMin.statusCode).toBe(400);
+    expect((belowMin.json() as { error: string }).error).toBe('INTERVAL_INVALID');
+
+    const aboveMax = await app.inject({
+      method: 'PUT',
+      url: '/api/atmosphere-settings/welcome',
+      headers: bearer(token),
+      payload: { intervalSeconds: 999 },
+    });
+    expect(aboveMax.statusCode).toBe(400);
+
+    const fractional = await app.inject({
+      method: 'PUT',
+      url: '/api/atmosphere-settings/welcome',
+      headers: bearer(token),
+      payload: { intervalSeconds: 1.5 },
+    });
+    expect(fractional.statusCode).toBe(400);
+
+    const badCategory = await app.inject({
+      method: 'PUT',
+      url: '/api/atmosphere-settings/banner',
+      headers: bearer(token),
+      payload: { intervalSeconds: 60 },
+    });
+    expect(badCategory.statusCode).toBe(400);
+    expect((badCategory.json() as { error: string }).error).toBe('CATEGORY_INVALID');
   });
 });
