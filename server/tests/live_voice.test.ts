@@ -110,7 +110,7 @@ function mockSynthOnce(): ReturnType<typeof vi.spyOn> {
 }
 
 describe('presetSpeechOverrides（预设音色 → 合成覆盖项）', () => {
-  it('命中内置预设音色：返回该预设 id 作为 speaker，并带上默认「偏快」语速档', () => {
+  it('命中内置预设音色：返回该预设 id 作为 speaker，并带上默认语速档', () => {
     expect(presetSpeechOverrides(DEFAULT_VOLC_PRESET_ID)).toEqual({
       speechRate: DEFAULT_LIVE_SPEECH_RATE,
       speaker: DEFAULT_VOLC_PRESET_ID,
@@ -134,31 +134,32 @@ describe('presetSpeechOverrides（预设音色 → 合成覆盖项）', () => {
   });
 
   it('显式语速档：原样下发（已归一）', () => {
-    expect(presetSpeechOverrides(DEFAULT_VOLC_PRESET_ID, 80)).toEqual({
-      speechRate: 80,
+    expect(presetSpeechOverrides(DEFAULT_VOLC_PRESET_ID, 45)).toEqual({
+      speechRate: 45,
       speaker: DEFAULT_VOLC_PRESET_ID,
     });
   });
 });
 
-describe('clampLiveSpeechRate（语速归一：滑块区间 50~100）', () => {
-  it('缺省 / 非有限数：回落默认「偏快」档', () => {
+describe('clampLiveSpeechRate（语速归一：滑块区间 0~60）', () => {
+  it('缺省 / 非有限数：回落默认档（15）', () => {
     expect(clampLiveSpeechRate(null)).toBe(DEFAULT_LIVE_SPEECH_RATE);
     expect(clampLiveSpeechRate(undefined)).toBe(DEFAULT_LIVE_SPEECH_RATE);
     expect(clampLiveSpeechRate(Number.NaN)).toBe(DEFAULT_LIVE_SPEECH_RATE);
     expect(clampLiveSpeechRate(Number.POSITIVE_INFINITY)).toBe(DEFAULT_LIVE_SPEECH_RATE);
   });
 
-  it('越界钳到区间边界（不做慢速段）', () => {
+  it('越界钳到区间边界', () => {
     expect(clampLiveSpeechRate(0)).toBe(MIN_LIVE_SPEECH_RATE);
     expect(clampLiveSpeechRate(-50)).toBe(MIN_LIVE_SPEECH_RATE);
     expect(clampLiveSpeechRate(999)).toBe(MAX_LIVE_SPEECH_RATE);
+    expect(clampLiveSpeechRate(100)).toBe(MAX_LIVE_SPEECH_RATE);
   });
 
   it('区间内就近取整原样保留', () => {
-    expect(clampLiveSpeechRate(50)).toBe(50);
-    expect(clampLiveSpeechRate(72.4)).toBe(72);
-    expect(clampLiveSpeechRate(100)).toBe(100);
+    expect(clampLiveSpeechRate(15)).toBe(15);
+    expect(clampLiveSpeechRate(42.4)).toBe(42);
+    expect(clampLiveSpeechRate(DEFAULT_LIVE_SPEECH_RATE)).toBe(DEFAULT_LIVE_SPEECH_RATE);
   });
 });
 

@@ -30,7 +30,7 @@ export interface Live {
   rtmpUrl: string | null;
   /** 火山预设音色 id：与 voiceId 互斥，二选一 */
   volcPresetId: string | null;
-  /** 口播语速：商家滑块档 50~100（火山 speech_rate 口径）；null = 未设过，合成时回落默认档 */
+  /** 口播语速：商家滑块档 0~60（火山 speech_rate 口径）；null = 未设过，合成时回落默认档 */
   speechRate: number | null;
   voiceId: string | null;
   scriptId: string | null;
@@ -50,7 +50,7 @@ export interface CreateLiveInput {
   title: string;
   /** 火山预设音色 id：可空（暂未选）；与 voiceId 互斥 */
   volcPresetId: string | null;
-  /** 口播语速：可空（暂未设）；服务端按滑块区间 50~100 钳制 */
+  /** 口播语速：可空（暂未设）；服务端按滑块区间 0~60 钳制 */
   speechRate: number | null;
   /** 音色 id：可空（暂未选） */
   voiceId: string | null;

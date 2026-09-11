@@ -473,13 +473,13 @@ dbIt('语速档读写：创建带档 / 越界钳制 / 缺省落 null / 更新可
     method: 'POST',
     url: '/api/lives',
     headers: bearer(token),
-    payload: { title: '语速档-创建', speechRate: 72 },
+    payload: { title: '语速档-创建', speechRate: 45 },
   });
   expect(created.statusCode).toBe(201);
   const liveId = created.json().live.id as string;
-  expect(created.json().live.speechRate).toBe(72);
+  expect(created.json().live.speechRate).toBe(45);
 
-  // 创建：越界一律钳到滑块区间（不做慢速段）
+  // 创建：越界一律钳到滑块区间 0~60
   const clamped = await app.inject({
     method: 'POST',
     url: '/api/lives',
@@ -487,9 +487,9 @@ dbIt('语速档读写：创建带档 / 越界钳制 / 缺省落 null / 更新可
     payload: { title: '语速档-越界', speechRate: 999 },
   });
   expect(clamped.statusCode).toBe(201);
-  expect(clamped.json().live.speechRate).toBe(100);
+  expect(clamped.json().live.speechRate).toBe(60);
 
-  // 创建：非法值（字符串）落 null，由运行时按默认「偏快」档兜底
+  // 创建：非法值（字符串）落 null，由运行时按默认档（15）兜底
   const invalid = await app.inject({
     method: 'POST',
     url: '/api/lives',
@@ -504,10 +504,10 @@ dbIt('语速档读写：创建带档 / 越界钳制 / 缺省落 null / 更新可
     method: 'PATCH',
     url: `/api/lives/${liveId}`,
     headers: bearer(token),
-    payload: { speechRate: 88 },
+    payload: { speechRate: 55 },
   });
   expect(patched.statusCode).toBe(200);
-  expect(patched.json().live.speechRate).toBe(88);
+  expect(patched.json().live.speechRate).toBe(55);
 
   // 更新：显式 null 清档（回落运行时默认）
   const cleared = await app.inject({

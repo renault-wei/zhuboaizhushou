@@ -42,10 +42,11 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   String? _voiceId;
   String? _volcPresetId;
 
-  /// 口播语速滑块档：产品口径 50~100，默认 50（很快）；服务端按区间钳制。
-  static const int _minSpeechRate = 50;
-  static const int _maxSpeechRate = 100;
-  static const int _defaultSpeechRate = 50;
+  /// 口播语速滑块档：火山 speech_rate 口径 0~60（0 = 正常语速），默认 15（略快于真人）；
+  /// 服务端按同一区间钳制（`services/liveVoice.ts`）。
+  static const int _minSpeechRate = 0;
+  static const int _maxSpeechRate = 60;
+  static const int _defaultSpeechRate = 15;
   int _speechRate = _defaultSpeechRate;
 
   /// 用户是否主动改选/清空过音色：为 true 后不再回填默认音色。
@@ -123,7 +124,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       // 克隆音色与火山预设互斥：服务端保证不同时非空，这里仍做一次兜底
       _volcPresetId = initial.volcPresetId;
       _voiceId = initial.volcPresetId != null ? null : initial.voiceId;
-      // 语速档：未设过（null）回落默认「很快」档
+      // 语速档：未设过（null）回落默认档（15，略快于真人）
       _speechRate = initial.speechRate ?? _defaultSpeechRate;
       _scriptId = initial.scriptId;
       _loopScriptId = initial.loopScriptId;
@@ -427,7 +428,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   }
 
   /// 口播语速滑块（系统风：图标 + 标题 + 当前档位 + 一行说明）。
-  /// 区间 50~100，默认 50（很快）；空档期的弹幕回复沿用同档语速。
+  /// 区间 0~60，默认 15（略快于真人）；空档期的弹幕回复沿用同档语速。
   Widget _buildSpeechRateSection(bool saving) {
     return Column(
       key: const Key('liveSpeechRateSection'),
@@ -461,7 +462,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
               : (value) => setState(() => _speechRate = value.round()),
         ),
         Text(
-          '数值越大口播越快，默认 50（很快）；弹幕回复同速。',
+          '数值越大口播越快：0 接近真人，默认 15，10~25 适合带货；弹幕回复同速。',
           style: TextStyle(fontSize: 12, color: context.tokenTextBody),
         ),
       ],

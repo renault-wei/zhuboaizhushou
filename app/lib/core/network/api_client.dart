@@ -681,7 +681,7 @@ class ApiClient {
           'title': title,
           // 显式带 null：编辑页整体提交当前绑定，null 表示未绑定（服务端置空该列）
           'volcPresetId': volcPresetId,
-          // 显式带 null：null 表示清档、交回服务端默认「偏快」档
+          // 显式带 null：null 表示清档、交回服务端默认档（15）
           'speechRate': speechRate,
           'voiceId': voiceId,
           'scriptId': scriptId,

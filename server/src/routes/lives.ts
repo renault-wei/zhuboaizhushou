@@ -135,8 +135,8 @@ function readOptionalText(raw: unknown): string | null {
 }
 
 /**
- * 可选语速字段：只接收有限数字并钳到滑块区间（50~100）；
- * 非数字 / 缺省一律视为 null（落库为空，合成时按默认「偏快」档兜底）。
+ * 可选语速字段：只接收有限数字并钳到滑块区间（0~60）；
+ * 非数字 / 缺省一律视为 null（落库为空，合成时按默认档 15 兜底）。
  */
 function readOptionalSpeechRate(raw: unknown): number | null {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) {

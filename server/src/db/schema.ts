@@ -197,8 +197,8 @@ export const lives = pgTable(
     rtmpUrl: text('rtmp_url'),
     // 火山预设音色 id（可选）：与 voice_id 克隆音色互斥，选预设则不绑定克隆
     volcPresetId: varchar('volc_preset_id', { length: 64 }),
-    // 口播语速：火山 speech_rate 口径的商家滑块档（产品口径 50~100，默认偏快）；
-    // NULL = 未设过，合成时回落 liveVoice 默认档（很快速率）
+    // 口播语速：火山 speech_rate 口径的商家滑块档（产品口径 0~60，0 = 正常语速，默认 15）；
+    // NULL = 未设过，合成时回落 liveVoice 默认档（15 ≈ 1.15 倍速）
     speechRate: integer('speech_rate'),
     voiceId: uuid('voice_id').references(() => voices.id, { onDelete: 'set null' }),
     scriptId: uuid('script_id').references(() => scripts.id, { onDelete: 'set null' }),
