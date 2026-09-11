@@ -89,8 +89,11 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   /// 测试弹幕发送中（防重复点击）
   bool _sendingDanmaku = false;
 
-  /// 直播中热更话术进行中（防重复点击）
+  /// 直播中热更循环台词进行中（防重复点击）
   bool _updatingLoop = false;
+
+  /// 直播中热更话术（弹幕回复知识）进行中（防重复点击）
+  bool _updatingScript = false;
 
   @override
   void initState() {
@@ -1076,28 +1079,30 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                     height: 1.45,
                   ),
                 ),
-                // 热更台本入口：仅直播中可用（服务端非 live 返回 409）。
-                // 换绑于「下一轮」生效，不打断当前口播句。
+                // 热更入口：仅直播中可用（服务端非 live 返回 409）。
+                // 「更新话术」= 换弹幕回复知识，新弹幕立即生效；
+                // 「更新循环台词」= 换轮播台本，下一轮开头重读生效、不打断当前句。
                 if (live) ...[
                   const SizedBox(height: 10),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: OutlinedButton.icon(
-                      key: const Key('liveMonitorUpdateLoopButton'),
-                      onPressed: _updatingLoop ? null : _updateLoopScript,
-                      icon: const Icon(Icons.playlist_play, size: 18),
-                      label: Text(_updatingLoop ? '更新中…' : '更新话术'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.nightText,
-                        side: const BorderSide(color: AppColors.nightStroke),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
-                        minimumSize: const Size(0, 34),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        key: const Key('liveMonitorUpdateScriptButton'),
+                        onPressed: _updatingScript ? null : _updateScript,
+                        icon: const Icon(Icons.description_outlined, size: 18),
+                        label: Text(_updatingScript ? '更新中…' : '更新话术'),
+                        style: _hotSwapButtonStyle(),
                       ),
-                    ),
+                      OutlinedButton.icon(
+                        key: const Key('liveMonitorUpdateLoopButton'),
+                        onPressed: _updatingLoop ? null : _updateLoopScript,
+                        icon: const Icon(Icons.playlist_play, size: 18),
+                        label: Text(_updatingLoop ? '更新中…' : '更新循环台词'),
+                        style: _hotSwapButtonStyle(),
+                      ),
+                    ],
                   ),
                 ],
               ],
@@ -1108,8 +1113,101 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     );
   }
 
-  /// 直播中热更话术（循环台本）：选一本我的台本后调 /api/lives/:id/loop-script
-  /// 换绑，引擎下一轮开头重读，不打断当前句。
+  /// 热更按钮统一样式：工作台内两个入口视觉一致
+  ButtonStyle _hotSwapButtonStyle() => OutlinedButton.styleFrom(
+        foregroundColor: AppColors.nightText,
+        side: const BorderSide(color: AppColors.nightStroke),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        minimumSize: const Size(0, 34),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      );
+
+  /// 直播中热更话术（弹幕回复知识）：选一条我的「可开播」话术后调
+  /// /api/lives/:id/script 换绑；弹幕回复上下文按条实时读取，新弹幕立即生效。
+  Future<void> _updateScript() async {
+    if (_updatingScript) {
+      return;
+    }
+    setState(() => _updatingScript = true);
+    try {
+      final scripts = await ref.read(apiClientProvider).listScripts();
+      if (!mounted) {
+        return;
+      }
+      final ready = scripts.where((script) => script.isReady).toList();
+      if (ready.isEmpty) {
+        _showSnack('暂无可开播的话术，请先生成并通过敏感词扫描');
+        return;
+      }
+      final picked = await showModalBottomSheet<String>(
+        context: context,
+        isScrollControlled: true,
+        builder: (sheetContext) {
+          return SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 16, 16, 0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '更新话术（仅「可开播」话术可选）',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final script in ready)
+                        ListTile(
+                          key: Key('liveMonitorScriptOption_${script.id}'),
+                          title: Text(
+                            script.displayTitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: const Text(
+                            '新弹幕将用该话术回复',
+                            style: TextStyle(fontSize: 12),
+                          ),
+                          onTap: () =>
+                              Navigator.of(sheetContext).pop(script.id),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      );
+      if (!mounted || picked == null) {
+        return;
+      }
+      await ref
+          .read(apiClientProvider)
+          .bindLiveScript(widget.liveId, scriptId: picked);
+      if (!mounted) {
+        return;
+      }
+      _showSnack('话术已更新，新弹幕将用新话术回复');
+      await _loadMonitor();
+    } on ApiException catch (error) {
+      if (mounted) {
+        _showSnack('更新话术失败：${error.message}');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _updatingScript = false);
+      }
+    }
+  }
+
+  /// 直播中热更循环台词（轮播台本）：选一本我的台本后调
+  /// /api/lives/:id/loop-script 换绑，引擎下一轮开头重读，不打断当前句。
   Future<void> _updateLoopScript() async {
     final picked = await context.push<LoopScript>('/loop-scripts?select=1');
     if (!mounted || picked == null) {
@@ -1123,7 +1221,7 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
       if (!mounted) {
         return;
       }
-      _showSnack('话术已更新，将在下一轮生效');
+      _showSnack('循环台词已更新，将在下一轮生效');
       await _loadMonitor();
     } on ApiException catch (error) {
       if (mounted) {

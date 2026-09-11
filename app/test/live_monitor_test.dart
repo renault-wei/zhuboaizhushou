@@ -76,6 +76,28 @@ Map<String, dynamic> _danmakuJson({
 }
 
 /// 预置一条循环台本（loop-001），供「更新话术」点选换绑。
+/// 内置一条话术假数据（镜像服务端 /api/scripts 返回结构）；status=blocked 时
+/// sensitiveCheckStatus 同步为 blocked，用于覆盖「未过审话术不可热更」分支。
+Map<String, dynamic> _scriptSeed({
+  required String id,
+  required String title,
+  String status = 'ready',
+}) {
+  final now = DateTime.now().toUtc().toIso8601String();
+  return <String, dynamic>{
+    'id': id,
+    'industry': 'restaurant',
+    'title': title,
+    'productSnapshot': <String, dynamic>{'name': '双人火锅套餐'},
+    'content': '双人火锅套餐，锅底现炒，欢迎到店品尝。',
+    'status': status,
+    'sensitiveCheckStatus': status == 'blocked' ? 'blocked' : 'pass',
+    'sensitiveMatchedWords': <String>[],
+    'sensitiveScannedAt': now,
+    'createdAt': now,
+  };
+}
+
 Map<String, dynamic> _loopSeed() {
   final now = DateTime.now().toUtc().toIso8601String();
   return <String, dynamic>{
@@ -466,7 +488,7 @@ void main() {
     await _unmount(tester);
   });
 
-  testWidgets('直播中热更话术：点选台本后换绑并在下一轮生效（M4）', (tester) async {
+  testWidgets('直播中热更循环台词：点选台本后换绑并在下一轮生效（M4）', (tester) async {
     final backend = FakeBackend(
       lives: <Map<String, dynamic>>[
         _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
@@ -491,7 +513,45 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(backend.lives.single['loopScriptId'], 'loop-001');
-    expect(find.text('话术已更新，将在下一轮生效'), findsOneWidget);
+    expect(find.text('循环台词已更新，将在下一轮生效'), findsOneWidget);
+
+    await _unmount(tester);
+  });
+
+  testWidgets('直播中热更话术：选「可开播」话术后换绑（新弹幕立即生效）', (tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
+      ],
+      scripts: <Map<String, dynamic>>[
+        _scriptSeed(id: 'script-001', title: '火锅话术'),
+        _scriptSeed(id: 'script-002', title: '未过审话术', status: 'blocked'),
+      ],
+    );
+    await _pumpMonitorRouter(tester, backend);
+
+    expect(
+      find.byKey(const Key('liveMonitorUpdateScriptButton')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('liveMonitorUpdateScriptButton')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump(const Duration(milliseconds: 350));
+
+    // 仅「可开播」话术可选：未过审话术不出现在弹窗
+    expect(find.byKey(const Key('liveMonitorScriptOption_script-001')),
+        findsOneWidget);
+    expect(find.byKey(const Key('liveMonitorScriptOption_script-002')),
+        findsNothing);
+
+    await tester.tap(find.byKey(const Key('liveMonitorScriptOption_script-001')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(backend.lives.single['scriptId'], 'script-001');
+    expect(find.text('话术已更新，新弹幕将用新话术回复'), findsOneWidget);
 
     await _unmount(tester);
   });

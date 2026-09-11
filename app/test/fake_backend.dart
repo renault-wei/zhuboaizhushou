@@ -459,7 +459,7 @@ class FakeBackend implements HttpClientAdapter {
     // stream-status / start / end / monitor / danmaku）需先于单段正则匹配，
     // 避免被 /api/lives/:id 的 GET/PATCH/DELETE 规则吞掉。
     final liveAction = RegExp(
-      r'^/api/lives/([^/]+)/(video|prepare|stream-status|start|end|monitor|danmaku|loop-script)$',
+      r'^/api/lives/([^/]+)/(video|prepare|stream-status|start|end|monitor|danmaku|loop-script|script)$',
     ).firstMatch(path);
     if (liveAction != null && options.method == 'POST') {
       switch (liveAction.group(2)) {
@@ -469,6 +469,8 @@ class FakeBackend implements HttpClientAdapter {
           return _prepareLive(liveAction.group(1)!);
         case 'loop-script':
           return _bindLiveLoopScript(liveAction.group(1)!, options);
+        case 'script':
+          return _bindLiveScript(liveAction.group(1)!, options);
         case 'start':
           return _startLive(liveAction.group(1)!);
         case 'end':
@@ -857,6 +859,54 @@ class FakeBackend implements HttpClientAdapter {
     final updated = <String, dynamic>{
       ...lives[index],
       'loopScriptId': loopScriptId,
+      'updatedAt': DateTime.now().toUtc().toIso8601String(),
+    };
+    lives[index] = updated;
+    return _jsonResponse({'live': updated});
+  }
+
+  /// 直播中热更话术：镜像服务端语义 —— 仅 live 可换绑（否则 409）、话术须归属
+  /// 当前用户（否则 400 SCRIPT_NOT_OWNED）且 ready + 过审（否则 400 SCRIPT_NOT_READY）。
+  ResponseBody _bindLiveScript(String id, RequestOptions options) {
+    final index = lives.indexWhere((live) => live['id'] == id);
+    if (index < 0) {
+      return _jsonResponse({
+        'error': 'LIVE_NOT_FOUND',
+        'message': '开播配置不存在',
+      }, 404);
+    }
+    if (lives[index]['status'] != 'live') {
+      return _jsonResponse({
+        'error': 'LIVE_NOT_LIVE',
+        'message': '仅直播中可更新话术',
+      }, 409);
+    }
+    final body = _readBody(options);
+    final scriptId = _liveNullable(body['scriptId']);
+    if (scriptId == null || scriptId.isEmpty) {
+      return _jsonResponse({
+        'error': 'SCRIPT_REQUIRED',
+        'message': '请选择要应用的话术',
+      }, 400);
+    }
+    final scriptIndex = scripts.indexWhere((script) => script['id'] == scriptId);
+    if (scriptIndex < 0) {
+      return _jsonResponse({
+        'error': 'SCRIPT_NOT_OWNED',
+        'message': '话术不存在或不属于当前用户',
+      }, 400);
+    }
+    final script = scripts[scriptIndex];
+    if (script['status'] != 'ready' ||
+        script['sensitiveCheckStatus'] != 'pass') {
+      return _jsonResponse({
+        'error': 'SCRIPT_NOT_READY',
+        'message': '话术未通过敏感词扫描，不可用于直播',
+      }, 400);
+    }
+    final updated = <String, dynamic>{
+      ...lives[index],
+      'scriptId': scriptId,
       'updatedAt': DateTime.now().toUtc().toIso8601String(),
     };
     lives[index] = updated;

@@ -36,6 +36,8 @@ const PHONE_OWNER_B = '13920000306'; // 归属隔离 B
 const PHONE_LOOP = '13920000307'; // M5 循环播报接线
 const PHONE_LOOP_SWAP = '13920000308'; // M4 直播中热更台本
 const PHONE_LOOP_SWAP_B = '13920000309'; // M4 热更归属隔离（他人）
+const PHONE_SCRIPT_SWAP = '13920000310'; // 直播中热更话术
+const PHONE_SCRIPT_SWAP_B = '13920000311'; // 话术热更归属隔离（他人）
 
 async function registerAndGetToken(phone: string): Promise<string> {
   const send = await app.inject({
@@ -136,6 +138,7 @@ it('未带 token 访问 start / end / monitor / danmaku 均返回 401', async ()
     ['POST', `/api/lives/${id}/start`],
     ['POST', `/api/lives/${id}/end`],
     ['POST', `/api/lives/${id}/loop-script`],
+    ['POST', `/api/lives/${id}/script`],
     ['GET', `/api/lives/${id}/monitor`],
     ['GET', `/api/lives/${id}/danmaku`],
   ] as const) {
@@ -360,6 +363,24 @@ async function seedBoundLoopScript(phone: string, liveId: string): Promise<void>
   await pool.query(`UPDATE lives SET loop_script_id = $1 WHERE id = $2`, [scriptId, liveId]);
 }
 
+/**
+ * 直接 seed 一条归属该用户的 ready 话术（绕过 DeepSeek 生成），返回话术 id；
+ * sensitive 可传 pass / blocked，用于覆盖「未过审话术不可热更」分支。
+ */
+async function seedScript(phone: string, title = '火锅店话术', sensitive = 'pass'): Promise<string> {
+  const userId = await userIdOf(phone);
+  const id = randomUUID();
+  await pool.query(
+    `INSERT INTO scripts
+       (id, user_id, industry, title, product_snapshot, content, status, sensitive_check_status,
+        sensitive_matched_words, sensitive_scanned_at)
+     VALUES ($1, $2, 'restaurant', $3, '{"name":"测试商品"}'::jsonb, $4, 'ready', $5,
+        '[]'::jsonb, now())`,
+    [id, userId, title, '本店双人火锅套餐，锅底现炒，欢迎到店品尝。', sensitive],
+  );
+  return id;
+}
+
 /** 轮询 monitor 直到谓词满足；Runner 异步启动，/start 返回时可能尚未 running（超时抛错防挂死） */
 async function waitMonitorUntil(
   token: string,
@@ -541,4 +562,64 @@ dbIt('M4 热更：非直播中 409；直播中换绑 200 + Runner 补启动读�
     // 兜底：无论断言走到哪一步都确保停掉 Runner，避免污染同文件后续用例
     loopCaster.stop(liveId);
   }
+});
+
+dbIt('热更话术：非直播中 409；直播中换绑 200；参数/归属/过审校验', async () => {
+  const token = await registerAndGetToken(PHONE_SCRIPT_SWAP);
+  await resetUserData(PHONE_SCRIPT_SWAP);
+  const liveId = await createLiveDraft(token);
+  const scriptA = await seedScript(PHONE_SCRIPT_SWAP, '话术 A');
+  const scriptB = await seedScript(PHONE_SCRIPT_SWAP, '话术 B');
+  const blocked = await seedScript(PHONE_SCRIPT_SWAP, '未过审话术', 'blocked');
+
+  const post = (payload: unknown, authToken: string) =>
+    app.inject({
+      method: 'POST',
+      url: `/api/lives/${liveId}/script`,
+      headers: bearer(authToken),
+      payload,
+    });
+
+  // 场景 1：idle 草稿不可热更 → 409
+  const notLive = await post({ scriptId: scriptA }, token);
+  expect(notLive.statusCode).toBe(409);
+  expect(notLive.json()).toMatchObject({ error: 'LIVE_NOT_LIVE' });
+
+  await setLiveStatus(liveId, 'live', { startedSecondsAgo: 3 });
+
+  // 场景 2：缺 scriptId → 400
+  const missing = await post({}, token);
+  expect(missing.statusCode).toBe(400);
+  expect(missing.json()).toMatchObject({ error: 'SCRIPT_REQUIRED' });
+
+  // 场景 3：未过审话术 → 400 SCRIPT_NOT_READY（合规：未过审话术不得进直播链路）
+  const notReady = await post({ scriptId: blocked }, token);
+  expect(notReady.statusCode).toBe(400);
+  expect(notReady.json()).toMatchObject({ error: 'SCRIPT_NOT_READY' });
+
+  // 场景 4：直播中换绑 A → 200，只改 scriptId
+  const boundA = await post({ scriptId: scriptA }, token);
+  expect(boundA.statusCode).toBe(200);
+  expect(boundA.json().live.scriptId).toBe(scriptA);
+
+  // 场景 5：再换绑 B → 200（弹幕回复上下文按条实时读取，立即生效）
+  const boundB = await post({ scriptId: scriptB }, token);
+  expect(boundB.statusCode).toBe(200);
+  expect(boundB.json().live.scriptId).toBe(scriptB);
+
+  // 场景 6：他人话术 → 400 SCRIPT_NOT_OWNED
+  const tokenB = await registerAndGetToken(PHONE_SCRIPT_SWAP_B);
+  await resetUserData(PHONE_SCRIPT_SWAP_B);
+  const foreignScript = await seedScript(PHONE_SCRIPT_SWAP_B, '他人话术');
+  const borrowed = await post({ scriptId: foreignScript }, token);
+  expect(borrowed.statusCode).toBe(400);
+  expect(borrowed.json()).toMatchObject({ error: 'SCRIPT_NOT_OWNED' });
+
+  // 场景 7：他人场次 → 404（归属隔离）
+  const stranger = await post({ scriptId: scriptA }, tokenB);
+  expect(stranger.statusCode).toBe(404);
+  expect(stranger.json()).toMatchObject({ error: 'LIVE_NOT_FOUND' });
+
+  // 兜底：停掉本场 Runner（start 未调用，但 setLiveStatus 直接置 live 可能触发轮询）
+  loopCaster.stop(liveId);
 });

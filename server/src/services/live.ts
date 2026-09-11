@@ -86,6 +86,7 @@ export type LiveErrorCode =
   | 'VOICE_NOT_OWNED'
   | 'VOLC_PRESET_INVALID'
   | 'SCRIPT_NOT_OWNED'
+  | 'SCRIPT_NOT_READY'
   | 'LOOP_SCRIPT_NOT_OWNED'
   | 'LIVE_NOT_FOUND'
   | 'LIVE_IN_PROGRESS'
@@ -169,6 +170,20 @@ async function isOwnedLoopScript(loopScriptId: string, userId: string): Promise<
     .where(and(eq(loopScriptsTable.id, loopScriptId), eq(loopScriptsTable.userId, userId)))
     .limit(1);
   return rows.length > 0;
+}
+
+/** 校验话术「可开播」：status = ready 且敏感词扫描 pass（未过审话术不得进直播链路） */
+async function isReadyScript(scriptId: string): Promise<boolean> {
+  const rows = await db
+    .select({
+      status: scriptsTable.status,
+      sensitiveCheckStatus: scriptsTable.sensitiveCheckStatus,
+    })
+    .from(scriptsTable)
+    .where(eq(scriptsTable.id, scriptId))
+    .limit(1);
+  const row = rows[0];
+  return row !== undefined && row.status === 'ready' && row.sensitiveCheckStatus === 'pass';
 }
 
 /** 标题校验：trim 后 1-100 字，失败抛 LIVE_TITLE_INVALID */
@@ -381,6 +396,42 @@ export async function bindLiveLoopScript(
   const updated = await db
     .update(livesTable)
     .set({ loopScriptId })
+    .where(and(eq(livesTable.id, id), eq(livesTable.userId, userId)))
+    .returning();
+  const row = updated[0];
+  return row ? toLive(row) : null;
+}
+
+/**
+ * 直播中更换「话术」（热更）：只允许 status === 'live' 的场次调用。
+ * - 非本人或不存在 → 返回 null（路由层转 404）；
+ * - 非直播中 → 抛 LIVE_NOT_LIVE（路由层转 409）；
+ * - 话术不存在或不归属当前用户 → 抛 SCRIPT_NOT_OWNED（路由层转 400）；
+ * - 话术未 ready / 敏感词未过审 → 抛 SCRIPT_NOT_READY（路由层转 400）。
+ * 生效时机：弹幕回复上下文按条实时读取，改绑后新弹幕立即用新话术；只改 scriptId，
+ * 不动循环台本（loopScriptId）。
+ */
+export async function bindLiveScript(
+  userId: string,
+  id: string,
+  scriptId: string,
+): Promise<Live | null> {
+  const existing = await findOwnedLive(userId, id);
+  if (!existing) {
+    return null;
+  }
+  if (existing.status !== 'live') {
+    throw new LiveError('LIVE_NOT_LIVE', '只有直播中的场次才能更换话术');
+  }
+  if (!(await isOwnedScript(scriptId, userId))) {
+    throw new LiveError('SCRIPT_NOT_OWNED', '话术不存在或不属于当前用户');
+  }
+  if (!(await isReadyScript(scriptId))) {
+    throw new LiveError('SCRIPT_NOT_READY', '话术未通过敏感词扫描，不可用于直播');
+  }
+  const updated = await db
+    .update(livesTable)
+    .set({ scriptId })
     .where(and(eq(livesTable.id, id), eq(livesTable.userId, userId)))
     .returning();
   const row = updated[0];

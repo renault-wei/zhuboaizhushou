@@ -709,6 +709,24 @@ class ApiClient {
     }
   }
 
+  /// 直播中更换「话术」（热更）：仅直播中（status=live）可调，其他状态服务端 409；
+  /// 话术须归属当前用户且已过审，否则 400。生效时机：弹幕回复上下文按条实时读取，
+  /// 换绑后新弹幕立即用新话术，只改 scriptId（不动循环台本）。
+  Future<Live> bindLiveScript(
+    String id, {
+    required String scriptId,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/lives/$id/script',
+        data: <String, dynamic>{'scriptId': scriptId},
+      );
+      return _parseLive(response.data);
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
   /// 删除开播配置：仅 idle / ended / failed 可删；ready / live 会被服务端 409 拦截。
   /// 注意：显式发送空 JSON 对象 `{}`，避免携带 Content-Type 但空 body
   /// 触发 Fastify 的 FST_ERR_CTP_EMPTY_JSON_BODY（400）。

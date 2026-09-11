@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import {
   bindLiveLoopScript,
+  bindLiveScript,
   createLive,
   deleteLive,
   getLiveById,
@@ -206,8 +207,8 @@ function statusCodeOf(code: string): number {
   }
 }
 
-/** 换绑台本路由专用映射：非直播中 409，其余沿用通用映射（end 路由维持 400 口径不变） */
-function loopScriptStatusCodeOf(code: string): number {
+/** 直播中热更路由（话术 / 循环台本）专用映射：非直播中 409，其余沿用通用映射 */
+function hotSwapStatusCodeOf(code: string): number {
   return code === 'LIVE_NOT_LIVE' ? 409 : statusCodeOf(code);
 }
 
@@ -310,7 +311,35 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
     } catch (err) {
       if (err instanceof LiveError) {
         return reply
-          .code(loopScriptStatusCodeOf(err.code))
+          .code(hotSwapStatusCodeOf(err.code))
+          .send({ error: err.code, message: err.message });
+      }
+      throw err;
+    }
+  });
+
+  // 直播中更换「话术」（热更）：仅 live 可调、归属 + 过审校验；弹幕回复上下文按条
+  // 实时读取，改绑后新弹幕立即用新话术（未过审话术一律 400 SCRIPT_NOT_READY）。
+  app.post('/api/lives/:id/script', { preHandler: app.authenticate }, async (request, reply) => {
+    const { id } = request.params as LiveIdParams;
+    const record = request.body;
+    const scriptId =
+      typeof record === 'object' && record !== null
+        ? readOptionalId((record as Record<string, unknown>).scriptId)
+        : null;
+    if (!scriptId) {
+      return reply.code(400).send({ error: 'SCRIPT_REQUIRED', message: '请选择要应用的话术' });
+    }
+    try {
+      const live = await bindLiveScript(request.user.userId, id, scriptId);
+      if (!live) {
+        return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
+      }
+      return { live };
+    } catch (err) {
+      if (err instanceof LiveError) {
+        return reply
+          .code(hotSwapStatusCodeOf(err.code))
           .send({ error: err.code, message: err.message });
       }
       throw err;
