@@ -141,8 +141,8 @@ describe('presetSpeechOverrides（预设音色 → 合成覆盖项）', () => {
   });
 });
 
-describe('clampLiveSpeechRate（语速归一：滑块区间 0~60）', () => {
-  it('缺省 / 非有限数：回落默认档（15）', () => {
+describe('clampLiveSpeechRate（语速归一：滑块区间 -20~60）', () => {
+  it('缺省 / 非有限数：回落默认档（-10）', () => {
     expect(clampLiveSpeechRate(null)).toBe(DEFAULT_LIVE_SPEECH_RATE);
     expect(clampLiveSpeechRate(undefined)).toBe(DEFAULT_LIVE_SPEECH_RATE);
     expect(clampLiveSpeechRate(Number.NaN)).toBe(DEFAULT_LIVE_SPEECH_RATE);
@@ -150,7 +150,7 @@ describe('clampLiveSpeechRate（语速归一：滑块区间 0~60）', () => {
   });
 
   it('越界钳到区间边界', () => {
-    expect(clampLiveSpeechRate(0)).toBe(MIN_LIVE_SPEECH_RATE);
+    expect(clampLiveSpeechRate(-20)).toBe(MIN_LIVE_SPEECH_RATE);
     expect(clampLiveSpeechRate(-50)).toBe(MIN_LIVE_SPEECH_RATE);
     expect(clampLiveSpeechRate(999)).toBe(MAX_LIVE_SPEECH_RATE);
     expect(clampLiveSpeechRate(100)).toBe(MAX_LIVE_SPEECH_RATE);
@@ -158,6 +158,7 @@ describe('clampLiveSpeechRate（语速归一：滑块区间 0~60）', () => {
 
   it('区间内就近取整原样保留', () => {
     expect(clampLiveSpeechRate(15)).toBe(15);
+    expect(clampLiveSpeechRate(-12.7)).toBe(-13);
     expect(clampLiveSpeechRate(42.4)).toBe(42);
     expect(clampLiveSpeechRate(DEFAULT_LIVE_SPEECH_RATE)).toBe(DEFAULT_LIVE_SPEECH_RATE);
   });

@@ -591,7 +591,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('口播语速：默认 15（略快于真人），拖动滑块后随保存请求落库', (WidgetTester tester) async {
+  testWidgets('口播语速：默认 -10（接近真人主播），拖动滑块后随保存请求落库', (WidgetTester tester) async {
     final backend = FakeBackend(
       douyinBound: true,
       voices: <Map<String, dynamic>>[
@@ -610,16 +610,16 @@ void main() {
     );
     await tester.pump();
 
-    // 默认档：15（略快于真人），滑块与展示值一致
+    // 默认档：-10（接近真人主播），滑块与展示值一致
     final sliderFinder = find.byKey(const Key('liveSpeechRateSlider'));
     await _scrollTo(tester, sliderFinder);
     expect(
       tester.widget<Slider>(sliderFinder).value,
-      15,
+      -10,
     );
     expect(
       tester.widget<Text>(find.byKey(const Key('liveSpeechRateValue'))).data,
-      '15',
+      '-10',
     );
 
     // 拖动到 40 档：直接触发 onChanged，避免像素级拖拽不稳定

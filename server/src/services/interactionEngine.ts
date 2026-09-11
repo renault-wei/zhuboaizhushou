@@ -40,7 +40,7 @@ export interface LiveInteractionContext {
   productSnapshot: Record<string, string> | null;
   /** 场次绑定的火山预设音色 id：回复出口据此换发音人，null = 用默认音色 */
   volcPresetId: string | null;
-  /** 场次口播语速档（商家滑块 0~60）：回复出口透传，null = 用默认档（15） */
+  /** 场次口播语速档（商家滑块 -20~60）：回复出口透传，null = 用默认档（-10） */
   speechRate: number | null;
 }
 
@@ -60,7 +60,7 @@ export interface InteractionReply {
   createdAt: string;
   /** 本场音色（火山预设 id）：出口合成时透传，null = 默认音色 */
   volcPresetId: string | null;
-  /** 本场语速档：出口合成时透传，null = 默认档（15） */
+  /** 本场语速档：出口合成时透传，null = 默认档（-10） */
   speechRate: number | null;
 }
 

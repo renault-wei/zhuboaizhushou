@@ -98,9 +98,9 @@ export const env = {
     speaker: optionalEnv('VOLC_TTS_SPEAKER') ?? 'zh_female_vv_uranus_bigtts',
     // 采样率：官方可选 8000/16000/22050/24000/32000/44100/48000
     sampleRate: intEnv('VOLC_TTS_SAMPLE_RATE', 24000),
-    // 语速：范围 [-50, 100]，0 为正常语速；直播链路一律按场次档位下发覆盖（默认 15 = 略快于真人），
-    // 这里的兜底同样取 15，保证「未设档位」「场次档位」「试听预生成」三处口径一致。
-    speechRate: intEnv('VOLC_TTS_SPEECH_RATE', 15),
+    // 语速：范围 [-50, 100]，0 为正常语速；直播链路一律按场次档位下发覆盖（默认 -10 ≈ 接近真人主播），
+    // 这里的兜底同样取 -10，保证「未设档位」「场次档位」「试听预生成」三处口径一致。
+    speechRate: intEnv('VOLC_TTS_SPEECH_RATE', -10),
   },
 
   // 抖音开放平台：OAuth + 团购券 + 推流

@@ -479,7 +479,7 @@ dbIt('语速档读写：创建带档 / 越界钳制 / 缺省落 null / 更新可
   const liveId = created.json().live.id as string;
   expect(created.json().live.speechRate).toBe(45);
 
-  // 创建：越界一律钳到滑块区间 0~60
+  // 创建：越界一律钳到滑块区间 -20~60
   const clamped = await app.inject({
     method: 'POST',
     url: '/api/lives',
@@ -489,7 +489,27 @@ dbIt('语速档读写：创建带档 / 越界钳制 / 缺省落 null / 更新可
   expect(clamped.statusCode).toBe(201);
   expect(clamped.json().live.speechRate).toBe(60);
 
-  // 创建：非法值（字符串）落 null，由运行时按默认档（15）兜底
+  // 创建：负档（比真人略慢）原样保留
+  const slow = await app.inject({
+    method: 'POST',
+    url: '/api/lives',
+    headers: bearer(token),
+    payload: { title: '语速档-负档', speechRate: -12 },
+  });
+  expect(slow.statusCode).toBe(201);
+  expect(slow.json().live.speechRate).toBe(-12);
+
+  // 创建：下沿越界（比 -20 更慢）同样钳到区间边界
+  const clampedLow = await app.inject({
+    method: 'POST',
+    url: '/api/lives',
+    headers: bearer(token),
+    payload: { title: '语速档-越界下沿', speechRate: -999 },
+  });
+  expect(clampedLow.statusCode).toBe(201);
+  expect(clampedLow.json().live.speechRate).toBe(-20);
+
+  // 创建：非法值（字符串）落 null，由运行时按默认档（-10）兜底
   const invalid = await app.inject({
     method: 'POST',
     url: '/api/lives',

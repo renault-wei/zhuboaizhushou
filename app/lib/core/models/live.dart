@@ -90,8 +90,8 @@ class Live {
   /// 火山预设音色 id（内置目录，只读）：与 [voiceId] 互斥，二选一
   final String? volcPresetId;
 
-  /// 口播语速档：火山 speech_rate 口径的商家滑块档（0~60，0 = 正常语速）；
-  /// null = 未设过，服务端按默认档（15）兜底
+  /// 口播语速档：火山 speech_rate 口径的商家滑块档（-20~60，0 = 正常语速，负值更慢）；
+  /// null = 未设过，服务端按默认档（-10）兜底
   final int? speechRate;
 
   /// 绑定的克隆音色 id（来自「我的音色」）：与 [volcPresetId] 互斥，二选一

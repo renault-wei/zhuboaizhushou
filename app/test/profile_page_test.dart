@@ -54,7 +54,7 @@ void main() {
     final footerVersion = tester.widget<Text>(
       find.byKey(const Key('profileFooterVersion')),
     );
-    expect(footerVersion.data, 'v0.3.0+91');
+    expect(footerVersion.data, 'v0.3.0+92');
   });
 
   testWidgets('我的页：静态子页导航 — 官方客服提示与关于页版本', (WidgetTester tester) async {
@@ -88,7 +88,7 @@ void main() {
     final versionLabel = tester.widget<Text>(
       find.byKey(const Key('profileVersionLabel')),
     );
-    expect(versionLabel.data, 'v0.3.0+91');
+    expect(versionLabel.data, 'v0.3.0+92');
   });
 
   testWidgets('我的页：隐私政策子页展示初稿提示', (WidgetTester tester) async {

@@ -89,8 +89,8 @@ void main() {
   });
 
   test('fromJson：speechRate 带值映射，字段缺失归一为 null（服务端默认档兜底）', () {
-    expect(Live.fromJson(_liveJson(speechRate: 72)).speechRate, 72);
-    // 未设过（列缺失）与显式 null 语义一致：交回服务端默认档（15）
+    expect(Live.fromJson(_liveJson(speechRate: 45)).speechRate, 45);
+    // 未设过（列缺失）与显式 null 语义一致：交回服务端默认档（-10）
     expect(Live.fromJson(_liveJson()).speechRate, isNull);
     expect(
       Live.fromJson(<String, dynamic>{..._liveJson(), 'speechRate': null})
