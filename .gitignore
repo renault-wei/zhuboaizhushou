@@ -12,6 +12,9 @@ build/
 .DS_Store
 Thumbs.db
 
+# 本机构建 / 验证产物（真机截图 / 临时导出 / APK 归档；*.apk 已在上方忽略）
+outputs/
+
 # Flutter / Dart
 app/.dart_tool/
 app/.flutter-plugins*
