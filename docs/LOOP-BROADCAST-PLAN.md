@@ -11,7 +11,7 @@
 | Q1 | 台本归属 | **台本可通用（可复用台本库）**；客户需要新台本时，可随时新建/更新。开播配置引用台本，库内台本可被多个场次复用。 |
 | Q2 | 空台本 | 正常流程**不会出现空台本**（开播前应绑定台本）。不做「空台本自动兜底」。若客户要快速测试，可用**随机/任选一条 ready 话术**生成临时循环声源；正式场景一律用提供的台本。 |
 | Q3 | 条数与字数 | 默认生成 6 条；每条 15–80 字；上限 12 条 / 单条 200 字。 |
-| Q4 | 节奏 | 条间间隔默认 6s（可配 0–60）；**每轮休息 20s**（可配 0–300）。 |
+| Q4 | 节奏 | 条间间隔默认 **2s**（可配 0–60）；**每轮休息 6s**（可配 0–300）。<br>2026-09-11 修订：原 6s / 20s 使一轮内静默占比近 60%，听感像念稿、且长静默有平台「挂机/低质」判定风险；示例台本与存量数据（5~8s）一并压到 2s，见 `drizzle/20260911_v10_loop_gap_tighten.sql`。 |
 | Q5 | 弹幕与循环 | 弹幕回复只在**空档期**插入，**不打断**循环句；若因循环句较长导致回复被顺延、等待时间过长，**频控从回复实际插入出声的时间点重新起算**。 |
 | Q6 | 直播中改台本 | **支持热更新**（2026-09-11 修订）：工作台「更新话术」入口或 `POST /api/lives/:id/loop-script` 换绑，引擎**每轮开头重读**台本，于**下一轮**生效、不打断当前句；清空/解绑则本场停止循环只回弹幕。 |
 | Q7 | 循环暂停/继续 | 本轮不做；循环停止入口 = 结束直播（真人接管/插话闪避沿用暂缓口径）。 |
@@ -78,7 +78,7 @@ export const loopScriptItems = pgTable('loop_script_items', {
   seq: integer('seq').notNull(),          // 1 起递增
   kind: varchar('kind', { length: 20 }),  // opening/product/coupon/warmup/closing/custom（宽松存储，未知=null）
   text: text('text').notNull(),           // 入库前逐条过拦截扫描
-  gapAfterSeconds: integer('gap_after_seconds'), // null = 用全局默认 6s
+  gapAfterSeconds: integer('gap_after_seconds'), // null = 用全局默认 2s（2026-09-11 由 6s 收紧）
   ...timestamps(),
 }, (table) => [
   uniqueIndex('loop_script_items_script_seq_unique').on(table.loopScriptId, table.seq),

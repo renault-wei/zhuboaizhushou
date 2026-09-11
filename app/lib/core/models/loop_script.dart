@@ -39,11 +39,11 @@ class LoopScriptItem {
   /// 台词正文（trim 后 1-200 字）
   final String text;
 
-  /// 本条播完后的间隔秒（0-60）；null = 用全局默认 6 秒
+  /// 本条播完后的间隔秒（0-60）；null = 用全局默认 2 秒
   final int? gapAfterSeconds;
 
   /// 提交给新建 / 整体替换接口的条目载荷：
-  /// kind / gapAfterSeconds 缺省时不下发，服务端按 null（默认 6 秒间隔）处理。
+  /// kind / gapAfterSeconds 缺省时不下发，服务端按 null（默认 2 秒间隔）处理。
   Map<String, dynamic> toPayload() {
     final kind = this.kind;
     final gap = gapAfterSeconds;

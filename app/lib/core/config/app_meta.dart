@@ -11,7 +11,7 @@ class AppMeta {
   static const String slogan = 'AI 智能直播助手';
 
   /// 当前展示版本（对齐 pubspec.yaml version）。
-  static const String version = '0.3.0+94';
+  static const String version = '0.3.0+95';
 
   /// 版权年与主体占位（正式商用前由运营补公司主体）。
   static const String copyright = '© 2026 星辰语音';

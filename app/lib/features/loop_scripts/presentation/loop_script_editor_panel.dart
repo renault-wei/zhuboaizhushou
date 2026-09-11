@@ -1,5 +1,5 @@
 /// 循环台本编辑器（新建/编辑/生成草稿预览共用）：标题 + 有序条目编辑。
-/// 每条台词支持：多行文本、播后间隔秒（0-60，空 = 用全局默认 6 秒）、
+/// 每条台词支持：多行文本、播后间隔秒（0-60，空 = 用全局默认 2 秒）、
 /// 上移 / 下移 / 删除 / 添加一句。保存前只做本地必填校验，命中敏感词由
 /// 服务端拦截（SENSITIVE_BLOCKED），页面透出命中词提示。
 library;
@@ -208,7 +208,7 @@ class _LoopItemRowState extends State<_LoopItemRow> {
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
                     labelText: '间隔秒',
-                    hintText: '空=默认6',
+                    hintText: '空=默认2',
                     border: OutlineInputBorder(),
                     isDense: true,
                   ),
@@ -462,7 +462,7 @@ class _LoopScriptEditorPanelState extends State<LoopScriptEditorPanel> {
         ),
         const SizedBox(height: 10),
         Text(
-          '循环节奏：整本按顺序循环播放，每条播完后停顿其「间隔秒」（空则默认 6 秒）。',
+          '循环节奏：整本按顺序循环播放，每条播完后停顿其「间隔秒」（空则默认 2 秒）。',
           style: TextStyle(fontSize: 12, color: context.tokenTextBody),
         ),
         const SizedBox(height: 16),

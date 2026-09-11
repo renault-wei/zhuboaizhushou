@@ -17,10 +17,11 @@ import { atmosphereScheduler } from './atmosphereScheduler';
 
 // ---------- 常量（口径 docs/LOOP-BROADCAST-PLAN.md §8）----------
 
-/** 条间默认间隔（秒）：条目未配置 gapAfterSeconds 时使用 */
-export const DEFAULT_ITEM_GAP_SECONDS = 6;
-/** 每轮播完后的轮间休息（秒） */
-export const DEFAULT_LOOP_REST_SECONDS = 20;
+/** 条间默认间隔（秒）：条目未配置 gapAfterSeconds 时使用
+ *  2026-09-11 由 6s 收紧到 2s：6s 停顿静默占比近 60%，听感像念稿、且长时间静默有平台判定风险 */
+export const DEFAULT_ITEM_GAP_SECONDS = 2;
+/** 每轮播完后的轮间休息（秒）：2026-09-11 由 20s 收紧到 6s（一轮结束不长时间留白） */
+export const DEFAULT_LOOP_REST_SECONDS = 6;
 /** 出声链路忙时的空档避让轮询步长（ms） */
 export const DEFAULT_IDLE_POLL_MS = 500;
 
