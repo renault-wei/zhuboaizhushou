@@ -607,6 +607,7 @@ class FakeBackend implements HttpClientAdapter {
       'couponId': _liveNullable(body['couponId']),
       'rtmpUrl': null,
       'volcPresetId': presetId,
+      'speechRate': (body['speechRate'] as num?)?.toInt(),
       'voiceId': normalizedVoiceId,
       'scriptId': scriptId,
       'loopScriptId': loopScriptId,
@@ -690,6 +691,9 @@ class FakeBackend implements HttpClientAdapter {
         }, 400);
       }
       updated['scriptId'] = scriptId;
+    }
+    if (body.containsKey('speechRate')) {
+      updated['speechRate'] = (body['speechRate'] as num?)?.toInt();
     }
     if (body.containsKey('loopScriptId')) {
       final loopScriptId = _liveNullable(body['loopScriptId']);

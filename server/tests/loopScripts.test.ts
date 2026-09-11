@@ -38,6 +38,7 @@ const PHONE_GEN_REWRITE = '13930000013';
 const PHONE_GEN_FAIL = '13930000014';
 const PHONE_GEN_ERROR = '13930000015';
 const PHONE_GEN_NOT_READY = '13930000017';
+const PHONE_GEN_SCENARIO = '13930000018';
 const PHONE_SOURCE_OTHER = '13930000018';
 
 async function registerAndGetToken(phone: string): Promise<string> {
@@ -612,6 +613,72 @@ dbIt('期望条目数：itemCount 生效且越界返回 400 ITEM_COUNT_INVALID',
   }
   // 校验失败不触发 AI
   expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+});
+
+dbIt('生成场景：缺省按团购、自定义透传参考素材、非法场景 400 且不触发 AI', async () => {
+  const token = await registerAndGetToken(PHONE_GEN_SCENARIO);
+  await resetUserData(PHONE_GEN_SCENARIO);
+  const sourceScriptId = await seedOwnedScript(PHONE_GEN_SCENARIO);
+  vi.mocked(fetch).mockResolvedValue(fakeDeepSeekResponse(cleanLoopJson()));
+
+  /** 取第 N 次 fetch 调用体里的 messages（system + user） */
+  const messagesOf = (callIndex: number) => {
+    const init = vi.mocked(fetch).mock.calls[callIndex]?.[1];
+    const payload = JSON.parse(String(init?.body ?? '{}')) as {
+      messages?: Array<{ role: string; content: string }>;
+    };
+    return payload.messages ?? [];
+  };
+
+  // 缺省场景 = 到店团购：骨架 + 团购增量片段
+  const defaulted = await app.inject({
+    method: 'POST',
+    url: '/api/loop-scripts/generate',
+    headers: bearer(token),
+    payload: { sourceScriptId },
+  });
+  expect(defaulted.statusCode).toBe(200);
+  const defaultSystem = messagesOf(0).find((m) => m.role === 'system')?.content ?? '';
+  expect(defaultSystem).toContain('【场景·到店团购】');
+
+  // 自定义场景：system 换成自定义增量，参考素材并入 user
+  const custom = await app.inject({
+    method: 'POST',
+    url: '/api/loop-scripts/generate',
+    headers: bearer(token),
+    payload: { sourceScriptId, scenario: 'custom', customBrief: '主打深夜食堂，轻松唠嗑风' },
+  });
+  expect(custom.statusCode).toBe(200);
+  const customMessages = messagesOf(1);
+  expect(customMessages.find((m) => m.role === 'system')?.content ?? '').toContain(
+    '【场景·自定义】',
+  );
+  expect(customMessages.find((m) => m.role === 'user')?.content ?? '').toContain(
+    '【参考素材】主打深夜食堂，轻松唠嗑风',
+  );
+
+  // 单品卖货：命名单品增量片段
+  const single = await app.inject({
+    method: 'POST',
+    url: '/api/loop-scripts/generate',
+    headers: bearer(token),
+    payload: { sourceScriptId, scenario: 'single_product' },
+  });
+  expect(single.statusCode).toBe(200);
+  expect(messagesOf(2).find((m) => m.role === 'system')?.content ?? '').toContain(
+    '【场景·单品卖货】',
+  );
+
+  // 非法场景：400 且不触发第 4 次 AI 调用
+  const invalid = await app.inject({
+    method: 'POST',
+    url: '/api/loop-scripts/generate',
+    headers: bearer(token),
+    payload: { sourceScriptId, scenario: 'not-a-scenario' },
+  });
+  expect(invalid.statusCode).toBe(400);
+  expect(invalid.json()).toMatchObject({ error: 'SCENARIO_INVALID' });
+  expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3);
 });
 
 dbIt('生成命中敏感词：自动改写一版通过 → 200 + generationNote', async () => {

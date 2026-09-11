@@ -50,6 +50,10 @@ export interface GenerateLoopItemsInput {
   sourceContent: string;
   /** 可选的团购券展示文案：有才允许生成 coupon 段 */
   couponText?: string | null;
+  /** 生成场景：单品卖货 / 团购 / 自定义（缺省按团购）；只影响增量片段，骨架共用 */
+  scenario?: LoopScriptScenario;
+  /** 自定义场景的参考素材（客户给的角度/人群/风格）；空则按骨架发挥，不编造 */
+  customBrief?: string | null;
   /** 期望条目数：1-12 */
   itemCount: number;
 }
@@ -90,7 +94,11 @@ function isLoopItemKind(value: unknown): value is LoopItemKind {
   return typeof value === 'string' && (LOOP_ITEM_KINDS as readonly string[]).includes(value);
 }
 
-/** 台本生成 / 改写的编排系统提示词（口径来自里程碑方案 §6.2） */
+/**
+ * 台本生成 / 改写的编排系统提示词「骨架」（口径来自里程碑方案 §6.2）。
+ * 三个场景（单品卖货 / 团购 / 自定义）共用同一骨架，只在末尾追加场景增量片段
+ * （见 SCENARIO_HINTS），避免各写一套导致口径漂移。
+ */
 const LOOP_SCRIPT_SYSTEM_PROMPT =
   '你是一名本地商家直播间的 AI 循环口播编排师。用户会给你一段已成稿的产品口播话术和它的商品信息，' +
   '请把它拆解改写成一集可循环播放的台本：若干条互相独立、能单条听懂的口播短句。' +
@@ -102,6 +110,35 @@ const LOOP_SCRIPT_SYSTEM_PROMPT =
   '4. 输出严格 JSON 数组，不要输出任何解释或代码块。数组元素格式为：' +
   '{"kind":"opening 或 product 或 coupon 或 warmup 或 closing 或 custom 之一，拿不准就写 custom",' +
   '"text":"这条口播的台词","gapAfterSeconds":数字 0-60 或省略（省略表示用默认 6 秒间隔）}';
+
+/** 台本生成场景：单品卖货 / 到店团购 / 自定义（决定增量编排片段，骨架共用） */
+export const LOOP_SCRIPT_SCENARIOS = ['single_product', 'group_buy', 'custom'] as const;
+export type LoopScriptScenario = (typeof LOOP_SCRIPT_SCENARIOS)[number];
+/** 场景缺省值：到店团购（目标客群最常见的带货形态） */
+export const DEFAULT_LOOP_SCRIPT_SCENARIO: LoopScriptScenario = 'group_buy';
+
+/** 场景白名单判定（路由层校验请求体用） */
+export function isLoopScriptScenario(value: unknown): value is LoopScriptScenario {
+  return typeof value === 'string' && (LOOP_SCRIPT_SCENARIOS as readonly string[]).includes(value);
+}
+
+/** 场景增量片段：追加在骨架之后，只描述该场景的编排侧重，不重复通用约束 */
+const SCENARIO_HINTS: Record<LoopScriptScenario, string> = {
+  single_product:
+    '\n\n【场景·单品卖货】围绕这一件商品反复讲透卖点与使用场景，用「痛点→卖点→证据→催单」的小回路，' +
+    '节奏紧凑、不啰嗦，结尾给出明确的下单引导。',
+  group_buy:
+    '\n\n【场景·到店团购】重点讲清套餐包含什么、人均与到店核销方式，引导观众「点下方小房子抢券」；' +
+    '反复强调到店消费场景与限时优惠，不夸大份量与价格。',
+  custom:
+    '\n\n【场景·自定义】按用户在【参考素材】里给出的角度、人群与语气风格编排；' +
+    '参考素材未覆盖的信息一律不得编造，宁可少说也不虚构。',
+};
+
+/** 拼接系统提示词：骨架 + 场景增量 + 禁用词清单 */
+function buildSystemPrompt(scenario: LoopScriptScenario): string {
+  return `${LOOP_SCRIPT_SYSTEM_PROMPT}${SCENARIO_HINTS[scenario]}\n\n${SENSITIVE_GUARD_PROMPT}`;
+}
 
 function invalidResponseError(detail: string): LoopScriptError {
   return new LoopScriptError('GENERATION_FAILED', `AI 未返回可用台本（${detail}），请重试`);
@@ -185,11 +222,12 @@ export class DeepSeekLoopScriptServiceImpl implements DeepSeekLoopScriptService 
     return parseItems(await this.complete(messages));
   }
 
-  /** 组装对话前缀：system = 编排说明 + 禁用语清单，user = 来源话术 + 商品 + 可选券文案 */
+  /** 组装对话前缀：system = 骨架 + 场景增量 + 禁用语清单，user = 来源话术 + 商品 + 可选券/参考素材 */
   private buildMessages(
     input: GenerateLoopItemsInput,
     matchedWords: string[] | null,
   ): DeepSeekChatMessage[] {
+    const scenario = input.scenario ?? DEFAULT_LOOP_SCRIPT_SCENARIO;
     const parts: string[] = [
       `把下面这段口播话术改写成 ${input.itemCount} 条左右的循环台本短句：`,
       `【话术全文】${input.sourceContent}`,
@@ -197,6 +235,10 @@ export class DeepSeekLoopScriptServiceImpl implements DeepSeekLoopScriptService 
     ];
     if (input.couponText) {
       parts.push(`【团购券文案】${input.couponText}`);
+    }
+    // 自定义场景：把客户给的参考素材（角度/人群/风格）并入 user，未覆盖的信息不得编造
+    if (scenario === 'custom' && input.customBrief) {
+      parts.push(`【参考素材】${input.customBrief}`);
     }
     if (matchedWords && matchedWords.length > 0) {
       parts.push(
@@ -206,7 +248,7 @@ export class DeepSeekLoopScriptServiceImpl implements DeepSeekLoopScriptService 
     return [
       {
         role: 'system',
-        content: `${LOOP_SCRIPT_SYSTEM_PROMPT}\n\n${SENSITIVE_GUARD_PROMPT}`,
+        content: buildSystemPrompt(scenario),
       },
       { role: 'user', content: parts.join('\n') },
     ];

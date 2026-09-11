@@ -40,6 +40,8 @@ export interface LiveInteractionContext {
   productSnapshot: Record<string, string> | null;
   /** 场次绑定的火山预设音色 id：回复出口据此换发音人，null = 用默认音色 */
   volcPresetId: string | null;
+  /** 场次口播语速档（商家滑块 50~100）：回复出口透传，null = 用默认偏快档 */
+  speechRate: number | null;
 }
 
 /** 引擎产出的一条待播回复（出口交给 G5 TTS/播放队列） */
@@ -58,6 +60,8 @@ export interface InteractionReply {
   createdAt: string;
   /** 本场音色（火山预设 id）：出口合成时透传，null = 默认音色 */
   volcPresetId: string | null;
+  /** 本场语速档：出口合成时透传，null = 默认偏快档 */
+  speechRate: number | null;
 }
 
 export type InteractionSkipReason =
@@ -112,6 +116,7 @@ export async function loadLiveInteractionContext(
       scriptContent: scriptsTable.content,
       productSnapshot: scriptsTable.productSnapshot,
       volcPresetId: livesTable.volcPresetId,
+      speechRate: livesTable.speechRate,
     })
     .from(livesTable)
     .leftJoin(scriptsTable, eq(livesTable.scriptId, scriptsTable.id))
@@ -129,6 +134,7 @@ export async function loadLiveInteractionContext(
     scriptContent: row.scriptContent ?? null,
     productSnapshot: readProductSnapshot(row.productSnapshot),
     volcPresetId: row.volcPresetId ?? null,
+    speechRate: row.speechRate ?? null,
   };
 }
 
@@ -230,6 +236,7 @@ class InteractionEngineImpl implements InteractionEngine {
       source: useFallback ? 'fallback' : 'generated',
       createdAt: new Date(repliedAt).toISOString(),
       volcPresetId: context.volcPresetId,
+      speechRate: context.speechRate,
     };
 
     // 记频控时间点（以实际产出回复为准，期间失败的生成不占额度）
@@ -283,6 +290,6 @@ export function createInteractionEngine(
 export const interactionEngine = createInteractionEngine({
   onReply: (reply) =>
     liveSpeaker
-      .speak(reply.text, presetSpeechOverrides(reply.volcPresetId) ?? undefined)
+      .speak(reply.text, presetSpeechOverrides(reply.volcPresetId, reply.speechRate))
       .then(() => undefined),
 });

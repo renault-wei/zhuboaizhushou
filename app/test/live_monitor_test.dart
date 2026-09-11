@@ -25,6 +25,9 @@ class _FakeSpeechOutPlayer implements SpeechOutPlayer {
   Future<void> play(Uint8List wavBytes) async {}
 
   @override
+  Future<void> playUrl(String url) async {}
+
+  @override
   Future<void> stop() async {}
 
   @override

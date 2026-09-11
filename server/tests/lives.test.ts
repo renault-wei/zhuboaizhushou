@@ -37,6 +37,7 @@ const PHONE_LOOP_BIND = '13920000012';
 const PHONE_LOOP_OWNER = '13920000013';
 const PHONE_LOOP_CROSS = '13920000014';
 const PHONE_LOOP_PATCH = '13920000015';
+const PHONE_SPEECH = '13920000016';
 
 async function registerAndGetToken(phone: string): Promise<string> {
   const send = await app.inject({
@@ -462,6 +463,62 @@ dbIt('CRUD 完整流程：create → get → list → patch → delete → get 4
 });
 
 // ---------- 归属隔离 ----------
+
+dbIt('语速档读写：创建带档 / 越界钳制 / 缺省落 null / 更新可改可清', async () => {
+  const token = await registerAndGetToken(PHONE_SPEECH);
+  await resetUserData(PHONE_SPEECH);
+
+  // 创建：显式语速档原样保留
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/lives',
+    headers: bearer(token),
+    payload: { title: '语速档-创建', speechRate: 72 },
+  });
+  expect(created.statusCode).toBe(201);
+  const liveId = created.json().live.id as string;
+  expect(created.json().live.speechRate).toBe(72);
+
+  // 创建：越界一律钳到滑块区间（不做慢速段）
+  const clamped = await app.inject({
+    method: 'POST',
+    url: '/api/lives',
+    headers: bearer(token),
+    payload: { title: '语速档-越界', speechRate: 999 },
+  });
+  expect(clamped.statusCode).toBe(201);
+  expect(clamped.json().live.speechRate).toBe(100);
+
+  // 创建：非法值（字符串）落 null，由运行时按默认「偏快」档兜底
+  const invalid = await app.inject({
+    method: 'POST',
+    url: '/api/lives',
+    headers: bearer(token),
+    payload: { title: '语速档-非法', speechRate: 'fast' },
+  });
+  expect(invalid.statusCode).toBe(201);
+  expect(invalid.json().live.speechRate).toBeNull();
+
+  // 更新：改档
+  const patched = await app.inject({
+    method: 'PATCH',
+    url: `/api/lives/${liveId}`,
+    headers: bearer(token),
+    payload: { speechRate: 88 },
+  });
+  expect(patched.statusCode).toBe(200);
+  expect(patched.json().live.speechRate).toBe(88);
+
+  // 更新：显式 null 清档（回落运行时默认）
+  const cleared = await app.inject({
+    method: 'PATCH',
+    url: `/api/lives/${liveId}`,
+    headers: bearer(token),
+    payload: { speechRate: null },
+  });
+  expect(cleared.statusCode).toBe(200);
+  expect(cleared.json().live.speechRate).toBeNull();
+});
 
 dbIt('他人不能 GET / PATCH / DELETE 我的 live（统一 404 LIVE_NOT_FOUND）', async () => {
   const tokenOwner = await registerAndGetToken(PHONE_ISOLATION_A);

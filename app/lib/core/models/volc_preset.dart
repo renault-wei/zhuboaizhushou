@@ -8,6 +8,7 @@ class VolcPresetVoice {
     required this.gender,
     this.group = '',
     this.recommended = false,
+    this.previewUrl,
   });
 
   factory VolcPresetVoice.fromJson(Map<String, dynamic> json) {
@@ -17,6 +18,7 @@ class VolcPresetVoice {
       gender: json['gender']?.toString() ?? '',
       group: json['group']?.toString() ?? '',
       recommended: json['recommended'] == true,
+      previewUrl: json['previewUrl']?.toString(),
     );
   }
 
@@ -28,6 +30,7 @@ class VolcPresetVoice {
       'gender': gender,
       'group': group,
       'recommended': recommended,
+      'previewUrl': previewUrl,
     };
   }
 
@@ -45,6 +48,10 @@ class VolcPresetVoice {
 
   /// 是否推荐：组内置顶并标「推荐」
   final bool recommended;
+
+  /// 试听音频相对路径（方案 A：服务端预生成的静态 wav，如 /uploads/voice-previews/xxx.wav）；
+  /// 为空 = 该音色尚未预生成，App 回落 POST /api/voices/preview 真合成兜底。
+  final String? previewUrl;
 
   bool get isFemale => gender == 'female';
 }

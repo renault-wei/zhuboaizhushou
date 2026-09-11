@@ -16,10 +16,16 @@ import 'fake_backend.dart';
 /// 试听假播放器：不碰真实音频通道，记录播放次数与最后一次字节。
 class _RecordingSpeechOutPlayer implements SpeechOutPlayer {
   final List<Uint8List> played = <Uint8List>[];
+  final List<String> playedUrls = <String>[];
 
   @override
   Future<void> play(Uint8List wavBytes) async {
     played.add(wavBytes);
+  }
+
+  @override
+  Future<void> playUrl(String url) async {
+    playedUrls.add(url);
   }
 
   @override
@@ -266,6 +272,50 @@ void main() {
     expect(find.textContaining('试听失败'), findsOneWidget);
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('预设试听（方案 A）：带 previewUrl 直连静态音频，不再走合成接口', (
+    WidgetTester tester,
+  ) async {
+    const String previewPath =
+        '/uploads/voice-previews/zh_male_m191_uranus_bigtts.wav';
+    final backend = FakeBackend(
+      volcPresets: <Map<String, dynamic>>[
+        <String, dynamic>{
+          'id': 'zh_male_m191_uranus_bigtts',
+          'name': '云舟 2.0',
+          'gender': 'male',
+          'group': 'broadcast',
+          'recommended': true,
+          'previewUrl': previewPath,
+        },
+      ],
+    );
+    final player = _RecordingSpeechOutPlayer();
+    await _pumpVoiceLibrary(tester, backend, player: player);
+
+    await _tapKey(tester, 'presetGroupHeader_broadcast');
+    await _tapKey(tester, 'presetListen_zh_male_m191_uranus_bigtts');
+
+    // 秒开静态试听：只走 URL 直连播放，不消耗合成接口（无字节播放）
+    expect(player.playedUrls, hasLength(1));
+    expect(player.playedUrls.single, endsWith(previewPath));
+    expect(player.played, isEmpty);
+    // 试听状态复位，可重复点播
+    expect(find.byKey(const Key('presetListen_zh_male_m191_uranus_bigtts')), findsOneWidget);
+  });
+
+  testWidgets('预设试听（方案 A）：无 previewUrl 时回落真合成接口', (WidgetTester tester) async {
+    final backend = FakeBackend();
+    final player = _RecordingSpeechOutPlayer();
+    await _pumpVoiceLibrary(tester, backend, player: player);
+
+    await _tapKey(tester, 'presetGroupHeader_broadcast');
+    await _tapKey(tester, 'presetListen_zh_male_m191_uranus_bigtts');
+
+    // 未预生成：走合成接口取字节，本机播放器播出
+    expect(player.playedUrls, isEmpty);
+    expect(player.played, hasLength(1));
   });
 
   testWidgets('删除：取消不删除，确认后卡片移除', (WidgetTester tester) async {

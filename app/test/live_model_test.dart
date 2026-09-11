@@ -9,6 +9,7 @@ Map<String, dynamic> _liveJson({
   String status = 'idle',
   String? voiceId = 'v-ready',
   String? volcPresetId,
+  int? speechRate,
 }) {
   return <String, dynamic>{
     'id': id,
@@ -18,6 +19,7 @@ Map<String, dynamic> _liveJson({
     'rtmpUrl': 'rtmp://push.example.com/live/stream-001',
     'voiceId': voiceId,
     'volcPresetId': volcPresetId,
+    'speechRate': speechRate,
     'scriptId': 'script-001',
     'status': status,
     'aiBadgeShown': true,
@@ -84,6 +86,17 @@ void main() {
     );
     expect(cloneLive.voiceId, 'v-ready');
     expect(cloneLive.volcPresetId, isNull);
+  });
+
+  test('fromJson：speechRate 带值映射，字段缺失归一为 null（服务端默认档兜底）', () {
+    expect(Live.fromJson(_liveJson(speechRate: 72)).speechRate, 72);
+    // 未设过（列缺失）与显式 null 语义一致：交回服务端默认「很快」档
+    expect(Live.fromJson(_liveJson()).speechRate, isNull);
+    expect(
+      Live.fromJson(<String, dynamic>{..._liveJson(), 'speechRate': null})
+          .speechRate,
+      isNull,
+    );
   });
 
   test('status 解析：六个合法值 + 未知值兜底 failed', () {

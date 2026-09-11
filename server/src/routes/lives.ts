@@ -19,6 +19,7 @@ import { settleLiveSession } from '../services/liveBilling';
 import { danmakuGateway, DanmakuError } from '../services/danmaku';
 import { loopCaster } from '../services/loopCaster';
 import { atmosphereScheduler } from '../services/atmosphereScheduler';
+import { clampLiveSpeechRate } from '../services/liveVoice';
 
 // 直播状态全集：用于列表 ?status= 过滤校验（与服务端 live_status 枚举一致）
 const LIVE_STATUSES: LiveStatus[] = ['idle', 'processing', 'ready', 'live', 'ended', 'failed'];
@@ -31,6 +32,7 @@ interface LiveIdParams {
 function readCreateBody(body: unknown): {
   title: string;
   volcPresetId: string | null;
+  speechRate: number | null;
   voiceId: string | null;
   scriptId: string | null;
   loopScriptId: string | null;
@@ -41,6 +43,7 @@ function readCreateBody(body: unknown): {
     return {
       title: '',
       volcPresetId: null,
+      speechRate: null,
       voiceId: null,
       scriptId: null,
       loopScriptId: null,
@@ -51,6 +54,7 @@ function readCreateBody(body: unknown): {
   const rawTitle = record.title;
   const title = typeof rawTitle === 'string' ? rawTitle : '';
   const volcPresetId = readOptionalText(record.volcPresetId);
+  const speechRate = readOptionalSpeechRate(record.speechRate);
   const voiceId = readOptionalId(record.voiceId);
   const scriptId = readOptionalId(record.scriptId);
   const loopScriptId = readOptionalId(record.loopScriptId);
@@ -58,13 +62,14 @@ function readCreateBody(body: unknown): {
   const rawVideo = record.videoSourceUrl;
   // videoSourceUrl 非字符串一律回退空串，避免脏数据入库
   const videoSourceUrl = typeof rawVideo === 'string' ? rawVideo : '';
-  return { title, volcPresetId, voiceId, scriptId, loopScriptId, couponId, videoSourceUrl };
+  return { title, volcPresetId, speechRate, voiceId, scriptId, loopScriptId, couponId, videoSourceUrl };
 }
 
 /** 读取 PATCH 更新请求体：字段缺省为 undefined（保留原值）；status/aiBadgeShown 字段一律忽略 */
 function readUpdateBody(body: unknown): {
   title: string | undefined;
   volcPresetId: string | null | undefined;
+  speechRate: number | null | undefined;
   voiceId: string | null | undefined;
   scriptId: string | null | undefined;
   loopScriptId: string | null | undefined;
@@ -75,6 +80,7 @@ function readUpdateBody(body: unknown): {
     return {
       title: undefined,
       volcPresetId: undefined,
+      speechRate: undefined,
       voiceId: undefined,
       scriptId: undefined,
       loopScriptId: undefined,
@@ -90,6 +96,10 @@ function readUpdateBody(body: unknown): {
   let volcPresetId: string | null | undefined;
   if (Object.prototype.hasOwnProperty.call(record, 'volcPresetId')) {
     volcPresetId = readOptionalText(record.volcPresetId);
+  }
+  let speechRate: number | null | undefined;
+  if (Object.prototype.hasOwnProperty.call(record, 'speechRate')) {
+    speechRate = readOptionalSpeechRate(record.speechRate);
   }
   let voiceId: string | null | undefined;
   if (Object.prototype.hasOwnProperty.call(record, 'voiceId')) {
@@ -111,7 +121,7 @@ function readUpdateBody(body: unknown): {
   if (Object.prototype.hasOwnProperty.call(record, 'videoSourceUrl')) {
     videoSourceUrl = typeof record.videoSourceUrl === 'string' ? record.videoSourceUrl : '';
   }
-  return { title, volcPresetId, voiceId, scriptId, loopScriptId, couponId, videoSourceUrl };
+  return { title, volcPresetId, speechRate, voiceId, scriptId, loopScriptId, couponId, videoSourceUrl };
 }
 
 /** 可选 uuid 字段：非空字符串才接收，其余一律视为 null */
@@ -122,6 +132,17 @@ function readOptionalId(raw: unknown): string | null {
 /** 可选文本字段：非空字符串才接收，其余一律视为 null */
 function readOptionalText(raw: unknown): string | null {
   return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : null;
+}
+
+/**
+ * 可选语速字段：只接收有限数字并钳到滑块区间（50~100）；
+ * 非数字 / 缺省一律视为 null（落库为空，合成时按默认「偏快」档兜底）。
+ */
+function readOptionalSpeechRate(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return null;
+  }
+  return clampLiveSpeechRate(raw);
 }
 
 /** 读取弹幕写入请求体：content 必填、senderNickname 可选；非字符串一律按空/缺省处理，其余字段忽略 */

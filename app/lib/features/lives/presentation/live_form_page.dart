@@ -42,6 +42,12 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   String? _voiceId;
   String? _volcPresetId;
 
+  /// 口播语速滑块档：产品口径 50~100，默认 50（很快）；服务端按区间钳制。
+  static const int _minSpeechRate = 50;
+  static const int _maxSpeechRate = 100;
+  static const int _defaultSpeechRate = 50;
+  int _speechRate = _defaultSpeechRate;
+
   /// 用户是否主动改选/清空过音色：为 true 后不再回填默认音色。
   bool _voiceTouched = false;
 
@@ -117,6 +123,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       // 克隆音色与火山预设互斥：服务端保证不同时非空，这里仍做一次兜底
       _volcPresetId = initial.volcPresetId;
       _voiceId = initial.volcPresetId != null ? null : initial.voiceId;
+      // 语速档：未设过（null）回落默认「很快」档
+      _speechRate = initial.speechRate ?? _defaultSpeechRate;
       _scriptId = initial.scriptId;
       _loopScriptId = initial.loopScriptId;
       _couponId = initial.couponId;
@@ -233,6 +241,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
           .save(
             title: title,
             volcPresetId: _volcPresetId,
+            speechRate: _speechRate,
             voiceId: _voiceId,
             scriptId: _scriptId,
             loopScriptId: _loopScriptId,
@@ -360,6 +369,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         const SizedBox(height: 12),
         _buildVoicePicker(state, voice),
         const SizedBox(height: 12),
+        _buildSpeechRateSection(state.saving),
+        const SizedBox(height: 12),
         _buildScriptPicker(state, script),
         const SizedBox(height: 12),
         _buildLoopScriptSection(state.saving),
@@ -412,6 +423,48 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       ),
       trailing: const Icon(Icons.chevron_right),
       onTap: state.saving ? null : () => _pickVoice(state),
+    );
+  }
+
+  /// 口播语速滑块（系统风：图标 + 标题 + 当前档位 + 一行说明）。
+  /// 区间 50~100，默认 50（很快）；空档期的弹幕回复沿用同档语速。
+  Widget _buildSpeechRateSection(bool saving) {
+    return Column(
+      key: const Key('liveSpeechRateSection'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            const Icon(Icons.speed_rounded, size: 18),
+            const SizedBox(width: 6),
+            const Text(
+              '口播语速',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+            const Spacer(),
+            Text(
+              '$_speechRate',
+              key: const Key('liveSpeechRateValue'),
+              style: TextStyle(fontSize: 13, color: context.tokenTextBody),
+            ),
+          ],
+        ),
+        Slider(
+          key: const Key('liveSpeechRateSlider'),
+          min: _minSpeechRate.toDouble(),
+          max: _maxSpeechRate.toDouble(),
+          divisions: _maxSpeechRate - _minSpeechRate,
+          value: _speechRate.toDouble(),
+          label: '$_speechRate',
+          onChanged: saving
+              ? null
+              : (value) => setState(() => _speechRate = value.round()),
+        ),
+        Text(
+          '数值越大口播越快，默认 50（很快）；弹幕回复同速。',
+          style: TextStyle(fontSize: 12, color: context.tokenTextBody),
+        ),
+      ],
     );
   }
 

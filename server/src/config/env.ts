@@ -98,8 +98,9 @@ export const env = {
     speaker: optionalEnv('VOLC_TTS_SPEAKER') ?? 'zh_female_vv_uranus_bigtts',
     // 采样率：官方可选 8000/16000/22050/24000/32000/44100/48000
     sampleRate: intEnv('VOLC_TTS_SAMPLE_RATE', 24000),
-    // 语速：范围 [-50, 100]，0 为正常语速
-    speechRate: intEnv('VOLC_TTS_SPEECH_RATE', 0),
+    // 语速：范围 [-50, 100]，0 为正常语速；直播链路一律按场次档位下发覆盖（默认「偏快」50），
+    // 这里的兜底同样取 50，保证「未设档位」与「场次档位」口径一致。
+    speechRate: intEnv('VOLC_TTS_SPEECH_RATE', 50),
   },
 
   // 抖音开放平台：OAuth + 团购券 + 推流
@@ -126,6 +127,13 @@ export const env = {
     enabled: optionalEnv('TTS_CACHE_ENABLED') !== 'false',
     // 缓存根目录：默认相对 server 运行目录 data/tts-cache（产物 *.wav 已被 .gitignore 覆盖）
     dir: optionalEnv('TTS_CACHE_DIR') ?? 'data/tts-cache',
+  },
+
+  // 预设音色试听静态产物（方案 A）：预生成 wav 由 App 直连 URL 播放，
+  // 避免每次点试听都真合成一次（省钱 + 秒开）；未预生成的音色自动回落真合成接口。
+  voicePreview: {
+    // 预生成目录：默认相对 server 运行目录 uploads/voice-previews（*.wav 已被 .gitignore 覆盖）
+    dir: optionalEnv('VOICE_PREVIEW_DIR') ?? 'uploads/voice-previews',
   },
 
 } as const;

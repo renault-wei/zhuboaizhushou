@@ -7,6 +7,10 @@ abstract interface class SpeechOutPlayer {
   /// 播放一段 wav 字节，正常播完或被 [stop] 打断后返回。
   Future<void> play(Uint8List wavBytes);
 
+  /// 播放一个音频 URL（试听方案 A：服务端预生成的静态 wav 直连播放）。
+  /// 语义同 [play]：整段播完（或被 [stop] 打断）后才返回。
+  Future<void> playUrl(String url);
+
   /// 打断当前播放（幂等）：播报切走 / 停用时兜底调用。
   Future<void> stop();
 

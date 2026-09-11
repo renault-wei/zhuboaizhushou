@@ -38,6 +38,7 @@ class Live {
     required this.couponId,
     required this.rtmpUrl,
     required this.volcPresetId,
+    required this.speechRate,
     required this.voiceId,
     required this.scriptId,
     this.loopScriptId,
@@ -57,6 +58,7 @@ class Live {
       couponId: _nullableString(json['couponId']),
       rtmpUrl: _nullableString(json['rtmpUrl']),
       volcPresetId: _nullableString(json['volcPresetId']),
+      speechRate: (json['speechRate'] as num?)?.toInt(),
       voiceId: _nullableString(json['voiceId']),
       scriptId: _nullableString(json['scriptId']),
       loopScriptId: _nullableString(json['loopScriptId']),
@@ -87,6 +89,10 @@ class Live {
 
   /// 火山预设音色 id（内置目录，只读）：与 [voiceId] 互斥，二选一
   final String? volcPresetId;
+
+  /// 口播语速档：火山 speech_rate 口径的商家滑块档（50~100）；
+  /// null = 未设过，服务端按默认「偏快」档兜底
+  final int? speechRate;
 
   /// 绑定的克隆音色 id（来自「我的音色」）：与 [volcPresetId] 互斥，二选一
   final String? voiceId;

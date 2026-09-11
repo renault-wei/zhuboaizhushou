@@ -30,6 +30,8 @@ export interface Live {
   rtmpUrl: string | null;
   /** 火山预设音色 id：与 voiceId 互斥，二选一 */
   volcPresetId: string | null;
+  /** 口播语速：商家滑块档 50~100（火山 speech_rate 口径）；null = 未设过，合成时回落默认档 */
+  speechRate: number | null;
   voiceId: string | null;
   scriptId: string | null;
   loopScriptId: string | null;
@@ -48,6 +50,8 @@ export interface CreateLiveInput {
   title: string;
   /** 火山预设音色 id：可空（暂未选）；与 voiceId 互斥 */
   volcPresetId: string | null;
+  /** 口播语速：可空（暂未设）；服务端按滑块区间 50~100 钳制 */
+  speechRate: number | null;
   /** 音色 id：可空（暂未选） */
   voiceId: string | null;
   /** 话术 id：可空（暂未选） */
@@ -64,7 +68,14 @@ export interface CreateLiveInput {
 export type UpdateLiveInput = Partial<
   Pick<
     CreateLiveInput,
-    'title' | 'volcPresetId' | 'voiceId' | 'scriptId' | 'loopScriptId' | 'couponId' | 'videoSourceUrl'
+    | 'title'
+    | 'volcPresetId'
+    | 'speechRate'
+    | 'voiceId'
+    | 'scriptId'
+    | 'loopScriptId'
+    | 'couponId'
+    | 'videoSourceUrl'
   >
 >;
 
@@ -107,6 +118,7 @@ export function toLive(row: LiveRow): Live {
     couponId: row.couponId,
     rtmpUrl: row.rtmpUrl,
     volcPresetId: row.volcPresetId,
+    speechRate: row.speechRate,
     voiceId: row.voiceId,
     scriptId: row.scriptId,
     loopScriptId: row.loopScriptId,
@@ -231,6 +243,7 @@ export async function createLive(userId: string, input: CreateLiveInput): Promis
       videoSourceUrl: input.videoSourceUrl?.trim() ?? '',
       couponId: input.couponId,
       volcPresetId: presetId,
+      speechRate: input.speechRate,
       voiceId,
       scriptId: input.scriptId,
       loopScriptId: input.loopScriptId,
@@ -263,6 +276,7 @@ export async function updateLive(
     videoSourceUrl?: string;
     couponId?: string | null;
     volcPresetId?: string | null;
+    speechRate?: number | null;
     voiceId?: string | null;
     scriptId?: string | null;
     loopScriptId?: string | null;
@@ -275,6 +289,9 @@ export async function updateLive(
   }
   if (patch.couponId !== undefined) {
     changes.couponId = patch.couponId;
+  }
+  if (patch.speechRate !== undefined) {
+    changes.speechRate = patch.speechRate;
   }
 
   // 音色选择：基于现值叠加本次 patch，再做互斥归一化，保证 voiceId 与 volcPresetId 不同时非空

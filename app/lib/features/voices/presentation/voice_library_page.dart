@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:starvoice_app/core/config/api_config.dart';
 import 'package:starvoice_app/core/models/voice.dart';
 import 'package:starvoice_app/core/models/volc_preset.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
@@ -97,13 +98,30 @@ class _VoiceLibraryPageState extends ConsumerState<VoiceLibraryPage> {
     }
   }
 
-  /// 试听预设音色：同一音色同一演示句服务端只真合成一次（命中缓存），可放心点。
+  /// 试听预设音色（方案 A）：优先直连服务端预生成的静态试听音频（秒开、不再走合成）；
+  /// 该音色还没预生成（或静态文件取不到）时，回落真合成接口兜底（服务端同一句只真合成一次）。
   Future<void> _previewPreset(VolcPresetVoice preset) async {
     if (_previewingPresetId != null || _previewingVoiceId != null) {
       return;
     }
     setState(() => _previewingPresetId = preset.id);
     try {
+      final previewUrl = preset.previewUrl;
+      var staticPlayed = false;
+      if (previewUrl != null && previewUrl.isNotEmpty) {
+        try {
+          await ref
+              .read(speechOutPlayerProvider)
+              .playUrl('${ApiConfig.baseUrl}$previewUrl');
+          staticPlayed = true;
+        } catch (_) {
+          // 静态试听取不到（文件缺失 / 网络抖动）：回落真合成，不让试听变砖
+          staticPlayed = false;
+        }
+      }
+      if (staticPlayed) {
+        return;
+      }
       final preview = await ref
           .read(apiClientProvider)
           .previewVoice(presetId: preset.id);

@@ -55,6 +55,7 @@ Map<String, dynamic> _liveJson({
   String videoSourceUrl = '',
   String? voiceId,
   String? volcPresetId,
+  int? speechRate,
   String? scriptId,
   String? couponId,
 }) {
@@ -67,6 +68,7 @@ Map<String, dynamic> _liveJson({
     'rtmpUrl': null,
     'voiceId': voiceId,
     'volcPresetId': volcPresetId,
+    'speechRate': speechRate,
     'scriptId': scriptId,
     'status': status,
     'aiBadgeShown': true,
@@ -158,6 +160,7 @@ void main() {
     expect(find.byKey(const Key('liveFormPage')), findsOneWidget);
     expect(find.text('新建开播配置'), findsOneWidget);
     // 新建草稿尚无 liveId，开播准备区提示先保存、再从列表进入编辑后操作
+    await _scrollTo(tester, find.byKey(const Key('liveReadyNewModeHint')));
     expect(
       find.byKey(const Key('liveReadyNewModeHint')),
       findsOneWidget,
@@ -448,6 +451,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // 选团购券：push /coupons 点选后 pop 回券 id
+    await _scrollTo(tester, find.byKey(const Key('liveCouponSelector')));
     await tester.tap(find.byKey(const Key('liveCouponSelector')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('couponListPage')), findsOneWidget);
@@ -585,5 +589,67 @@ void main() {
     // 等待 SnackBar 自动消失，避免遗留计时器
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('口播语速：默认 50（很快），拖动滑块后随保存请求落库', (WidgetTester tester) async {
+    final backend = FakeBackend(
+      douyinBound: true,
+      voices: <Map<String, dynamic>>[
+        _voiceJson(id: 'v-ready', name: '主播小美', status: 'ready'),
+      ],
+    );
+    await _pumpListRouter(tester, backend);
+
+    await tester.tap(find.byKey(const Key('liveAddButton')));
+    await tester.pumpAndSettle();
+
+    // 标题在列表顶部，先填再滚动，避免输入框被滚出视口
+    await tester.enterText(
+      find.byKey(const Key('liveTitleField')),
+      '火锅店晚间循环直播',
+    );
+    await tester.pump();
+
+    // 默认档：50（很快），滑块与展示值一致
+    final sliderFinder = find.byKey(const Key('liveSpeechRateSlider'));
+    await _scrollTo(tester, sliderFinder);
+    expect(
+      tester.widget<Slider>(sliderFinder).value,
+      50,
+    );
+    expect(
+      tester.widget<Text>(find.byKey(const Key('liveSpeechRateValue'))).data,
+      '50',
+    );
+
+    // 拖动到 80 档：直接触发 onChanged，避免像素级拖拽不稳定
+    tester.widget<Slider>(sliderFinder).onChanged!(80);
+    await tester.pump();
+    expect(
+      tester.widget<Text>(find.byKey(const Key('liveSpeechRateValue'))).data,
+      '80',
+    );
+
+    // 保存：请求体带上当前档位
+    final saveButton = find.byKey(const Key('liveSaveButton'));
+    await _scrollTo(tester, saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(backend.lives, hasLength(1));
+    expect(backend.lives.single['speechRate'], 80);
+  });
+
+  testWidgets('编辑模式：语速回填服务端已设档位', (WidgetTester tester) async {
+    final backend = FakeBackend(
+      douyinBound: true,
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市循环直播', speechRate: 88),
+      ],
+    );
+    await _pumpFormPage(tester, backend, liveId: 'live-001');
+    final sliderFinder = find.byKey(const Key('liveSpeechRateSlider'));
+    await _scrollTo(tester, sliderFinder);
+    expect(tester.widget<Slider>(sliderFinder).value, 88);
   });
 }

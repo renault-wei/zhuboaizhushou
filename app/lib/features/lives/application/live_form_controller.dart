@@ -140,6 +140,7 @@ class LiveFormController extends StateNotifier<LiveFormState> {
   Future<Live> save({
     required String title,
     String? volcPresetId,
+    int? speechRate,
     String? voiceId,
     String? scriptId,
     String? loopScriptId,
@@ -152,6 +153,7 @@ class LiveFormController extends StateNotifier<LiveFormState> {
           id: liveId,
           title: title,
           volcPresetId: volcPresetId,
+          speechRate: speechRate,
           voiceId: voiceId,
           scriptId: scriptId,
           loopScriptId: loopScriptId,
@@ -161,6 +163,7 @@ class LiveFormController extends StateNotifier<LiveFormState> {
       return await _apiClient.createLive(
         title: title,
         volcPresetId: volcPresetId,
+        speechRate: speechRate,
         voiceId: voiceId,
         scriptId: scriptId,
         loopScriptId: loopScriptId,

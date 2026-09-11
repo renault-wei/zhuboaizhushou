@@ -10,6 +10,8 @@ import {
 import { scanSensitive } from '../services/sensitive';
 import {
   DEFAULT_LOOP_ITEM_COUNT,
+  DEFAULT_LOOP_SCRIPT_SCENARIO,
+  isLoopScriptScenario,
   loopScriptService,
   LoopScriptError,
   LOOP_ITEM_KINDS,
@@ -46,6 +48,8 @@ interface CreateBody {
 interface GenerateBody {
   sourceScriptId: unknown;
   couponText: unknown;
+  scenario: unknown;
+  customBrief: unknown;
   itemCount: unknown;
 }
 
@@ -135,12 +139,14 @@ function readCreateBody(body: unknown): CreateBody {
 
 function readGenerateBody(body: unknown): GenerateBody {
   if (typeof body !== 'object' || body === null) {
-    return { sourceScriptId: null, couponText: null, itemCount: null };
+    return { sourceScriptId: null, couponText: null, scenario: null, customBrief: null, itemCount: null };
   }
   const record = body as Record<string, unknown>;
   return {
     sourceScriptId: record.sourceScriptId ?? null,
     couponText: record.couponText ?? null,
+    scenario: record.scenario ?? null,
+    customBrief: record.customBrief ?? null,
     itemCount: record.itemCount ?? null,
   };
 }
@@ -242,12 +248,31 @@ export const loopScriptsRoutes: FastifyPluginAsync = async (app) => {
         ? body.couponText.trim()
         : null;
 
+    // 生成场景：缺省按团购；显式传了非白名单值一律 400（避免静默用到错误场景）
+    let scenario = DEFAULT_LOOP_SCRIPT_SCENARIO;
+    if (body.scenario !== null && body.scenario !== undefined) {
+      if (!isLoopScriptScenario(body.scenario)) {
+        return reply.code(400).send({
+          error: 'SCENARIO_INVALID',
+          message: '生成场景不支持，仅支持 single_product / group_buy / custom',
+        });
+      }
+      scenario = body.scenario;
+    }
+    // 自定义场景的参考素材：非空才透传；未给则由骨架自行发挥、不编造
+    const customBrief =
+      typeof body.customBrief === 'string' && body.customBrief.trim().length > 0
+        ? body.customBrief.trim()
+        : null;
+
     const MAX_GENERATE_REWRITES = 2;
     const input = {
       industry: source.industry,
       product: source.productSnapshot as Record<string, string>,
       sourceContent: source.content,
       couponText,
+      scenario,
+      customBrief,
       itemCount,
     };
     try {

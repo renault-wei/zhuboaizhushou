@@ -38,7 +38,13 @@ class AudioplayersSpeechOutPlayer implements SpeechOutPlayer {
   }
 
   @override
-  Future<void> play(Uint8List wavBytes) async {
+  Future<void> play(Uint8List wavBytes) => _playSource(BytesSource(wavBytes));
+
+  @override
+  Future<void> playUrl(String url) => _playSource(UrlSource(url));
+
+  /// 播一段音频（字节 / URL 共用同一条等待语义）：整段播完或被 stop 打断后才返回。
+  Future<void> _playSource(Source source) async {
     if (_disposed) {
       return;
     }
@@ -47,7 +53,7 @@ class AudioplayersSpeechOutPlayer implements SpeechOutPlayer {
     final completer = Completer<void>();
     _finished = completer;
     try {
-      await player.play(BytesSource(wavBytes));
+      await player.play(source);
       // 等整段播完（或 stop 打断触发状态回调）再返回
       await completer.future;
     } finally {

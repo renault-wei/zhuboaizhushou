@@ -52,6 +52,15 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
   List<Script> _scripts = <Script>[];
   String? _selectedScriptId;
   late final TextEditingController _couponController;
+
+  /// 生成场景：group_buy（默认到店团购）/ single_product 单品卖货 / custom 自定义
+  String _scenario = 'group_buy';
+
+  /// 自定义场景的参考素材输入（默认预填示例，客户按需改写）
+  late final TextEditingController _customBriefController;
+  static const String _defaultCustomBrief =
+      '【产品】麻辣自热小火锅；【人群】加班党/宿舍党；【主打】8 分钟出餐、真牛油底料；'
+      '【风格】热情快节奏；【禁忌】不要说最辣、最好吃';
   String? _sourceScriptId;
   String? _generationNote;
   bool _sampleApplying = false;
@@ -63,6 +72,7 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
   void initState() {
     super.initState();
     _couponController = TextEditingController();
+    _customBriefController = TextEditingController(text: _defaultCustomBrief);
     // 复制为草稿：进入即加载原台本内容
     final copySourceId = widget.copySourceId;
     if (copySourceId != null && copySourceId.isNotEmpty) {
@@ -83,6 +93,7 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
   @override
   void dispose() {
     _couponController.dispose();
+    _customBriefController.dispose();
     super.dispose();
   }
 
@@ -230,6 +241,10 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
             couponText: _couponController.text.trim().isEmpty
                 ? null
                 : _couponController.text.trim(),
+            scenario: _scenario,
+            customBrief: _scenario == 'custom'
+                ? _customBriefController.text.trim()
+                : null,
           );
       if (!mounted) {
         return;
@@ -433,6 +448,57 @@ class _LoopScriptNewPageState extends ConsumerState<LoopScriptNewPage> {
               ],
             ),
           ),
+          const SizedBox(height: 16),
+          Text(
+            '生成场景',
+            style: Theme.of(context).textTheme.titleSmall
+                ?.copyWith(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: <Widget>[
+              ChoiceChip(
+                key: const Key('loopScriptScenarioGroupBuy'),
+                label: const Text('到店团购'),
+                selected: _scenario == 'group_buy',
+                onSelected: _generating
+                    ? null
+                    : (_) => setState(() => _scenario = 'group_buy'),
+              ),
+              ChoiceChip(
+                key: const Key('loopScriptScenarioSingleProduct'),
+                label: const Text('单品卖货'),
+                selected: _scenario == 'single_product',
+                onSelected: _generating
+                    ? null
+                    : (_) => setState(() => _scenario = 'single_product'),
+              ),
+              ChoiceChip(
+                key: const Key('loopScriptScenarioCustom'),
+                label: const Text('自定义'),
+                selected: _scenario == 'custom',
+                onSelected: _generating
+                    ? null
+                    : (_) => setState(() => _scenario = 'custom'),
+              ),
+            ],
+          ),
+          if (_scenario == 'custom') ...<Widget>[
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('loopScriptCustomBrief'),
+              controller: _customBriefController,
+              maxLines: 3,
+              maxLength: 300,
+              decoration: const InputDecoration(
+                labelText: '参考素材',
+                hintText: '按示例填写产品、人群、主打卖点与风格',
+                helperText: '未写到的信息 AI 不会编造，宁少说不虚构',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           TextField(
             key: const Key('loopScriptCouponText'),

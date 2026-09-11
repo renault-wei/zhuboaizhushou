@@ -474,6 +474,8 @@ class ApiClient {
   Future<LoopScriptDraft> generateLoopScriptDraft({
     required String sourceScriptId,
     String? couponText,
+    String? scenario,
+    String? customBrief,
     int? itemCount,
   }) async {
     try {
@@ -482,6 +484,8 @@ class ApiClient {
         data: <String, dynamic>{
           'sourceScriptId': sourceScriptId,
           'couponText': ?couponText,
+          'scenario': ?scenario,
+          'customBrief': ?customBrief,
           'itemCount': ?itemCount,
         },
       );
@@ -630,6 +634,7 @@ class ApiClient {
   Future<Live> createLive({
     required String title,
     String? volcPresetId,
+    int? speechRate,
     String? voiceId,
     String? scriptId,
     String? loopScriptId,
@@ -642,6 +647,7 @@ class ApiClient {
         data: <String, dynamic>{
           'title': title,
           'volcPresetId': volcPresetId,
+          'speechRate': ?speechRate,
           'voiceId': voiceId,
           'scriptId': scriptId,
           'loopScriptId': loopScriptId,
@@ -661,6 +667,7 @@ class ApiClient {
     required String id,
     String? title,
     String? volcPresetId,
+    int? speechRate,
     String? voiceId,
     String? scriptId,
     String? loopScriptId,
@@ -674,6 +681,8 @@ class ApiClient {
           'title': title,
           // 显式带 null：编辑页整体提交当前绑定，null 表示未绑定（服务端置空该列）
           'volcPresetId': volcPresetId,
+          // 显式带 null：null 表示清档、交回服务端默认「偏快」档
+          'speechRate': speechRate,
           'voiceId': voiceId,
           'scriptId': scriptId,
           'loopScriptId': loopScriptId,

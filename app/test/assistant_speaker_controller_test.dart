@@ -46,6 +46,11 @@ class _FakeSpeechOutPlayer implements SpeechOutPlayer {
   }
 
   @override
+  Future<void> playUrl(String url) async {
+    // 助播出声链路只播字节流，URL 试听不经过这里；保持接口完整即可
+  }
+
+  @override
   Future<void> stop() async {
     stopCount += 1;
     releaseGate();

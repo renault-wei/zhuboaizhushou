@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { readFile, unlink } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { access, readFile, unlink } from 'node:fs/promises';
 import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { users, voiceAgreements, voices } from '../db/schema';
@@ -14,6 +15,16 @@ import {
 } from '../services/volcPresets';
 import { VolcTtsError, volcTtsSynth } from '../services/volcTTS';
 import { findCachedTtsAudio, storeCachedTtsAudio } from '../services/ttsCache';
+import {
+  listAvailableVoicePreviewIds,
+  resolveVoicePreviewFile,
+  VOICE_PREVIEW_TEXT,
+  voicePreviewUrl,
+} from '../services/voicePreview';
+
+// 试听演示短句等口径集中在 services/voicePreview（试听预生成脚本共用同一份），
+// 这里再导出一次，保持既有引用（tests/live_voice.test.ts）不变。
+export { VOICE_PREVIEW_TEXT };
 
 // ---------- 常量 ----------
 
@@ -34,10 +45,6 @@ interface VoiceIdParams {
 // 避免把非法字符串透传给 PostgreSQL 触发 uuid 转换 500。
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** 试听演示短句：固定 30 字左右的小额演示调用，与正式口播话术无关 */
-export const VOICE_PREVIEW_TEXT =
-  '大家好，欢迎来到直播间，今天给大家介绍咱们的团购套餐，喜欢的可以点个关注。';
 
 /** 读取试听请求体：{ presetId? , voiceId? }——预设与克隆二选一 */
 function readPreviewBody(body: unknown): { presetId: string | null; voiceId: string | null } {
@@ -210,12 +217,35 @@ export const voicesRoutes: FastifyPluginAsync = async (app) => {
   // userDefaultPresetId = 用户自己设定的值（null = 没设过，客户端据此展示「默认」标记）。
   app.get('/api/voices/presets', { preHandler: app.authenticate }, async (request) => {
     const userDefaultPresetId = await loadUserDefaultPreset(request.user.userId);
+    // 方案 A：已预生成试听音频的音色带 previewUrl（App 直连播放）；未预生成的留空，App 回落真合成
+    const previewIds = await listAvailableVoicePreviewIds();
     return {
-      presets: VOLC_PRESET_VOICES,
+      presets: VOLC_PRESET_VOICES.map((preset) =>
+        previewIds.has(preset.id) ? { ...preset, previewUrl: voicePreviewUrl(preset.id) } : preset,
+      ),
       groups: VOLC_PRESET_GROUPS,
       defaultPresetId: userDefaultPresetId ?? DEFAULT_VOLC_PRESET_ID,
       userDefaultPresetId,
     };
+  });
+
+  // 预设音色试听静态下发（方案 A）：把预生成好的 demo wav 流式回给 App 直接播放。
+  // 无需登录：内容是固定演示句，不含任何用户数据；文件名走白名单，杜绝目录穿越。
+  app.get('/uploads/voice-previews/:file', async (request, reply) => {
+    const { file } = request.params as { file: string };
+    const filePath = resolveVoicePreviewFile(file);
+    if (!filePath) {
+      return reply.code(404).send({ error: 'NOT_FOUND', message: '试听音频不存在' });
+    }
+    try {
+      await access(filePath);
+    } catch {
+      return reply.code(404).send({ error: 'NOT_FOUND', message: '试听音频不存在' });
+    }
+    return reply
+      .header('cache-control', 'public, max-age=86400')
+      .type('audio/wav')
+      .send(createReadStream(filePath));
   });
 
   // 设置 / 清空商家默认音色：{ presetId: string } 设为默认，{ presetId: null } 清空回落全局默认。
