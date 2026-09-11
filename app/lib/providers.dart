@@ -92,6 +92,14 @@ final speechOutPlayerProvider = Provider<SpeechOutPlayer>((ref) {
   return player;
 });
 
+/// 音色试听专用播放器：与助播出声端**物理分离**，避免直播中试听打断 / 交叠
+/// 助播正在播报的声音（历史上二者共用同一通道，会出现多音色混播）。
+final voicePreviewPlayerProvider = Provider<SpeechOutPlayer>((ref) {
+  final player = AudioplayersSpeechOutPlayer();
+  ref.onDispose(player.dispose);
+  return player;
+});
+
 /// 助播机出声端控制器（P1 手机线）：工作台启用后轮询远程出声队列并本机播放。
 /// 全局单例（非 autoDispose）：直播中需持续出声，不随某个页面销毁而停；
 /// 停用与页面收尾由调用方（工作台）负责调 stop。

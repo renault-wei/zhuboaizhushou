@@ -144,11 +144,11 @@ export interface SpeechSink {
   isMuted(): boolean;
   setMuted(muted: boolean): void;
   /** 播放一段 wav：播放权与文件清理权都移交给 sink，播完 / 跳过 / 失败都由 sink 收尾 */
-  play(wavPath: string): Promise<PlayOutcome>;
+  play(wavPath: string, liveId?: string): Promise<PlayOutcome>;
   /** 清空未播队列并打断当前播放（真人接管 / 一键静音） */
   stop(): void;
-  /** 尚未播出的排队条数 */
-  pendingCount(): number;
+  /** 尚未播出的排队条数；带 liveId 时只数该场次的积压（多场隔离口径） */
+  pendingCount(liveId?: string): number;
 }
 
 /** 本地出声端：包装现有 Windows 播放队列（voicePlayer），并接管临时 wav 的文件生命周期 */
@@ -163,7 +163,7 @@ class LocalDeviceSink implements SpeechSink {
     this.player.setMuted(muted);
   }
 
-  async play(wavPath: string): Promise<PlayOutcome> {
+  async play(wavPath: string, _liveId?: string): Promise<PlayOutcome> {
     try {
       return await this.player.enqueue(wavPath);
     } finally {
@@ -176,7 +176,7 @@ class LocalDeviceSink implements SpeechSink {
     this.player.stop();
   }
 
-  pendingCount(): number {
+  pendingCount(_liveId?: string): number {
     return this.player.pendingCount();
   }
 }
@@ -212,17 +212,18 @@ function getLineSink(): SpeechSink {
   return lineSink;
 }
 
-/** 统一忙闲出口：当前出声链路尚未播出的排队条数（弹幕回复 / 循环口播共用一条链路） */
-export function speechLinePendingCount(): number {
-  return getLineSink().pendingCount();
+/** 统一忙闲出口：当前出声链路尚未播出的排队条数；带 liveId 时只算本场（弹幕回复 / 循环口播共用一条链路） */
+export function speechLinePendingCount(liveId?: string): number {
+  return getLineSink().pendingCount(liveId);
 }
 
 export interface LiveSpeaker {
   /**
    * 把一段口播文字合成语音并交给当前出声端播放；任何失败都不上抛，由调用方看结果决定是否告警。
    * overrides 指定本场音色（火山预设）；不传则用合成器默认音色，既有调用行为不变。
+   * liveId 标记音频归属场次：远程队列按场隔离，避免多场并发时音色 / 台词交错。
    */
-  speak(text: string, overrides?: SpeechOverrides): Promise<SpeakResult>;
+  speak(text: string, overrides?: SpeechOverrides, liveId?: string): Promise<SpeakResult>;
 }
 
 export interface CreateLiveSpeakerOptions {
@@ -254,7 +255,11 @@ export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveS
   const remoteOutput = options.remoteOutput ?? env.liveSpeaker.output === 'phone';
 
   return {
-    async speak(text: string, overrides?: SpeechOverrides): Promise<SpeakResult> {
+    async speak(
+      text: string,
+      overrides?: SpeechOverrides,
+      liveId?: string,
+    ): Promise<SpeakResult> {
       if (!enabled) {
         return { spoken: false, reason: 'disabled' };
       }
@@ -266,7 +271,7 @@ export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveS
       try {
         const { wavPath } = await synth.synthesize(text, overrides);
         sinkReached = true;
-        const outcome = await sink.play(wavPath);
+        const outcome = await sink.play(wavPath, liveId);
         if (outcome === 'played') {
           return { spoken: true, reason: 'spoken' };
         }

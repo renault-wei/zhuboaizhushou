@@ -71,7 +71,10 @@ async function findOwnedRow(userId: string, id: string): Promise<LiveRow | null>
 /**
  * 一键开播：ready → live，记录 startedAt（清空 endedAt）。
  * - 非本人或不存在 → 返回 null（路由转 404）；
- * - status !== 'ready' → 抛 LIVE_NOT_READY（未合成完成不可开播）。
+ * - status !== 'ready' → 抛 LIVE_NOT_READY（未合成完成不可开播）；
+ * - 同账号已有 status = live 的场次 → 抛 LIVE_IN_PROGRESS（路由转 409）。
+ *   多场并发的实际危害：循环台本 / 弹幕回复共用一条出声链路（远程队列按场隔离前），
+ *   两场同时出声会音色交错、台词互相插队，且按分钟计费会出现重复扣费口径，故开播即互斥。
  * T13 不接 RTMP / 抖音推流，此处仅状态机流转 + 记录开播时间，真实推流留 T12。
  */
 export async function startLive(userId: string, id: string): Promise<Live | null> {
@@ -81,6 +84,14 @@ export async function startLive(userId: string, id: string): Promise<Live | null
   }
   if (existing.status !== 'ready') {
     throw new LiveError('LIVE_NOT_READY', '只有合成完成（就绪）的直播才能开播');
+  }
+  const running = await db
+    .select({ id: livesTable.id })
+    .from(livesTable)
+    .where(and(eq(livesTable.userId, userId), eq(livesTable.status, 'live')))
+    .limit(1);
+  if (running[0]) {
+    throw new LiveError('LIVE_IN_PROGRESS', '当前已有进行中的直播，请先结束再开新场');
   }
   const updated = await db
     .update(livesTable)

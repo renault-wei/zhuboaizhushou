@@ -71,10 +71,23 @@ class _VoiceLibraryPageState extends ConsumerState<VoiceLibraryPage> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  /// 直播中（助播出声端已启用）禁止试听：试听音频会被系统内录进直播间，
+  /// 造成与助播混音。返回 true 表示允许试听。
+  bool _previewAllowed() {
+    if (ref.read(assistantSpeakerControllerProvider).enabled) {
+      _showSnack('直播出声进行中，已暂停试听（避免混音进直播间）');
+      return false;
+    }
+    return true;
+  }
+
   /// 试听克隆音色（档 A）：调服务端真实合成接口取 wav 字节，再用本机播放器播出。
   /// 克隆音色尚未接入真实复刻，服务端会回落演示预设音色并回告知头，这里如实提示。
   Future<void> _previewVoice(Voice voice) async {
     if (_previewingVoiceId != null || _previewingPresetId != null) {
+      return;
+    }
+    if (!_previewAllowed()) {
       return;
     }
     setState(() => _previewingVoiceId = voice.id);
@@ -88,7 +101,7 @@ class _VoiceLibraryPageState extends ConsumerState<VoiceLibraryPage> {
       if (preview.demoFallback) {
         _showSnack('克隆音色真实复刻待接入，当前用演示音色试听');
       }
-      await ref.read(speechOutPlayerProvider).play(preview.bytes);
+      await ref.read(voicePreviewPlayerProvider).play(preview.bytes);
     } on ApiException catch (error) {
       _showSnack('试听失败：${error.message}');
     } finally {
@@ -104,6 +117,9 @@ class _VoiceLibraryPageState extends ConsumerState<VoiceLibraryPage> {
     if (_previewingPresetId != null || _previewingVoiceId != null) {
       return;
     }
+    if (!_previewAllowed()) {
+      return;
+    }
     setState(() => _previewingPresetId = preset.id);
     try {
       final previewUrl = preset.previewUrl;
@@ -111,7 +127,7 @@ class _VoiceLibraryPageState extends ConsumerState<VoiceLibraryPage> {
       if (previewUrl != null && previewUrl.isNotEmpty) {
         try {
           await ref
-              .read(speechOutPlayerProvider)
+              .read(voicePreviewPlayerProvider)
               .playUrl('${ApiConfig.baseUrl}$previewUrl');
           staticPlayed = true;
         } catch (_) {
@@ -128,7 +144,7 @@ class _VoiceLibraryPageState extends ConsumerState<VoiceLibraryPage> {
       if (!mounted) {
         return;
       }
-      await ref.read(speechOutPlayerProvider).play(preview.bytes);
+      await ref.read(voicePreviewPlayerProvider).play(preview.bytes);
     } on ApiException catch (error) {
       _showSnack('试听失败：${error.message}');
     } finally {

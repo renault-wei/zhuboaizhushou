@@ -9,11 +9,11 @@ export function createRemoteSpeechSink(queue: RemoteSpeechQueue = remoteSpeechQu
   return {
     isMuted: () => false,
     setMuted: () => undefined,
-    async play(wavPath: string): Promise<PlayOutcome> {
-      queue.push(wavPath);
+    async play(wavPath: string, liveId?: string): Promise<PlayOutcome> {
+      queue.push(wavPath, liveId);
       return 'played';
     },
     stop: () => queue.clear(),
-    pendingCount: () => queue.size(),
+    pendingCount: (liveId?: string) => queue.size(liveId),
   };
 }

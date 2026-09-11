@@ -56,6 +56,7 @@ Future<void> _pumpVoiceLibrary(
   WidgetTester tester,
   FakeBackend backend, {
   SpeechOutPlayer? player,
+  SpeechOutPlayer? previewPlayer,
   VolcPresetCatalog? seedCatalog,
 }) async {
   SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -70,6 +71,11 @@ Future<void> _pumpVoiceLibrary(
       overrides: [
         dioProvider.overrideWithValue(buildMockDio(backend)),
         if (player != null) speechOutPlayerProvider.overrideWithValue(player),
+        // 页面试听走独立试听播放器（与助播出声分离）；未单独注入时复用同一假播放器
+        if (previewPlayer != null)
+          voicePreviewPlayerProvider.overrideWithValue(previewPlayer)
+        else if (player != null)
+          voicePreviewPlayerProvider.overrideWithValue(player),
       ],
       child: const MaterialApp(home: VoiceLibraryPage()),
     ),
@@ -148,6 +154,26 @@ void main() {
     // 等提示条自动消失，避免测试结束时仍有未完成定时器
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('试听走独立播放器：不占用助播出声通道', (WidgetTester tester) async {
+    final backend = FakeBackend();
+    final assistant = _RecordingSpeechOutPlayer();
+    final preview = _RecordingSpeechOutPlayer();
+    await _pumpVoiceLibrary(
+      tester,
+      backend,
+      player: assistant,
+      previewPlayer: preview,
+    );
+
+    await _tapKey(tester, 'presetGroupHeader_broadcast');
+    await _tapKey(tester, 'presetListen_zh_male_m191_uranus_bigtts');
+
+    // 试听只落在试听播放器，助播出声通道零占用（避免多音色 / 混音）
+    expect(preview.played, hasLength(1));
+    expect(assistant.played, isEmpty);
+    expect(assistant.playedUrls, isEmpty);
   });
 
   testWidgets('预设音色：服务端不可用时回落本机缓存并如实标注', (WidgetTester tester) async {

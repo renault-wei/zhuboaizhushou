@@ -6,7 +6,7 @@ import {
   speechLinePendingCount,
   type SpeechOverrides,
 } from './liveSpeaker';
-import { loadLiveSpeechOverrides } from './liveVoice';
+import { getLiveSpeech } from './liveVoice';
 import type { AtmosphereCategory, AtmosphereInsertion } from './atmosphere';
 import { atmosphereScheduler } from './atmosphereScheduler';
 
@@ -42,8 +42,12 @@ export interface LoopCasterStatus {
 
 /** 引擎依赖：全部可注入（生产用默认实现，测试全替身，不出真实声音） */
 export interface LoopCasterOptions {
-  /** 把一句口播交给出声链路（可带本场音色覆盖）；本地端播完才 resolve，远程端入队即 resolve */
-  speak?(text: string, overrides?: SpeechOverrides): Promise<{ spoken: boolean; reason?: string }>;
+  /** 把一句口播交给出声链路（可带本场音色覆盖 + 场次归属）；本地端播完才 resolve，远程端入队即 resolve */
+  speak?(
+    text: string,
+    overrides?: SpeechOverrides,
+    liveId?: string,
+  ): Promise<{ spoken: boolean; reason?: string }>;
   /**
    * 读当前场次绑定的循环台本：开播时读一次，运行中每轮开头重读（改绑下一轮生效）；
    * null / 空数组 = 未绑定台本（首轮不启动循环；运行中清空则停止循环，只回弹幕）。
@@ -53,8 +57,8 @@ export interface LoopCasterOptions {
   loadVoice?(liveId: string): Promise<SpeechOverrides | null>;
   /** 睡眠（条间间隔 / 轮间休息 / 避让轮询共用）；测试注入假时钟 */
   sleep?(ms: number): Promise<void>;
-  /** 出声链路忙闲判定：忙 = 有排队未播的音频（回复排队 / 远程积压） */
-  isBusy?(): boolean;
+  /** 出声链路忙闲判定：忙 = 本场有排队未播的音频（只看自己场次，避免多场互相拖节奏） */
+  isBusy?(liveId: string): boolean;
   /** 空档插播取词（M10-A3）：返回一条到期的氛围台词，无则 null；生产接 atmosphereScheduler */
   pickAtmosphere?(liveId: string, nowMs: number): Promise<AtmosphereInsertion | null>;
   /** 插播实际出声后的记账（按类别刷新频控计时） */
@@ -99,12 +103,13 @@ interface RunnerState {
 
 // ---------- 默认实现 ----------
 
-/** 默认出声：全局 liveSpeaker（本地播完 resolve / 远程入队即返回），带本场音色覆盖 */
+/** 默认出声：全局 liveSpeaker（本地播完 resolve / 远程入队即返回），带本场音色覆盖与场次归属 */
 function defaultSpeak(
   text: string,
   overrides?: SpeechOverrides,
+  liveId?: string,
 ): Promise<{ spoken: boolean; reason?: string }> {
-  return liveSpeaker.speak(text, overrides);
+  return liveSpeaker.speak(text, overrides, liveId);
 }
 
 /** 默认睡眠：真实 setTimeout */
@@ -114,9 +119,9 @@ function defaultSleep(ms: number): Promise<void> {
   });
 }
 
-/** 默认忙闲：读当前出声链路（本地/远程同一出口）未播出排队条数 */
-function defaultIsBusy(): boolean {
-  return speechLinePendingCount() > 0;
+/** 默认忙闲：读当前出声链路未播出排队条数（按场次过滤，避免被别场次积压拖着走） */
+function defaultIsBusy(liveId: string): boolean {
+  return speechLinePendingCount(liveId) > 0;
 }
 
 /**
@@ -149,13 +154,14 @@ async function speakSafely(
   speak: (
     text: string,
     overrides?: SpeechOverrides,
+    liveId?: string,
   ) => Promise<{ spoken: boolean; reason?: string }>,
   liveId: string,
   text: string,
   overrides: SpeechOverrides | null,
 ): Promise<boolean> {
   try {
-    const result = await speak(text, overrides ?? undefined);
+    const result = await speak(text, overrides ?? undefined, liveId);
     if (!result.spoken) {
       console.info(
         `[loopCaster] 场次 ${liveId} 循环句未出声（${result.reason ?? 'unknown'}），继续下一句`,
@@ -183,7 +189,7 @@ async function tryInsertAtmosphere(
   options: ResolvedLoopDeps,
   overrides: SpeechOverrides | null,
 ): Promise<void> {
-  if (options.isBusy()) {
+  if (options.isBusy(liveId)) {
     return;
   }
   let insertion: AtmosphereInsertion | null;
@@ -290,7 +296,7 @@ async function runLoop(
         }
         state.currentSeq = index + 1;
         // 空档避让：出声链路忙（回复排队 / 远程积压）→ 小步轮询，不在播放间隙插队
-        while (!state.cancelled && options.isBusy()) {
+        while (!state.cancelled && options.isBusy(liveId)) {
           await options.sleep(idlePollMs);
         }
         if (state.cancelled) {
@@ -394,7 +400,7 @@ export function createLoopCaster(options: LoopCasterOptions = {}): LoopCaster {
  * 显式注入本场音色解析与本场氛围语调度（空档插播）。
  */
 export const loopCaster = createLoopCaster({
-  loadVoice: loadLiveSpeechOverrides,
+  loadVoice: getLiveSpeech,
   pickAtmosphere: async (liveId, nowMs) => atmosphereScheduler.pickDue(liveId, nowMs),
   markAtmosphereSpoken: (liveId, category, atMs) =>
     atmosphereScheduler.markSpoken(liveId, category, atMs),

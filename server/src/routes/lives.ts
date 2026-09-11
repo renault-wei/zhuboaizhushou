@@ -21,7 +21,7 @@ import { settleLiveSession } from '../services/liveBilling';
 import { danmakuGateway, DanmakuError } from '../services/danmaku';
 import { loopCaster } from '../services/loopCaster';
 import { atmosphereScheduler } from '../services/atmosphereScheduler';
-import { clampLiveSpeechRate } from '../services/liveVoice';
+import { captureLiveSpeech, clampLiveSpeechRate, forgetLiveSpeech } from '../services/liveVoice';
 
 // 直播状态全集：用于列表 ?status= 过滤校验（与服务端 live_status 枚举一致）
 const LIVE_STATUSES: LiveStatus[] = ['idle', 'processing', 'ready', 'live', 'ended', 'failed'];
@@ -491,6 +491,8 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       if (!live) {
         return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
       }
+      // 音色口径统一：开播即冻结本场音色 / 语速快照，循环台本句与弹幕回复共用同一份
+      await captureLiveSpeech(live.id);
       // M5：开播即启动循环台本 Runner（未绑定台本 → 快照为空自动退出，只回弹幕）
       loopCaster.start(live.id);
       // M10：开播即读一次氛围语快照（空档插播取词用；无氛围语 → 空快照，不影响循环）
@@ -514,6 +516,8 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       }
       // M5：结束直播 = 循环播报唯一停止入口（正在播的当前句播完即止，不打断真人接管）
       loopCaster.stop(live.id);
+      // 音色快照随场次结束丢弃，避免内存滞留（下一场开播重新抓）
+      forgetLiveSpeech(live.id);
       // M10：结束直播同时清掉氛围语快照与频控记账
       atmosphereScheduler.stop(live.id);
       // v0.3 结算接线：结束即按已播整分钟欠费式结算（先余额后免费分钟，缺额仅告警不阻断）。

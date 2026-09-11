@@ -7,7 +7,7 @@ import type { LiveStatus } from './live';
 import { replyProvider, type GenerateReplyInput } from './reply';
 import { scanSensitive } from './sensitive';
 import { liveSpeaker } from './liveSpeaker';
-import { presetSpeechOverrides } from './liveVoice';
+import { getLiveSpeech, presetSpeechOverrides } from './liveVoice';
 
 // 实时互动引擎（G4）：订阅 G3 弹幕事件 → 加载商家上下文 → 决策（频控/是否回复）
 // → DeepSeek 生成 1~2 句口播 → 敏感词兜底 → 交给出口（G5 TTS/播放队列）。
@@ -287,9 +287,12 @@ export function createInteractionEngine(
 
 // 全局单例：index.ts 启动时 subscribe() 即接入实时链路
 // G5：引擎出口接现场口播 —— 回复文字 → 本机语音合成 → 播放队列（失败由引擎吞掉，不影响直播主线）
+// 音色口径：优先用本场开播快照（与循环台本句同源），快照缺失（进程重启后补入）回落快照读取，再不济用本条上下文
 export const interactionEngine = createInteractionEngine({
-  onReply: (reply) =>
-    liveSpeaker
-      .speak(reply.text, presetSpeechOverrides(reply.volcPresetId, reply.speechRate))
-      .then(() => undefined),
+  onReply: async (reply) => {
+    const snapshot = await getLiveSpeech(reply.liveId);
+    const overrides =
+      snapshot ?? presetSpeechOverrides(reply.volcPresetId, reply.speechRate);
+    await liveSpeaker.speak(reply.text, overrides, reply.liveId);
+  },
 });

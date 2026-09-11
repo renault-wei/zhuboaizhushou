@@ -8,8 +8,11 @@ import { buildApp } from '../src/app';
 import { pool } from '../src/db/client';
 import { env } from '../src/config/env';
 import {
+  captureLiveSpeech,
   clampLiveSpeechRate,
   DEFAULT_LIVE_SPEECH_RATE,
+  forgetLiveSpeech,
+  getLiveSpeech,
   MAX_LIVE_SPEECH_RATE,
   MIN_LIVE_SPEECH_RATE,
   presetSpeechOverrides,
@@ -480,6 +483,72 @@ describe('预设试听静态产物（方案 A：预生成 wav 直连播放）', 
         url: `/uploads/voice-previews/${bad}`,
       });
       expect([400, 404]).toContain(res.statusCode);
+    }
+  });
+});
+
+// ---------- 场次音色快照（开播冻结：循环口播与弹幕回复共读同一份，杜绝同场多音色） ----------
+
+describe('场次音色快照', () => {
+  /** seed 一条指定音色 / 语速的 live，返回 liveId（题面直接落库，绕过开播前置流程） */
+  async function seedLive(
+    opts: { presetId?: string | null; speechRate?: number | null } = {},
+  ): Promise<string> {
+    const liveId = randomUUID();
+    await pool.query(
+      `INSERT INTO lives (id, user_id, title, video_source_url, status, volc_preset_id, speech_rate)
+       VALUES ($1, (SELECT id FROM users WHERE phone = $2), $3, $4, 'live', $5, $6)`,
+      [liveId, PHONE, '快照测试直播', `/uploads/lives/${liveId}.mp4`, opts.presetId ?? null, opts.speechRate ?? null],
+    );
+    return liveId;
+  }
+
+  dbIt('开播抓快照后改库不影响本场；forget 后重取才读新值', async () => {
+    const liveId = await seedLive({ presetId: 'zh_female_vv_uranus_bigtts', speechRate: 10 });
+    try {
+      const snapshot = await captureLiveSpeech(liveId);
+      expect(snapshot).toMatchObject({ speaker: 'zh_female_vv_uranus_bigtts', speechRate: 10 });
+
+      // 模拟直播中热更音色（改库）：本场快照必须保持不变
+      await pool.query(
+        `UPDATE lives SET volc_preset_id = $1, speech_rate = $2 WHERE id = $3`,
+        ['zh_male_m191_uranus_bigtts', 30, liveId],
+      );
+      const same = await getLiveSpeech(liveId);
+      expect(same).toMatchObject({ speaker: 'zh_female_vv_uranus_bigtts', speechRate: 10 });
+
+      // 结束直播丢弃快照：下一场重新读库，拿到改后的值
+      forgetLiveSpeech(liveId);
+      const reread = await getLiveSpeech(liveId);
+      expect(reread).toMatchObject({ speaker: 'zh_male_m191_uranus_bigtts', speechRate: 30 });
+    } finally {
+      forgetLiveSpeech(liveId);
+      await pool.query('DELETE FROM lives WHERE id = $1', [liveId]);
+    }
+  });
+
+  dbIt('未抓过快照时取用会就地补抓一次（进程重启后的场次）', async () => {
+    const liveId = await seedLive({ presetId: 'zh_male_m191_uranus_bigtts', speechRate: 5 });
+    forgetLiveSpeech(liveId);
+    try {
+      const snapshot = await getLiveSpeech(liveId);
+      expect(snapshot).toMatchObject({ speaker: 'zh_male_m191_uranus_bigtts', speechRate: 5 });
+    } finally {
+      forgetLiveSpeech(liveId);
+      await pool.query('DELETE FROM lives WHERE id = $1', [liveId]);
+    }
+  });
+
+  dbIt('未知预设脏 id：快照回落默认音色（无 speaker）与默认语速', async () => {
+    const liveId = await seedLive({ presetId: 'not-a-preset', speechRate: null });
+    try {
+      const snapshot = await captureLiveSpeech(liveId);
+      expect(snapshot).not.toBeNull();
+      expect(snapshot?.speaker).toBeUndefined();
+      expect(snapshot?.speechRate).toBe(DEFAULT_LIVE_SPEECH_RATE);
+    } finally {
+      forgetLiveSpeech(liveId);
+      await pool.query('DELETE FROM lives WHERE id = $1', [liveId]);
     }
   });
 });

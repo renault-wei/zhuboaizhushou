@@ -38,6 +38,7 @@ const PHONE_LOOP_SWAP = '13920000308'; // M4 直播中热更台本
 const PHONE_LOOP_SWAP_B = '13920000309'; // M4 热更归属隔离（他人）
 const PHONE_SCRIPT_SWAP = '13920000310'; // 直播中热更话术
 const PHONE_SCRIPT_SWAP_B = '13920000311'; // 话术热更归属隔离（他人）
+const PHONE_MUTEX = '13920000312'; // 单账号单场互斥（同台本多音色修复）
 
 async function registerAndGetToken(phone: string): Promise<string> {
   const send = await app.inject({
@@ -178,6 +179,51 @@ dbIt('start：idle 草稿不可开播（400 LIVE_NOT_READY），ready 可开播�
   expect(live.status).toBe('live');
   expect(live.startedAt).toBeTruthy();
   expect(live.aiBadgeShown).toBe(true);
+});
+
+dbIt('start：同账号同时只允许一场 live（第二场 409 LIVE_IN_PROGRESS，结束后可再开）', async () => {
+  const token = await registerAndGetToken(PHONE_MUTEX);
+  await resetUserData(PHONE_MUTEX);
+
+  // 第一场：置 ready 并开播成功
+  const firstId = await createLiveDraft(token);
+  await setLiveStatus(firstId, 'ready', { videoSourceUrl: `/uploads/lives/${firstId}.mp4` });
+  const first = await app.inject({
+    method: 'POST',
+    url: `/api/lives/${firstId}/start`,
+    headers: bearer(token),
+    payload: {},
+  });
+  expect(first.statusCode).toBe(200);
+
+  // 第二场：同为 ready，但账号已有场次在播 → 409 互斥
+  const secondId = await createLiveDraft(token);
+  await setLiveStatus(secondId, 'ready', { videoSourceUrl: `/uploads/lives/${secondId}.mp4` });
+  const second = await app.inject({
+    method: 'POST',
+    url: `/api/lives/${secondId}/start`,
+    headers: bearer(token),
+    payload: {},
+  });
+  expect(second.statusCode).toBe(409);
+  expect(second.json()).toMatchObject({ error: 'LIVE_IN_PROGRESS' });
+
+  // 第一场结束后互斥解除：第二场可正常开播
+  const ended = await app.inject({
+    method: 'POST',
+    url: `/api/lives/${firstId}/end`,
+    headers: bearer(token),
+    payload: {},
+  });
+  expect(ended.statusCode).toBe(200);
+  const retry = await app.inject({
+    method: 'POST',
+    url: `/api/lives/${secondId}/start`,
+    headers: bearer(token),
+    payload: {},
+  });
+  expect(retry.statusCode).toBe(200);
+  expect((retry.json().live as { status: string }).status).toBe('live');
 });
 
 dbIt('end：ready 不可结束（400 LIVE_NOT_LIVE），live 可结束（200 → ended + endedAt）', async () => {

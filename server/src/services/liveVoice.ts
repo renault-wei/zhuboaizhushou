@@ -65,3 +65,46 @@ export async function loadLiveSpeechOverrides(
   }
   return presetSpeechOverrides(row.volcPresetId, row.speechRate);
 }
+
+// ---------- 场次音色快照（开播冻结）----------
+
+/**
+ * 场次音色快照表：开播时抓一次，循环口播与弹幕回复共用同一份。
+ * 背景：循环句读「开播快照」而弹幕回复曾按条读库实时值，同一场若中途改库会出现两种音色；
+ * 统一到快照后，本场音色只由开播那一刻决定，与文件头注释口径一致。
+ * 内存态：进程重启即清空（重启后直播本就不恢复），不会跨场次串读数。
+ */
+const liveSpeechSnapshots = new Map<string, SpeechOverrides | null>();
+
+/** 开播抓快照：读库失败回落 null（= 合成器默认音色），不阻断开播 */
+export async function captureLiveSpeech(
+  liveId: string,
+): Promise<SpeechOverrides | null> {
+  let snapshot: SpeechOverrides | null = null;
+  try {
+    snapshot = await loadLiveSpeechOverrides(liveId);
+  } catch (err) {
+    console.warn(
+      `[liveVoice] 场次 ${liveId} 音色快照读取失败，本场回落默认音色：${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  liveSpeechSnapshots.set(liveId, snapshot);
+  return snapshot;
+}
+
+/** 取本场音色快照：未抓过（进程重启后补入的场次）就地抓一次并缓存，保证同场只读一次 */
+export async function getLiveSpeech(
+  liveId: string,
+): Promise<SpeechOverrides | null> {
+  if (liveSpeechSnapshots.has(liveId)) {
+    return liveSpeechSnapshots.get(liveId) ?? null;
+  }
+  return captureLiveSpeech(liveId);
+}
+
+/** 结束直播 / 场次清理：丢弃快照，避免内存滞留（下次开播重新抓） */
+export function forgetLiveSpeech(liveId: string): void {
+  liveSpeechSnapshots.delete(liveId);
+}
