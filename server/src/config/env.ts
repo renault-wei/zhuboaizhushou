@@ -52,6 +52,13 @@ export const env = {
     initialPassword: optionalEnv('ADMIN_INITIAL_PASSWORD'),
   },
 
+  // 短信（MVP 为内存 mock，不发真实短信）
+  sms: {
+    // SMS_DEV_MODE=true：即使 NODE_ENV=production 也在 /api/auth/send-code 响应里回传验证码明文，
+    // 仅用于演示/验收环境临时放开登录（App 会拿到后自动填入）；正式对外环境必须保持关闭。
+    devMode: optionalEnv('SMS_DEV_MODE') === 'true',
+  },
+
   // PostgreSQL（Drizzle ORM）
   DATABASE_URL: requireEnv('DATABASE_URL'),
 

@@ -122,10 +122,11 @@ export class MockSmsService implements SmsService {
 
 /**
  * 短信服务工厂。
- * MVP 阶段统一使用内存 mock（S1 验收允许短信 mock）；生产环境同样不返回验证码明文。
+ * MVP 阶段统一使用内存 mock（S1 验收允许短信 mock）；生产环境默认不返回验证码明文，
+ * 仅当显式开启 SMS_DEV_MODE=true（演示/验收环境）才回传，便于云端直连登录。
  */
 export function createSmsService(): SmsService {
-  return new MockSmsService(env.NODE_ENV !== 'production');
+  return new MockSmsService(env.NODE_ENV !== 'production' || env.sms.devMode);
 }
 
 // 全局单例：内存验证码跨请求共享，保证同一手机号的重发限制在多次请求间生效
