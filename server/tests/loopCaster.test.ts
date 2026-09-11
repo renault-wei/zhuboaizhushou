@@ -121,10 +121,12 @@ describe('M4 loopCaster 循环台本播出引擎（§8.2/§8.3）', () => {
     expect(caster.status(LIVE_ID)).toBeNull();
   });
 
-  it('start 幂等：运行中重复 start 不起第二条 Runner；stop 后重新 start 会再读一次台本快照（Q6）', async () => {
-    const items: LoopCastItem[] = [{ text: '本店午市招牌套餐，欢迎到店品尝。', gapAfterSeconds: 1 }];
+  it('start 幂等；台本每轮开头重读（直播中改绑台本，下一轮生效）', async () => {
+    let items: LoopCastItem[] = [{ text: '第一轮台本句。', gapAfterSeconds: 1 }];
     const spoken: string[] = [];
     let loadCalls = 0;
+    // 手动闸门：让 Runner 停在第 1 轮首句的条间间隔里，先断言幂等再放行
+    let releaseGate: (() => void) | null = null;
     const caster = createLoopCaster({
       itemGapSeconds: 1,
       loopRestSeconds: 3,
@@ -137,10 +139,16 @@ describe('M4 loopCaster 循环台本播出引擎（§8.2/§8.3）', () => {
         spoken.push(text);
         return { spoken: true, reason: 'spoken' };
       },
-      sleep: async () => {
-        // 每段 Runner 都要有确定停点：第 1 次（loadCalls=1）第 2 句后停；
-        // stop 后重 start（loadCalls=2）第 3 句后再停，避免第二次运行无限循环
-        if (spoken.length >= loadCalls + 1) {
+      sleep: async (ms) => {
+        // 第 1 轮首句播完后改绑台本（第 2 轮开头重读才生效）并停住等测试放行
+        if (spoken.length === 1 && ms === 1000) {
+          items = [{ text: '第二轮新台本句。', gapAfterSeconds: 1 }];
+          await new Promise<void>((resolve) => {
+            releaseGate = resolve;
+          });
+          return;
+        }
+        if (spoken.length >= 3) {
           caster.stop(LIVE_ID);
         }
       },
@@ -149,16 +157,42 @@ describe('M4 loopCaster 循环台本播出引擎（§8.2/§8.3）', () => {
     caster.start(LIVE_ID);
     caster.start(LIVE_ID); // 幂等：同场次已挂 Runner 时忽略
     await tick();
-    expect(loadCalls).toBe(1);
+    expect(loadCalls).toBe(1); // 幂等：第二次 start 未新起 Runner
+    expect(spoken).toEqual(['第一轮台本句。']);
 
+    releaseGate?.();
     await waitRunnerGone(caster, LIVE_ID);
-    expect(loadCalls).toBe(1);
-    expect(spoken.length).toBeGreaterThanOrEqual(2);
+    // 第 1 轮用开播时读到的旧台本；第 2 轮开头重读 → 新台本生效
+    expect(spoken).toEqual(['第一轮台本句。', '第二轮新台本句。', '第二轮新台本句。']);
+    expect(loadCalls).toBeGreaterThanOrEqual(2);
+  });
 
-    // stop 后再 start：新 Runner 重新读一次台本快照
+  it('运行中解绑 / 清空台本：下一轮停止循环、只回弹幕（已播句子不受影响）', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    let items: LoopCastItem[] | null = [{ text: '清空前最后一句。', gapAfterSeconds: 1 }];
+    const spoken: string[] = [];
+    const caster = createLoopCaster({
+      itemGapSeconds: 1,
+      loopRestSeconds: 2,
+      loadItems: async () => items,
+      isBusy: () => false,
+      speak: async (text) => {
+        spoken.push(text);
+        return { spoken: true, reason: 'spoken' };
+      },
+      sleep: async (ms) => {
+        // 首句的条间间隔里清空台本（rest 2s 的睡眠不改动快照）
+        if (ms === 1000) {
+          items = null;
+        }
+      },
+    });
+
     caster.start(LIVE_ID);
     await waitRunnerGone(caster, LIVE_ID);
-    expect(loadCalls).toBe(2);
+    expect(spoken).toEqual(['清空前最后一句。']);
+    expect(info).toHaveBeenCalled();
+    expect(caster.status(LIVE_ID)).toBeNull();
   });
 
   it('stop 置位即停：正在播的当前句播完即止、不再推下一句；连续 stop 幂等', async () => {

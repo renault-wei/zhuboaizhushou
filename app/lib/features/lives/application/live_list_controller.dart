@@ -1,6 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:starvoice_app/core/models/coupon.dart';
 import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/models/script.dart';
 import 'package:starvoice_app/core/models/voice.dart';
@@ -9,7 +8,7 @@ import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 
 /// 开播配置列表页 UI 状态。
-/// Live 只携带外键 id，卡片摘要要展示音色名/话术标题/券名，
+/// Live 只携带外键 id，卡片摘要要展示音色名/话术标题，
 /// 因此额外维护 id → 名称映射（引用资源删除后映射缺失，页面降级展示 id）。
 class LiveListState {
   const LiveListState({
@@ -17,7 +16,6 @@ class LiveListState {
     this.voiceNames = const <String, String>{},
     this.presetNames = const <String, String>{},
     this.scriptTitles = const <String, String>{},
-    this.couponNames = const <String, String>{},
     this.loading = false,
     this.error,
   });
@@ -34,9 +32,6 @@ class LiveListState {
   /// 话术 id → 展示标题（未命名话术退化为「未命名话术」）
   final Map<String, String> scriptTitles;
 
-  /// 团购券 id → 券名
-  final Map<String, String> couponNames;
-
   /// 列表加载中（首次进入 / 下拉刷新）
   final bool loading;
 
@@ -50,7 +45,6 @@ class LiveListState {
     Map<String, String>? voiceNames,
     Map<String, String>? presetNames,
     Map<String, String>? scriptTitles,
-    Map<String, String>? couponNames,
     bool? loading,
     String? error,
     bool clearError = false,
@@ -60,7 +54,6 @@ class LiveListState {
       voiceNames: voiceNames ?? this.voiceNames,
       presetNames: presetNames ?? this.presetNames,
       scriptTitles: scriptTitles ?? this.scriptTitles,
-      couponNames: couponNames ?? this.couponNames,
       loading: loading ?? this.loading,
       error: clearError ? null : error ?? this.error,
     );
@@ -81,7 +74,6 @@ class LiveListController extends StateNotifier<LiveListState> {
       final voices = await _loadVoicesBestEffort();
       final presets = await _loadPresetsBestEffort();
       final scripts = await _loadScriptsBestEffort();
-      final coupons = await _loadCouponsBestEffort();
       if (!mounted) {
         return;
       }
@@ -95,9 +87,6 @@ class LiveListController extends StateNotifier<LiveListState> {
         },
         scriptTitles: <String, String>{
           for (final script in scripts) script.id: script.displayTitle,
-        },
-        couponNames: <String, String>{
-          for (final coupon in coupons) coupon.couponId: coupon.name,
         },
         loading: false,
       );
@@ -156,12 +145,4 @@ class LiveListController extends StateNotifier<LiveListState> {
     }
   }
 
-  /// 团购券列表尽力而为：未绑定抖音 / 拉取失败时券名降级为券 id。
-  Future<List<Coupon>> _loadCouponsBestEffort() async {
-    try {
-      return await _apiClient.fetchCoupons();
-    } on ApiException {
-      return <Coupon>[];
-    }
-  }
 }

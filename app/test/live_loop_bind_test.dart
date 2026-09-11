@@ -46,8 +46,25 @@ Map<String, dynamic> _loopSeed() {
   };
 }
 
-/// 预置草稿开播配置（可带已绑定的循环台本）。
-Map<String, dynamic> _liveJson({String? loopScriptId}) {
+/// 预置一条就绪话术（话术为必选绑定；fake 的 prepare 前置校验需要它 ready+pass）。
+Map<String, dynamic> _scriptSeed() {
+  final now = DateTime.now().toUtc().toIso8601String();
+  return <String, dynamic>{
+    'id': 'script-001',
+    'industry': 'restaurant',
+    'title': '火锅套餐话术',
+    'productSnapshot': <String, dynamic>{'name': '双人火锅套餐'},
+    'content': '双人火锅套餐，锅底现炒，欢迎到店品尝。',
+    'status': 'ready',
+    'sensitiveCheckStatus': 'pass',
+    'sensitiveMatchedWords': <String>[],
+    'sensitiveScannedAt': now,
+    'createdAt': now,
+  };
+}
+
+/// 预置草稿开播配置（可带已绑定的话术 / 循环台本）。
+Map<String, dynamic> _liveJson({String? loopScriptId, String? scriptId}) {
   final now = DateTime.now().toUtc().toIso8601String();
   return <String, dynamic>{
     'id': 'live-001',
@@ -56,7 +73,7 @@ Map<String, dynamic> _liveJson({String? loopScriptId}) {
     'couponId': null,
     'rtmpUrl': null,
     'voiceId': null,
-    'scriptId': null,
+    'scriptId': scriptId,
     'loopScriptId': loopScriptId,
     'status': 'idle',
     'aiBadgeShown': true,
@@ -111,7 +128,10 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues(<String, Object>{}));
 
   testWidgets('新建开播配置：点选循环台本后保存，loopScriptId 落库', (WidgetTester tester) async {
-    final backend = FakeBackend(loopScripts: <Map<String, dynamic>>[_loopSeed()]);
+    final backend = FakeBackend(
+      loopScripts: <Map<String, dynamic>>[_loopSeed()],
+      scripts: <Map<String, dynamic>>[_scriptSeed()],
+    );
     await _pumpListRouter(tester, backend);
 
     // 进入新建页并填标题
@@ -123,6 +143,12 @@ void main() {
       '火锅店午市循环直播',
     );
     await tester.pump();
+
+    // 话术为必选：先绑定一条就绪话术
+    await tester.tap(find.byKey(const Key('liveScriptSelector')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('liveScriptOption_script-001')));
+    await tester.pumpAndSettle();
 
     // 循环台词区块：未绑状态 → 去台本库点选
     final bindButton = find.byKey(const Key('liveLoopScriptBindButton'));
@@ -143,7 +169,7 @@ void main() {
     expect(find.byKey(const Key('liveFormPage')), findsOneWidget);
     expect(find.text('午市循环 · 3 条'), findsOneWidget);
 
-    // 保存草稿：成功后回列表并落库 loopScriptId
+    // 保存：成功后回列表并落库 loopScriptId，且自动就绪（音色+话术均已绑定）
     final saveButton = find.byKey(const Key('liveSaveButton'));
     await _scrollTo(tester, saveButton);
     await tester.tap(saveButton);
@@ -155,14 +181,19 @@ void main() {
     expect(backend.lives, hasLength(1));
     expect(backend.lives.single['title'], '火锅店午市循环直播');
     expect(backend.lives.single['loopScriptId'], 'loop-001');
-    expect(backend.lives.single['status'], 'idle');
+    expect(backend.lives.single['status'], 'ready');
+
+    // 等待 SnackBar 自动消失，避免遗留计时器
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('编辑已绑配置：摘要预填，解绑后保存 loopScriptId 置空', (WidgetTester tester) async {
     final backend = FakeBackend(
       loopScripts: <Map<String, dynamic>>[_loopSeed()],
+      scripts: <Map<String, dynamic>>[_scriptSeed()],
       lives: <Map<String, dynamic>>[
-        _liveJson(loopScriptId: 'loop-001'),
+        _liveJson(loopScriptId: 'loop-001', scriptId: 'script-001'),
       ],
     );
     await _pumpListRouter(tester, backend);
@@ -188,5 +219,9 @@ void main() {
     expect(backend.lives, hasLength(1));
     expect(backend.lives.single['title'], '火锅店午市循环直播');
     expect(backend.lives.single['loopScriptId'], isNull);
+
+    // 等待 SnackBar 自动消失，避免遗留计时器
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
   });
 }

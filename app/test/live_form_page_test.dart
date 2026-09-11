@@ -6,7 +6,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:starvoice_app/features/coupons/presentation/coupon_list_page.dart';
 import 'package:starvoice_app/features/lives/presentation/live_form_page.dart';
 import 'package:starvoice_app/features/lives/presentation/live_list_page.dart';
 import 'package:starvoice_app/core/network/api_client.dart';
@@ -57,14 +56,12 @@ Map<String, dynamic> _liveJson({
   String? volcPresetId,
   int? speechRate,
   String? scriptId,
-  String? couponId,
 }) {
   final now = DateTime.now().toUtc();
   return <String, dynamic>{
     'id': id,
     'title': title,
     'videoSourceUrl': videoSourceUrl,
-    'couponId': couponId,
     'rtmpUrl': null,
     'voiceId': voiceId,
     'volcPresetId': volcPresetId,
@@ -105,12 +102,6 @@ Future<void> _pumpListRouter(WidgetTester tester, FakeBackend backend) async {
         path: '/lives/:id',
         builder: (context, state) => LiveFormPage(
           liveId: state.pathParameters['id'] ?? '',
-        ),
-      ),
-      GoRoute(
-        path: '/coupons',
-        builder: (context, state) => CouponListPage(
-          selectable: state.uri.queryParameters['select'] == '1',
         ),
       ),
     ],
@@ -159,12 +150,6 @@ void main() {
 
     expect(find.byKey(const Key('liveFormPage')), findsOneWidget);
     expect(find.text('新建开播配置'), findsOneWidget);
-    // 新建草稿尚无 liveId，开播准备区提示先保存、再从列表进入编辑后操作
-    await _scrollTo(tester, find.byKey(const Key('liveReadyNewModeHint')));
-    expect(
-      find.byKey(const Key('liveReadyNewModeHint')),
-      findsOneWidget,
-    );
 
     // 保存按钮位于表单底部，先滚动到视野内再取控件
     final saveButtonFinder = find.byKey(const Key('liveSaveButton'));
@@ -247,7 +232,7 @@ void main() {
     );
   });
 
-  testWidgets('编辑模式：标题与音色 / 话术 / 券选择预填', (WidgetTester tester) async {
+  testWidgets('编辑模式：标题与音色 / 话术选择预填', (WidgetTester tester) async {
     final backend = FakeBackend(
       douyinBound: true,
       voices: <Map<String, dynamic>>[
@@ -262,7 +247,6 @@ void main() {
           title: '午市循环直播',
           voiceId: 'v-ready',
           scriptId: 'script-001',
-          couponId: 'c-001-mock',
         ),
       ],
     );
@@ -281,10 +265,6 @@ void main() {
       tester.widget<Text>(find.byKey(const Key('liveScriptValue'))).data,
       '火锅套餐话术',
     );
-    expect(
-      tester.widget<Text>(find.byKey(const Key('liveCouponValue'))).data,
-      '双人火锅套餐',
-    );
 
     // 合规提示在表单页可见
     await _scrollTo(tester, find.textContaining('「AI 智能直播」角标'));
@@ -294,7 +274,7 @@ void main() {
     );
   });
 
-  testWidgets('编辑模式：克隆音色就绪 → 「纯 AI 就绪开播」可点，就绪后状态推进并防重复', (WidgetTester tester) async {
+  testWidgets('编辑模式：保存后自动就绪（克隆音色 + 话术）→ status ready 且不合成回填', (WidgetTester tester) async {
     final backend = FakeBackend(
       douyinBound: true,
       voices: <Map<String, dynamic>>[
@@ -309,50 +289,30 @@ void main() {
           title: '午市循环直播',
           voiceId: 'v-ready',
           scriptId: 'script-001',
-          couponId: 'c-001-mock',
         ),
       ],
     );
-    await _pumpFormPage(tester, backend, liveId: 'live-001');
+    await _pumpListRouter(tester, backend);
+    await tester.tap(find.byKey(const Key('liveEdit_live-001')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('liveFormPage')), findsOneWidget);
 
-    // 无需实景视频：绑定可用克隆音色即进入「纯 AI 就绪开播」入口
-    final prepareButtonFinder = find.byKey(const Key('livePrepareButton'));
-    await _scrollTo(tester, prepareButtonFinder);
-    expect(find.byKey(const Key('liveReadySection')), findsOneWidget);
-    expect(
-      tester.widget<Text>(find.byKey(const Key('liveReadyStatusText'))).data,
-      '已绑定音色，可直接就绪开播',
-    );
-    expect(find.text('纯 AI 就绪开播'), findsOneWidget);
-    expect(
-      _widget<FilledButton>(tester, const Key('livePrepareButton')).onPressed,
-      isNotNull,
-    );
-
-    // 点击就绪：真实调用 prepareLive（服务端前置校验），纯 AI 不触发视频合成
-    await tester.tap(prepareButtonFinder);
+    // 保存即触发自动就绪（服务端前置校验），纯 AI 不触发视频合成
+    final saveButton = find.byKey(const Key('liveSaveButton'));
+    await _scrollTo(tester, saveButton);
+    await tester.tap(saveButton);
     await tester.pumpAndSettle();
 
+    expect(find.byKey(const Key('liveListPage')), findsOneWidget);
     expect(backend.lives.single['status'], 'ready');
     expect(backend.lives.single['videoSourceUrl'], isEmpty);
-    expect(
-      tester.widget<Text>(find.byKey(const Key('liveReadyStatusText'))).data,
-      '已就绪，可进入工作台开播',
-    );
-    expect(find.text('已就绪，可进入工作台开播'), findsWidgets);
-
-    // 已就绪后按钮置灰，防止重复就绪
-    expect(
-      _widget<FilledButton>(tester, const Key('livePrepareButton')).onPressed,
-      isNull,
-    );
 
     // 等待 SnackBar 自动消失，避免遗留计时器
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
   });
 
-  testWidgets('未绑定可用音色：开播准备提示先绑音色且就绪按钮置灰', (WidgetTester tester) async {
+  testWidgets('未绑定可用音色：保存后自动就绪失败 → 停留草稿', (WidgetTester tester) async {
     final backend = FakeBackend(
       douyinBound: true,
       scripts: <Map<String, dynamic>>[
@@ -363,22 +323,25 @@ void main() {
           id: 'live-001',
           title: '午市循环直播',
           scriptId: 'script-001',
-          couponId: 'c-001-mock',
         ),
       ],
     );
-    await _pumpFormPage(tester, backend, liveId: 'live-001');
+    await _pumpListRouter(tester, backend);
+    await tester.tap(find.byKey(const Key('liveEdit_live-001')));
+    await tester.pumpAndSettle();
 
-    final prepareButtonFinder = find.byKey(const Key('livePrepareButton'));
-    await _scrollTo(tester, prepareButtonFinder);
-    expect(
-      tester.widget<Text>(find.byKey(const Key('liveReadyStatusText'))).data,
-      '尚未绑定可用音色，先在上方选择后即可就绪',
-    );
-    expect(
-      _widget<FilledButton>(tester, const Key('livePrepareButton')).onPressed,
-      isNull,
-    );
+    // 无可用音色 → prepare 前置校验失败，保存成功但停留草稿（不阻断保存）
+    final saveButton = find.byKey(const Key('liveSaveButton'));
+    await _scrollTo(tester, saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('liveListPage')), findsOneWidget);
+    expect(backend.lives.single['status'], 'idle');
+
+    // 等待 SnackBar 自动消失，避免遗留计时器
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
   });
 
   test('ApiClient.uploadLiveVideo：multipart 真实上传临时文件后回填 videoSourceUrl', () async {
@@ -412,7 +375,7 @@ void main() {
     expect(backend.lives.single['videoSourceUrl'], '/uploads/videos/live-001.mp4');
   });
 
-  testWidgets('端到端：列表 → 新建（选音色/话术/券）→ 保存 → 返回列表出现草稿', (WidgetTester tester) async {
+  testWidgets('端到端：列表 → 新建（选音色/话术）→ 保存 → 返回列表出现就绪卡片', (WidgetTester tester) async {
     final backend = FakeBackend(
       douyinBound: true,
       voices: <Map<String, dynamic>>[
@@ -450,19 +413,7 @@ void main() {
     await tester.tap(find.byKey(const Key('liveScriptOption_script-001')));
     await tester.pumpAndSettle();
 
-    // 选团购券：push /coupons 点选后 pop 回券 id
-    await _scrollTo(tester, find.byKey(const Key('liveCouponSelector')));
-    await tester.tap(find.byKey(const Key('liveCouponSelector')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('couponListPage')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('couponCard_c-001-mock')));
-    await tester.pumpAndSettle();
-    expect(
-      tester.widget<Text>(find.byKey(const Key('liveCouponValue'))).data,
-      '双人火锅套餐',
-    );
-
-    // 保存草稿：成功后 pop 回列表并刷新出新卡片
+    // 保存：成功后自动就绪并 pop 回列表刷新出新卡片
     final saveButton = find.byKey(const Key('liveSaveButton'));
     await _scrollTo(tester, saveButton);
     await tester.tap(saveButton);
@@ -471,18 +422,21 @@ void main() {
     expect(find.byKey(const Key('liveListPage')), findsOneWidget);
     expect(find.byKey(const Key('liveCard_live-001')), findsOneWidget);
     expect(find.text('火锅店午市循环直播'), findsOneWidget);
-    expect(find.text('草稿'), findsOneWidget);
-    expect(find.text('音色：主播小美 · 话术：火锅套餐话术 · 券：双人火锅套餐'), findsOneWidget);
+    expect(find.text('就绪'), findsOneWidget);
+    expect(find.text('音色：主播小美 · 话术：火锅套餐话术'), findsOneWidget);
 
-    // 服务端落库语义：status=idle、合规角标恒为 true、绑定字段完整
+    // 服务端落库语义：保存后就绪 status=ready、合规角标恒为 true、绑定字段完整
     expect(backend.lives, hasLength(1));
     final created = backend.lives.single;
     expect(created['title'], '火锅店午市循环直播');
-    expect(created['status'], 'idle');
+    expect(created['status'], 'ready');
     expect(created['aiBadgeShown'], isTrue);
     expect(created['voiceId'], 'v-ready');
     expect(created['scriptId'], 'script-001');
-    expect(created['couponId'], 'c-001-mock');
+
+    // 等待 SnackBar 自动消失，避免遗留计时器
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('端到端：新建选火山预设音色 → 保存 → 列表摘要展示预设且 voiceId 为空', (WidgetTester tester) async {
@@ -536,9 +490,13 @@ void main() {
     expect(created['volcPresetId'], 'zh_female_vv_uranus_bigtts');
     expect(created['voiceId'], isNull);
     expect(created['scriptId'], 'script-001');
+
+    // 等待 SnackBar 自动消失，避免遗留计时器
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
   });
 
-  testWidgets('纯 AI 就绪开播：火山预设音色 + 无实景视频 → prepare 直接 ready 且不合成回填', (WidgetTester tester) async {
+  testWidgets('编辑模式：火山预设音色 + 无实景视频 → 保存后直接 ready 且不合成回填', (WidgetTester tester) async {
     final backend = FakeBackend(
       douyinBound: true,
       scripts: <Map<String, dynamic>>[
@@ -554,37 +512,26 @@ void main() {
         ),
       ],
     );
-    await _pumpFormPage(tester, backend, liveId: 'live-001');
+    await _pumpListRouter(tester, backend);
+    await tester.tap(find.byKey(const Key('liveEdit_live-001')));
+    await tester.pumpAndSettle();
 
-    // 编辑预填：音色值展示火山预设；无需实景视频即展示纯 AI 就绪入口
+    // 编辑预填：音色值展示火山预设
     expect(
       tester.widget<Text>(find.byKey(const Key('liveVoiceValue'))).data,
       'Vivi 2.0（火山预设）',
     );
-    final prepareButton = find.byKey(const Key('livePrepareButton'));
-    await _scrollTo(tester, prepareButton);
-    expect(find.text('纯 AI 就绪开播'), findsOneWidget);
-    expect(
-      tester.widget<Text>(find.byKey(const Key('liveReadyStatusText'))).data,
-      '已绑定音色，可直接就绪开播',
-    );
 
-    await tester.tap(prepareButton);
+    // 保存即自动就绪：纯 AI 不触发视频合成
+    final saveButton = find.byKey(const Key('liveSaveButton'));
+    await _scrollTo(tester, saveButton);
+    await tester.tap(saveButton);
     await tester.pumpAndSettle();
 
+    expect(find.byKey(const Key('liveListPage')), findsOneWidget);
     expect(backend.lives.single['status'], 'ready');
     // 纯 AI 就绪不触发视频合成：videoSourceUrl 保持空、无 /uploads/lives 回填
     expect(backend.lives.single['videoSourceUrl'], isEmpty);
-    expect(
-      tester.widget<Text>(find.byKey(const Key('liveReadyStatusText'))).data,
-      '已就绪，可进入工作台开播',
-    );
-    expect(find.text('已就绪，可进入工作台开播'), findsWidgets);
-    // 已就绪后按钮置灰，防止重复就绪
-    expect(
-      _widget<FilledButton>(tester, const Key('livePrepareButton')).onPressed,
-      isNull,
-    );
 
     // 等待 SnackBar 自动消失，避免遗留计时器
     await tester.pump(const Duration(seconds: 5));
@@ -596,6 +543,9 @@ void main() {
       douyinBound: true,
       voices: <Map<String, dynamic>>[
         _voiceJson(id: 'v-ready', name: '主播小美', status: 'ready'),
+      ],
+      scripts: <Map<String, dynamic>>[
+        _scriptJson(id: 'script-001', title: '火锅套餐话术', status: 'ready'),
       ],
     );
     await _pumpListRouter(tester, backend);
@@ -630,6 +580,13 @@ void main() {
       '40',
     );
 
+    // 话术为必选：选一条就绪话术后才可保存
+    await _scrollUpTo(tester, find.byKey(const Key('liveScriptSelector')));
+    await tester.tap(find.byKey(const Key('liveScriptSelector')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('liveScriptOption_script-001')));
+    await tester.pumpAndSettle();
+
     // 保存：请求体带上当前档位
     final saveButton = find.byKey(const Key('liveSaveButton'));
     await _scrollTo(tester, saveButton);
@@ -638,6 +595,10 @@ void main() {
 
     expect(backend.lives, hasLength(1));
     expect(backend.lives.single['speechRate'], 40);
+
+    // 等待 SnackBar 自动消失，避免遗留计时器
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('编辑模式：语速回填服务端已设档位', (WidgetTester tester) async {

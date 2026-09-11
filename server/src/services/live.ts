@@ -357,6 +357,37 @@ export async function updateLive(
 }
 
 /**
+ * 直播中更换循环台本（M4 热更）：只允许 status === 'live' 的场次调用。
+ * - 非本人或不存在 → 返回 null（路由层转 404）；
+ * - 非直播中 → 抛 LIVE_NOT_LIVE（路由层转 409）；
+ * - 台本不存在或不归属当前用户 → 抛 LOOP_SCRIPT_NOT_OWNED（路由层转 400）。
+ * 生效时机：loopCaster 每轮开头重读台本，改绑于「下一轮」生效，不打断当前句。
+ */
+export async function bindLiveLoopScript(
+  userId: string,
+  id: string,
+  loopScriptId: string,
+): Promise<Live | null> {
+  const existing = await findOwnedLive(userId, id);
+  if (!existing) {
+    return null;
+  }
+  if (existing.status !== 'live') {
+    throw new LiveError('LIVE_NOT_LIVE', '只有直播中的场次才能更换循环台本');
+  }
+  if (!(await isOwnedLoopScript(loopScriptId, userId))) {
+    throw new LiveError('LOOP_SCRIPT_NOT_OWNED', '循环台本不存在或不属于当前用户');
+  }
+  const updated = await db
+    .update(livesTable)
+    .set({ loopScriptId })
+    .where(and(eq(livesTable.id, id), eq(livesTable.userId, userId)))
+    .returning();
+  const row = updated[0];
+  return row ? toLive(row) : null;
+}
+
+/**
  * 删除开播配置：归属隔离 + 状态保护。
  * - 非本人或不存在 → 返回 false（路由层转 404）；
  * - status = live / ready / processing（直播进行中、已就绪或合成中）→ 抛 LIVE_IN_PROGRESS（路由层转 409）；

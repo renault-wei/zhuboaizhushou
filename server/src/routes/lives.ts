@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import {
+  bindLiveLoopScript,
   createLive,
   deleteLive,
   getLiveById,
@@ -205,6 +206,11 @@ function statusCodeOf(code: string): number {
   }
 }
 
+/** 换绑台本路由专用映射：非直播中 409，其余沿用通用映射（end 路由维持 400 口径不变） */
+function loopScriptStatusCodeOf(code: string): number {
+  return code === 'LIVE_NOT_LIVE' ? 409 : statusCodeOf(code);
+}
+
 /**
  * 开播配置（lives）CRUD 路由：全部要求登录态。
  * 职责边界：T10 配置草稿增删改查；T11 新增实景视频上传、合成准备（prepare）、流状态查询。
@@ -274,6 +280,38 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
     } catch (err) {
       if (err instanceof LiveError) {
         return reply.code(statusCodeOf(err.code)).send({ error: err.code, message: err.message });
+      }
+      throw err;
+    }
+  });
+
+  // 直播中更换循环台本（热更）：仅 live 可调、归属校验；Runner 在跑则下一轮生效，
+  // 原未绑定（Runner 已退出）时补启动以读到新台本。
+  app.post('/api/lives/:id/loop-script', { preHandler: app.authenticate }, async (request, reply) => {
+    const { id } = request.params as LiveIdParams;
+    const record = request.body;
+    const loopScriptId =
+      typeof record === 'object' && record !== null
+        ? readOptionalId((record as Record<string, unknown>).loopScriptId)
+        : null;
+    if (!loopScriptId) {
+      return reply
+        .code(400)
+        .send({ error: 'LOOP_SCRIPT_REQUIRED', message: '请选择要应用的循环台本' });
+    }
+    try {
+      const live = await bindLiveLoopScript(request.user.userId, id, loopScriptId);
+      if (!live) {
+        return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
+      }
+      // 幂等：已在跑无操作；原先未绑定（Runner 已退出）时补启动
+      loopCaster.start(live.id);
+      return { live };
+    } catch (err) {
+      if (err instanceof LiveError) {
+        return reply
+          .code(loopScriptStatusCodeOf(err.code))
+          .send({ error: err.code, message: err.message });
       }
       throw err;
     }

@@ -74,7 +74,7 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
   }
 
   /// 再来一场：把已结束 / 失败场次复制为 idle 草稿（保留音色、话术、循环
-  /// 台本与团购券，不携带开播运行态），随后进入新草稿编辑页完善开播。
+  /// 台本，不携带开播运行态），随后进入新草稿编辑页完善开播。
   Future<void> _goReplay(Live live) async {
     try {
       final created = await ref.read(apiClientProvider).createLive(
@@ -83,7 +83,6 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
             voiceId: live.voiceId,
             scriptId: live.scriptId,
             loopScriptId: live.loopScriptId,
-            couponId: live.couponId,
           );
       if (!mounted) {
         return;
@@ -305,7 +304,6 @@ class _LiveListPageState extends ConsumerState<LiveListPage> {
               voiceNames: state.voiceNames,
               presetNames: state.presetNames,
               scriptTitles: state.scriptTitles,
-              couponNames: state.couponNames,
               onEdit: live.isEditable ? () => _goEdit(live) : null,
               onView: _viewPlaceholder,
               onReplay: live.isFinished ? () => _goReplay(live) : null,
@@ -421,7 +419,6 @@ class _LiveCard extends StatelessWidget {
     required this.voiceNames,
     required this.presetNames,
     required this.scriptTitles,
-    required this.couponNames,
     required this.onEdit,
     required this.onView,
     required this.onReplay,
@@ -434,7 +431,6 @@ class _LiveCard extends StatelessWidget {
   final Map<String, String> voiceNames;
   final Map<String, String> presetNames;
   final Map<String, String> scriptTitles;
-  final Map<String, String> couponNames;
   final VoidCallback? onEdit;
   final VoidCallback? onView;
   final VoidCallback? onReplay;
@@ -451,11 +447,9 @@ class _LiveCard extends StatelessWidget {
         '音色：${presetNames[live.volcPresetId] ?? live.volcPresetId}（火山预设）',
       if (live.scriptId != null)
         '话术：${scriptTitles[live.scriptId] ?? live.scriptId}',
-      if (live.couponId != null)
-        '券：${couponNames[live.couponId] ?? live.couponId}',
     ];
     if (parts.isEmpty) {
-      return '尚未绑定音色 / 话术 / 团购券';
+      return '尚未绑定音色 / 话术';
     }
     return parts.join(' · ');
   }

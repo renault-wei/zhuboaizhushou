@@ -34,6 +34,8 @@ const PHONE_MONITOR = '13920000304'; // 监控 + 弹幕
 const PHONE_OWNER_A = '13920000305'; // 归属隔离 A
 const PHONE_OWNER_B = '13920000306'; // 归属隔离 B
 const PHONE_LOOP = '13920000307'; // M5 循环播报接线
+const PHONE_LOOP_SWAP = '13920000308'; // M4 直播中热更台本
+const PHONE_LOOP_SWAP_B = '13920000309'; // M4 热更归属隔离（他人）
 
 async function registerAndGetToken(phone: string): Promise<string> {
   const send = await app.inject({
@@ -133,6 +135,7 @@ it('未带 token 访问 start / end / monitor / danmaku 均返回 401', async ()
   for (const [method, url] of [
     ['POST', `/api/lives/${id}/start`],
     ['POST', `/api/lives/${id}/end`],
+    ['POST', `/api/lives/${id}/loop-script`],
     ['GET', `/api/lives/${id}/monitor`],
     ['GET', `/api/lives/${id}/danmaku`],
   ] as const) {
@@ -334,21 +337,26 @@ dbIt('status=live 时删除返回 409（删除保护沿用）', async () => {
 });
 // ---------- M5 循环播报接线（loopCaster 生命周期随 start/end 驱动） ----------
 
-/** 直接 seed 一条归属该用户的循环台本（1 条安全文案）并绑定到 live，绕过 DeepSeek / 敏感扫描 */
-async function seedBoundLoopScript(phone: string, liveId: string): Promise<void> {
+/** 直接 seed 一条归属该用户的循环台本（1 条安全文案），返回台本 id；绕过 DeepSeek / 敏感扫描 */
+async function seedLoopScript(phone: string, title: string): Promise<string> {
   const userId = await userIdOf(phone);
   const scriptId = randomUUID();
-  const itemId = randomUUID();
   await pool.query(`INSERT INTO loop_scripts (id, user_id, title) VALUES ($1, $2, $3)`, [
     scriptId,
     userId,
-    '火锅循环台本（测试）',
+    title,
   ]);
   await pool.query(
     `INSERT INTO loop_script_items (id, loop_script_id, seq, kind, text, gap_after_seconds)
      VALUES ($1, $2, 1, 'product', $3, 1)`,
-    [itemId, scriptId, '本店招牌毛肚套餐，欢迎到店品尝。'],
+    [randomUUID(), scriptId, '本店招牌毛肚套餐，欢迎到店品尝。'],
   );
+  return scriptId;
+}
+
+/** seed 一条循环台本并直接绑定到 live（M5 接线用例用） */
+async function seedBoundLoopScript(phone: string, liveId: string): Promise<void> {
+  const scriptId = await seedLoopScript(phone, '火锅循环台本（测试）');
   await pool.query(`UPDATE lives SET loop_script_id = $1 WHERE id = $2`, [scriptId, liveId]);
 }
 
@@ -467,5 +475,70 @@ dbIt('M5 接线：未绑台本 start 后 loopMissing=true；绑定台本 start �
   } finally {
     // 兜底：无论断言走到哪一步都确保停掉 Runner，避免污染同文件后续用例
     loopCaster.stop(boundId);
+  }
+});
+
+dbIt('M4 热更：非直播中 409；直播中换绑 200 + Runner 补启动读新台本；参数/归属校验', async () => {
+  const token = await registerAndGetToken(PHONE_LOOP_SWAP);
+  await resetUserData(PHONE_LOOP_SWAP);
+  // 出声链路替身：绝不在测试里真发声（引擎会把台本句推到 liveSpeaker，但被吞掉）
+  vi.spyOn(liveSpeaker, 'speak').mockResolvedValue({ spoken: false, reason: 'disabled' });
+  const liveId = await createLiveDraft(token);
+  const scriptA = await seedLoopScript(PHONE_LOOP_SWAP, '热更台本 A');
+  const scriptB = await seedLoopScript(PHONE_LOOP_SWAP, '热更台本 B');
+
+  const post = (payload: unknown, authToken: string) =>
+    app.inject({
+      method: 'POST',
+      url: `/api/lives/${liveId}/loop-script`,
+      headers: bearer(authToken),
+      payload,
+    });
+
+  try {
+    // 场景 1：idle 草稿不可热更 → 409
+    const notLive = await post({ loopScriptId: scriptA }, token);
+    expect(notLive.statusCode).toBe(409);
+    expect(notLive.json()).toMatchObject({ error: 'LIVE_NOT_LIVE' });
+
+    await setLiveStatus(liveId, 'live', { startedSecondsAgo: 3 });
+
+    // 场景 2：缺 loopScriptId → 400
+    const missing = await post({}, token);
+    expect(missing.statusCode).toBe(400);
+    expect(missing.json()).toMatchObject({ error: 'LOOP_SCRIPT_REQUIRED' });
+
+    // 场景 3：直播中（原未绑定、Runner 已退出）换绑 A → 200 + Runner 补启动
+    const boundA = await post({ loopScriptId: scriptA }, token);
+    expect(boundA.statusCode).toBe(200);
+    expect(boundA.json().live.loopScriptId).toBe(scriptA);
+    await waitMonitorUntil(token, liveId, (monitor) => monitor.loopRunning === true);
+
+    // 场景 4：再换绑 B → 200，库里即换（下一轮开头重读生效）
+    const boundB = await post({ loopScriptId: scriptB }, token);
+    expect(boundB.statusCode).toBe(200);
+    expect(boundB.json().live.loopScriptId).toBe(scriptB);
+    const monitor = await app.inject({
+      method: 'GET',
+      url: `/api/lives/${liveId}/monitor`,
+      headers: bearer(token),
+    });
+    expect(monitor.json()).toMatchObject({ status: 'live', loopRunning: true, loopMissing: false });
+
+    // 场景 5：他人台本 → 400 LOOP_SCRIPT_NOT_OWNED
+    const tokenB = await registerAndGetToken(PHONE_LOOP_SWAP_B);
+    await resetUserData(PHONE_LOOP_SWAP_B);
+    const foreignScript = await seedLoopScript(PHONE_LOOP_SWAP_B, '他人台本');
+    const borrowed = await post({ loopScriptId: foreignScript }, token);
+    expect(borrowed.statusCode).toBe(400);
+    expect(borrowed.json()).toMatchObject({ error: 'LOOP_SCRIPT_NOT_OWNED' });
+
+    // 场景 6：他人场次 → 404（归属隔离）
+    const stranger = await post({ loopScriptId: scriptA }, tokenB);
+    expect(stranger.statusCode).toBe(404);
+    expect(stranger.json()).toMatchObject({ error: 'LIVE_NOT_FOUND' });
+  } finally {
+    // 兜底：无论断言走到哪一步都确保停掉 Runner，避免污染同文件后续用例
+    loopCaster.stop(liveId);
   }
 });

@@ -26,7 +26,7 @@ export const DEFAULT_IDLE_POLL_MS = 500;
 
 // ---------- 类型定义 ----------
 
-/** 一条可循环播报的台本短句（内存快照：开播时读一次，中途改库不影响本场） */
+/** 一条可循环播报的台本短句（运行期每轮开头重读：直播中改绑台本下一轮生效） */
 export interface LoopCastItem {
   text: string;
   /** 本条播完后的间隔秒数：null = 用全局默认 */
@@ -44,7 +44,10 @@ export interface LoopCasterStatus {
 export interface LoopCasterOptions {
   /** 把一句口播交给出声链路（可带本场音色覆盖）；本地端播完才 resolve，远程端入队即 resolve */
   speak?(text: string, overrides?: SpeechOverrides): Promise<{ spoken: boolean; reason?: string }>;
-  /** 开播时读一次台本快照：null = 未绑定台本（不启动循环，只回弹幕） */
+  /**
+   * 读当前场次绑定的循环台本：开播时读一次，运行中每轮开头重读（改绑下一轮生效）；
+   * null / 空数组 = 未绑定台本（首轮不启动循环；运行中清空则停止循环，只回弹幕）。
+   */
   loadItems?(liveId: string): Promise<LoopCastItem[] | null>;
   /** 开播时读一次本场音色：null = 未绑定音色（回落默认音色） */
   loadVoice?(liveId: string): Promise<SpeechOverrides | null>;
@@ -207,6 +210,7 @@ async function tryInsertAtmosphere(
  * Runner 主体（§8.2 算法）：
  * 每轮 round+=1；逐条在出声链路空闲时 speak；条间用条目的 gapAfterSeconds ?? itemGapSeconds；
  * 轮末休息 loopRestSeconds。stop 置位后，正在播的句子播完即止、不再推新句。
+ * 台本每轮开头重读：直播中改绑台本下一轮生效（不打断当前句）；清空则停止循环只回弹幕。
  */
 async function runLoop(
   liveId: string,
@@ -216,9 +220,9 @@ async function runLoop(
   loopRestSeconds: number,
   idlePollMs: number,
 ): Promise<void> {
-  let items: LoopCastItem[] | null;
+  let loaded: LoopCastItem[] | null;
   try {
-    items = await options.loadItems(liveId);
+    loaded = await options.loadItems(liveId);
   } catch (err) {
     console.warn(
       `[loopCaster] 场次 ${liveId} 循环台本加载失败，本场只回弹幕：${
@@ -230,11 +234,13 @@ async function runLoop(
   if (state.cancelled) {
     return;
   }
-  if (!items || items.length === 0) {
+  if (!loaded || loaded.length === 0) {
     // 未绑定台本 / 空台本：不启动循环，只回弹幕（Q2 正常流程不出现）
     console.info(`[loopCaster] 场次 ${liveId} 未绑定循环台本，本场只回弹幕`);
     return;
   }
+  // 运行期可变：每轮开头重读替换（直播中改绑台本下一轮生效）
+  let items: LoopCastItem[] = loaded;
   // 本场音色：只读一次（开播后改库不影响本场）；读失败回落默认音色，不打断循环
   let voice: SpeechOverrides | null = null;
   try {
@@ -249,8 +255,36 @@ async function runLoop(
   state.running = true;
   try {
     while (!state.cancelled) {
+      // 轮间休息后再重读台本：直播中改绑台本于「下一轮」生效，不打断当前句
+      if (state.round > 0) {
+        await options.sleep(loopRestSeconds * 1000);
+        if (state.cancelled) {
+          break;
+        }
+        let reloaded: LoopCastItem[] | null;
+        try {
+          reloaded = await options.loadItems(liveId);
+        } catch (err) {
+          console.warn(
+            `[loopCaster] 场次 ${liveId} 台本重读失败，沿用上一轮快照：${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+          reloaded = items;
+        }
+        if (state.cancelled) {
+          break;
+        }
+        if (!reloaded || reloaded.length === 0) {
+          // 直播中解绑 / 清空台本：停止循环只回弹幕（已播出的句子不受影响）
+          console.info(`[loopCaster] 场次 ${liveId} 台本已解绑或清空，停止循环只回弹幕`);
+          break;
+        }
+        items = reloaded;
+      }
       state.round += 1;
-      for (let index = 0; index < items.length; index += 1) {
+      const roundItems = items;
+      for (let index = 0; index < roundItems.length; index += 1) {
         if (state.cancelled) {
           break;
         }
@@ -262,7 +296,7 @@ async function runLoop(
         if (state.cancelled) {
           break;
         }
-        const item = items[index];
+        const item = roundItems[index];
         if (!item) {
           break;
         }
@@ -279,9 +313,6 @@ async function runLoop(
         if (gapMilliseconds > 0) {
           await options.sleep(gapMilliseconds);
         }
-      }
-      if (!state.cancelled) {
-        await options.sleep(loopRestSeconds * 1000);
       }
     }
   } finally {

@@ -18,7 +18,6 @@ Map<String, dynamic> _liveJson({
   String? voiceId,
   String? volcPresetId,
   String? scriptId,
-  String? couponId,
   String? startedAt,
   String? endedAt,
 }) {
@@ -27,7 +26,6 @@ Map<String, dynamic> _liveJson({
     'id': id,
     'title': title,
     'videoSourceUrl': '',
-    'couponId': couponId,
     'rtmpUrl': null,
     'voiceId': voiceId,
     'volcPresetId': volcPresetId,
@@ -137,7 +135,6 @@ void main() {
           status: 'idle',
           voiceId: 'v-ready',
           scriptId: 'script-001',
-          couponId: 'c-001-mock',
         ),
         _liveJson(id: 'live-002', title: '晚市就绪直播', status: 'ready'),
         _liveJson(id: 'live-003', title: '昨日已结束', status: 'ended'),
@@ -168,8 +165,8 @@ void main() {
     expect(find.byKey(const Key('liveStart_live-002')), findsNothing);
     expect(find.byKey(const Key('liveEdit_live-002')), findsNothing);
 
-    // 摘要展示音色 / 话术 / 团购券名称
-    expect(find.text('音色：主播小美 · 话术：火锅套餐话术 · 券：双人火锅套餐'), findsOneWidget);
+    // 摘要展示音色 / 话术（团购券已下线，不再出现在摘要里）
+    expect(find.text('音色：主播小美 · 话术：火锅套餐话术'), findsOneWidget);
 
     // 删除保护：idle 可删，ready 的删除按钮禁用
     final idleDelete = tester.widget<IconButton>(
@@ -405,7 +402,6 @@ void main() {
           status: 'ended',
           voiceId: 'v-replay',
           scriptId: 'script-002',
-          couponId: 'c-001-mock',
         ),
       ],
     );
@@ -426,7 +422,6 @@ void main() {
     expect(drafts.first['title'], '昨日火锅直播（复播）');
     expect(drafts.first['voiceId'], 'v-replay');
     expect(drafts.first['scriptId'], 'script-002');
-    expect(drafts.first['couponId'], 'c-001-mock');
     expect(drafts.first['videoSourceUrl'], isEmpty);
 
     // 复制后自动进入新草稿编辑页，可继续完善后就绪开播

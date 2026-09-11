@@ -459,7 +459,7 @@ class FakeBackend implements HttpClientAdapter {
     // stream-status / start / end / monitor / danmaku）需先于单段正则匹配，
     // 避免被 /api/lives/:id 的 GET/PATCH/DELETE 规则吞掉。
     final liveAction = RegExp(
-      r'^/api/lives/([^/]+)/(video|prepare|stream-status|start|end|monitor|danmaku)$',
+      r'^/api/lives/([^/]+)/(video|prepare|stream-status|start|end|monitor|danmaku|loop-script)$',
     ).firstMatch(path);
     if (liveAction != null && options.method == 'POST') {
       switch (liveAction.group(2)) {
@@ -467,6 +467,8 @@ class FakeBackend implements HttpClientAdapter {
           return _uploadLiveVideo(liveAction.group(1)!, options);
         case 'prepare':
           return _prepareLive(liveAction.group(1)!);
+        case 'loop-script':
+          return _bindLiveLoopScript(liveAction.group(1)!, options);
         case 'start':
           return _startLive(liveAction.group(1)!);
         case 'end':
@@ -817,6 +819,45 @@ class FakeBackend implements HttpClientAdapter {
       // 实景视频 + 就绪克隆音色才走合成回填成片；纯 AI 语音就绪不回填
       if (hasSourceVideo && hasCloneVoice) 'videoSourceUrl': '/uploads/lives/$id.mp4',
       'updatedAt': now,
+    };
+    lives[index] = updated;
+    return _jsonResponse({'live': updated});
+  }
+
+  /// 直播中热更话术（循环台本 M4）：镜像服务端语义 —— 仅 live 可换绑
+  /// （否则 409），台本必须属于当前用户（否则 400）。
+  ResponseBody _bindLiveLoopScript(String id, RequestOptions options) {
+    final index = lives.indexWhere((live) => live['id'] == id);
+    if (index < 0) {
+      return _jsonResponse({
+        'error': 'LIVE_NOT_FOUND',
+        'message': '开播配置不存在',
+      }, 404);
+    }
+    if (lives[index]['status'] != 'live') {
+      return _jsonResponse({
+        'error': 'LIVE_NOT_LIVE',
+        'message': '仅直播中可更新话术',
+      }, 409);
+    }
+    final body = _readBody(options);
+    final loopScriptId = _liveNullable(body['loopScriptId']);
+    if (loopScriptId == null || loopScriptId.isEmpty) {
+      return _jsonResponse({
+        'error': 'LOOP_SCRIPT_REQUIRED',
+        'message': '请选择要绑定的台本',
+      }, 400);
+    }
+    if (loopScripts.indexWhere((script) => script['id'] == loopScriptId) < 0) {
+      return _jsonResponse({
+        'error': 'LOOP_SCRIPT_NOT_OWNED',
+        'message': '循环台本不存在或不属于当前用户',
+      }, 400);
+    }
+    final updated = <String, dynamic>{
+      ...lives[index],
+      'loopScriptId': loopScriptId,
+      'updatedAt': DateTime.now().toUtc().toIso8601String(),
     };
     lives[index] = updated;
     return _jsonResponse({'live': updated});

@@ -19,6 +19,7 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:starvoice_app/core/models/live.dart';
+import 'package:starvoice_app/core/models/loop_script.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/core/theme/app_colors.dart';
 import 'package:starvoice_app/core/theme/app_theme.dart';
@@ -87,6 +88,9 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
 
   /// 测试弹幕发送中（防重复点击）
   bool _sendingDanmaku = false;
+
+  /// 直播中热更话术进行中（防重复点击）
+  bool _updatingLoop = false;
 
   @override
   void initState() {
@@ -1072,12 +1076,64 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                     height: 1.45,
                   ),
                 ),
+                // 热更台本入口：仅直播中可用（服务端非 live 返回 409）。
+                // 换绑于「下一轮」生效，不打断当前口播句。
+                if (live) ...[
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      key: const Key('liveMonitorUpdateLoopButton'),
+                      onPressed: _updatingLoop ? null : _updateLoopScript,
+                      icon: const Icon(Icons.playlist_play, size: 18),
+                      label: Text(_updatingLoop ? '更新中…' : '更新话术'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.nightText,
+                        side: const BorderSide(color: AppColors.nightStroke),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        minimumSize: const Size(0, 34),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
         ],
       ),
     );
+  }
+
+  /// 直播中热更话术（循环台本）：选一本我的台本后调 /api/lives/:id/loop-script
+  /// 换绑，引擎下一轮开头重读，不打断当前句。
+  Future<void> _updateLoopScript() async {
+    final picked = await context.push<LoopScript>('/loop-scripts?select=1');
+    if (!mounted || picked == null) {
+      return;
+    }
+    setState(() => _updatingLoop = true);
+    try {
+      await ref
+          .read(apiClientProvider)
+          .bindLiveLoopScript(widget.liveId, loopScriptId: picked.id);
+      if (!mounted) {
+        return;
+      }
+      _showSnack('话术已更新，将在下一轮生效');
+      await _loadMonitor();
+    } on ApiException catch (error) {
+      if (mounted) {
+        _showSnack('更新话术失败：${error.message}');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _updatingLoop = false);
+      }
+    }
   }
 
   /// 测试弹幕注入区：模拟一条观众提问，跑通「弹幕 → AI 回复 → 语音播报」

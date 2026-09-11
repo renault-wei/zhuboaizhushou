@@ -638,7 +638,6 @@ class ApiClient {
     String? voiceId,
     String? scriptId,
     String? loopScriptId,
-    String? couponId,
     String? videoSourceUrl,
   }) async {
     try {
@@ -651,7 +650,6 @@ class ApiClient {
           'voiceId': voiceId,
           'scriptId': scriptId,
           'loopScriptId': loopScriptId,
-          'couponId': couponId,
           'videoSourceUrl': ?videoSourceUrl,
         },
       );
@@ -661,7 +659,7 @@ class ApiClient {
     }
   }
 
-  /// 编辑开播配置：整体提交标题/音色/话术/团购券（null 表示清空绑定）；
+  /// 编辑开播配置：整体提交标题/音色/话术（null 表示清空绑定）；
   /// status / aiBadgeShown 无更新入口，角标恒为 true 不可篡改。
   Future<Live> updateLive({
     required String id,
@@ -671,7 +669,6 @@ class ApiClient {
     String? voiceId,
     String? scriptId,
     String? loopScriptId,
-    String? couponId,
     String? videoSourceUrl,
   }) async {
     try {
@@ -686,9 +683,25 @@ class ApiClient {
           'voiceId': voiceId,
           'scriptId': scriptId,
           'loopScriptId': loopScriptId,
-          'couponId': couponId,
           'videoSourceUrl': ?videoSourceUrl,
         },
+      );
+      return _parseLive(response.data);
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 直播中更换循环台本（M4 热更）：仅直播中（status=live）可调，其他状态服务端 409。
+  /// 生效时机：服务端循环引擎每轮开头重读台本，换绑于「下一轮」生效，不打断当前句。
+  Future<Live> bindLiveLoopScript(
+    String id, {
+    required String loopScriptId,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/lives/$id/loop-script',
+        data: <String, dynamic>{'loopScriptId': loopScriptId},
       );
       return _parseLive(response.data);
     } on DioException catch (error) {

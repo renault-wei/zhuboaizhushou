@@ -1,10 +1,10 @@
 /// 开播配置表单页：/lives/new（新建）与 /lives/:id（编辑）共用同一页面。
 /// 商家绑定：音色（我的克隆音色仅 ready 可选 / 火山预设音色全可选，二选一互斥）+
-/// 话术（仅 ready 可选）+
-/// 循环台本（push /loop-scripts?select=1 点选后 pop 回整本）+ 团购券
-/// （push /coupons 点选后 pop 回券 id）+ 直播标题。
-/// 就绪开播：产品口径为平台无关 AI 语音助播，无需实景视频 —— 绑定可用音色后
-/// 点「纯 AI 就绪开播」完成敏感词/音色前置校验即就绪；新建草稿先保存、再从列表进入编辑后操作。
+/// 话术（必选，仅 ready 可选）+ 循环台词（push /loop-scripts?select=1 点选后
+/// pop 回整本，可空 = 本场仅弹幕回复）+ 直播标题。
+/// 就绪开播：产品口径为平台无关 AI 语音助播，无需实景视频 —— 保存时本页自动调用
+/// prepare 完成敏感词 / 音色前置校验并置 ready，不再有独立「开播准备」步骤；
+/// 保存成功即返回列表，从列表进入工作台即可一键开播。
 /// 「AI 智能直播」角标由服务端强制叠加为 true，本页面没有任何关闭入口。
 library;
 
@@ -12,7 +12,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import 'package:starvoice_app/core/models/coupon.dart';
 import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/models/loop_script.dart';
 import 'package:starvoice_app/core/models/script.dart';
@@ -55,7 +54,6 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   /// 新建模式是否已尝试回填默认音色（只调度一次，避免重复回填）。
   bool _defaultPresetApplied = false;
   String? _scriptId;
-  String? _couponId;
 
   /// 已绑定的循环台本 id（null = 未绑定，仅弹幕回复模式）。
   String? _loopScriptId;
@@ -66,12 +64,6 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
 
   /// 正在同步已绑定台本摘要。
   bool _loopSummarySyncing = false;
-
-  /// 是否已在本页完成就绪（成功后禁用重复就绪）
-  bool _composed = false;
-
-  /// 是否正在就绪开播
-  bool _preparing = false;
 
   /// 编辑模式初值是否已回填到本地（避免 controller 重建覆盖用户输入）。
   bool _hydrated = false;
@@ -128,9 +120,6 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       _speechRate = initial.speechRate ?? _defaultSpeechRate;
       _scriptId = initial.scriptId;
       _loopScriptId = initial.loopScriptId;
-      _couponId = initial.couponId;
-      // 已就绪场次重进编辑页时直接展示「已就绪」，禁止重复就绪
-      _composed = initial.isReady;
     });
     if (initial.loopScriptId != null) {
       _refreshLoopSummary();
@@ -236,8 +225,13 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       _showSnack('标题为必填项，且不超过 100 字');
       return;
     }
+    // 话术为必选绑定：未绑定不允许保存（AI 语音主播必须有可播话术）
+    if (_scriptId == null) {
+      _showSnack('请先绑定话术（必选）');
+      return;
+    }
     try {
-      await ref
+      final live = await ref
           .read(liveFormControllerProvider(widget.liveId).notifier)
           .save(
             title: title,
@@ -246,8 +240,11 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
             voiceId: _voiceId,
             scriptId: _scriptId,
             loopScriptId: _loopScriptId,
-            couponId: _couponId,
           );
+      if (!mounted) {
+        return;
+      }
+      await _composeIfDraft(live);
       if (!mounted) {
         return;
       }
@@ -259,30 +256,21 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     }
   }
 
-  /// 就绪开播：真实调用 /api/lives/:id/prepare。纯 AI 语音模式无需实景视频，
-  /// 服务端完成敏感词 / 音色前置校验后直接置 ready（可进入工作台开播）。
-  Future<void> _prepareLive() async {
-    setState(() {
-      _preparing = true;
-    });
+  /// 保存后自动就绪：草稿（idle）直接调 /api/lives/:id/prepare 置 ready，
+  /// 取代原独立「开播准备」步骤。就绪失败不阻断保存结果（配置已落库），
+  /// 只提示原因，商家可回列表进入编辑页修正后重试。
+  Future<void> _composeIfDraft(Live live) async {
+    if (!live.isEditable) {
+      return;
+    }
     try {
-      await ref.read(apiClientProvider).prepareLive(widget.liveId);
-      if (!mounted) {
-        return;
+      await ref.read(apiClientProvider).prepareLive(live.id);
+      if (mounted) {
+        _showSnack('已保存并就绪，进入工作台即可开播');
       }
-      setState(() {
-        _composed = true;
-      });
-      _showSnack('已就绪，可进入工作台开播');
     } on ApiException catch (error) {
       if (mounted) {
-        _showSnack('就绪失败：${error.message}');
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _preparing = false;
-        });
+        _showSnack('已保存，但自动就绪失败：${error.message}');
       }
     }
   }
@@ -347,7 +335,6 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     final canSave = !state.saving && _titleController.text.trim().isNotEmpty;
     final voice = _selectedVoice(state);
     final script = _selectedScript(state);
-    final coupon = _selectedCoupon(state);
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -363,8 +350,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         ),
         const SizedBox(height: 4),
         Text(
-          '绑定素材：音色可选「我的音色」（克隆）或火山预设音色，话术来自话术库，'
-          '团购券来自已绑定的抖音号。',
+          '绑定素材：话术为必选（来自话术库），音色可选「我的音色」（克隆）'
+          '或火山预设音色；保存后自动完成就绪校验。',
           style: TextStyle(fontSize: 12, color: context.tokenTextBody),
         ),
         const SizedBox(height: 12),
@@ -375,10 +362,6 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         _buildScriptPicker(state, script),
         const SizedBox(height: 12),
         _buildLoopScriptSection(state.saving),
-        const SizedBox(height: 12),
-        _buildCouponPicker(state, coupon),
-        const SizedBox(height: 12),
-        _buildReadySection(state),
         const SizedBox(height: 12),
         _buildComplianceNote(),
         const SizedBox(height: 20),
@@ -392,7 +375,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
                   height: 20,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Text('保存草稿'),
+                  : const Text('保存并就绪'),
         ),
         const SizedBox(height: 24),
       ],
@@ -606,156 +589,6 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     return id == null ? '' : '台本 $id（摘要同步失败，可重试）';
   }
 
-  /// 团购券选择：直接进入 /coupons?select=1，点选后 pop 回券 id。
-  Widget _buildCouponPicker(LiveFormState state, Coupon? coupon) {
-    final value = coupon == null
-        ? (_couponId == null ? '未选择' : _couponId!)
-        : coupon.name;
-    return ListTile(
-      key: const Key('liveCouponSelector'),
-      contentPadding: EdgeInsets.zero,
-      leading: const Icon(Icons.confirmation_number_outlined),
-      title: const Text('绑定团购券'),
-      subtitle: Text(
-        value,
-        key: const Key('liveCouponValue'),
-        style: TextStyle(fontSize: 13, color: context.tokenTextBody),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      trailing: const Icon(Icons.chevron_right),
-      onTap: state.saving ? null : _pickCoupon,
-    );
-  }
-
-  /// 开播准备区：纯 AI 语音模式主入口（无需实景视频）。绑定可用音色后点
-  /// 「纯 AI 就绪开播」，由服务端完成敏感词 / 音色前置校验后就绪；就绪后进入工作台开播。
-  Widget _buildReadySection(LiveFormState state) {
-    final busy = _preparing;
-    // 仅编辑模式且初始为草稿（idle）可操作；就绪 / 直播中等由服务端保护
-    final canOperate = _isEdit && !busy && (state.initial?.isEditable ?? false);
-    final voice = _selectedVoice(state);
-    final preset = _selectedPreset(state);
-    final cloneVoiceReady = voice?.isReady ?? false;
-    final hasVoiceChoice = preset != null || cloneVoiceReady;
-    final canPrepare = canOperate && !_composed && hasVoiceChoice;
-    final String statusLabel;
-    if (_composed) {
-      statusLabel = '已就绪，可进入工作台开播';
-    } else if (hasVoiceChoice) {
-      statusLabel = '已绑定音色，可直接就绪开播';
-    } else {
-      statusLabel = '尚未绑定可用音色，先在上方选择后即可就绪';
-    }
-    // 状态为积极（已就绪）时以绿色对勾呈现，避免看起来像报错
-    final statusReady = _composed;
-    return Container(
-      key: const Key('liveReadySection'),
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: context.tokenSurfaceFill,
-        border: Border.all(color: context.tokenDivider),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.play_circle_outline, size: 18),
-              SizedBox(width: 6),
-              Text(
-                '开播准备',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '纯 AI 语音模式无需实景视频：绑定可用音色后点下方按钮完成敏感词 / 音色预检并就绪，'
-            '就绪后进入工作台即可开始直播。',
-            style: TextStyle(fontSize: 12, color: context.tokenTextBody),
-          ),
-          if (!_isEdit) ...[
-            const SizedBox(height: 8),
-            Text(
-              '新建草稿先保存，再从列表进入编辑后绑定可用音色即可就绪开播。',
-              key: const Key('liveReadyNewModeHint'),
-              style: TextStyle(fontSize: 12, color: context.tokenTextBody),
-            ),
-          ],
-          const SizedBox(height: 10),
-          if (busy)
-            _buildPrepareBusyHint()
-          else ...[
-            Row(
-              children: [
-                Icon(
-                  statusReady ? Icons.check_circle_outline : Icons.info_outline,
-                  size: 16,
-                  color: statusReady ? AppColors.live : context.tokenTextHint,
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    statusLabel,
-                    key: const Key('liveReadyStatusText'),
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: statusReady ? AppColors.live : context.tokenTextBody,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                key: const Key('livePrepareButton'),
-                onPressed: canPrepare ? _prepareLive : null,
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(44),
-                ),
-                child: const Text('纯 AI 就绪开播'),
-              ),
-            ),
-            if (_isEdit && !canOperate && !_composed)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  '仅草稿状态可操作（就绪 / 直播中等不可重复就绪）',
-                  style: TextStyle(fontSize: 12, color: context.tokenTextHint),
-                ),
-              ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  /// 就绪开播进行中的进度提示。
-  Widget _buildPrepareBusyHint() {
-    return Row(
-      children: [
-        const SizedBox(
-          width: 16,
-          height: 16,
-          child: CircularProgressIndicator(strokeWidth: 2),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            '正在就绪开播…',
-            key: const Key('livePrepareBusyText'),
-            style: TextStyle(fontSize: 13, color: context.tokenTextBody),
-          ),
-        ),
-      ],
-    );
-  }
-
   /// 合规提示：角标由服务端强制叠加，不可关闭、客户端无开关入口。
   Widget _buildComplianceNote() {
     return Container(
@@ -823,20 +656,6 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     for (final script in state.scripts) {
       if (script.id == id) {
         return script;
-      }
-    }
-    return null;
-  }
-
-  /// 当前选中的团购券对象；已被删除等失效情况返回 null（摘要退化为券 id）。
-  Coupon? _selectedCoupon(LiveFormState state) {
-    final id = _couponId;
-    if (id == null) {
-      return null;
-    }
-    for (final coupon in state.coupons) {
-      if (coupon.couponId == id) {
-        return coupon;
       }
     }
     return null;
@@ -1038,12 +857,6 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
                 child: ListView(
                   shrinkWrap: true,
                   children: [
-                    ListTile(
-                      key: const Key('liveScriptClearOption'),
-                      leading: const Icon(Icons.block),
-                      title: const Text('不绑定话术'),
-                      onTap: () => Navigator.of(sheetContext).pop(''),
-                    ),
                     for (final script in state.scripts)
                       _buildScriptSheetItem(sheetContext, script),
                   ],
@@ -1058,7 +871,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       return;
     }
     setState(() {
-      _scriptId = result.isEmpty ? null : result;
+      _scriptId = result;
     });
   }
 
@@ -1085,16 +898,6 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
     );
   }
 
-  /// 选券：push /coupons?select=1，CouponListPage 点选卡片后 pop 返回券 id。
-  Future<void> _pickCoupon() async {
-    final picked = await context.push<String>('/coupons?select=1');
-    if (!mounted || picked == null || picked.isEmpty) {
-      return;
-    }
-    setState(() {
-      _couponId = picked;
-    });
-  }
 }
 
 /// 音色状态徽章（与音色库页一致）：pending 克隆中 / processing 处理中 /

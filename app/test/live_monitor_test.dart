@@ -9,12 +9,14 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/features/assistant_speaker/application/assistant_speaker_controller.dart';
 import 'package:starvoice_app/features/assistant_speaker/application/speech_out_player.dart';
 import 'package:starvoice_app/features/lives/presentation/live_monitor_page.dart';
+import 'package:starvoice_app/features/loop_scripts/presentation/loop_script_library_page.dart';
 import 'package:starvoice_app/providers.dart';
 
 import 'fake_backend.dart';
@@ -71,6 +73,68 @@ Map<String, dynamic> _danmakuJson({
     'senderNickname': '测试观众',
     'sentAt': DateTime.now().toUtc().toIso8601String(),
   };
+}
+
+/// 预置一条循环台本（loop-001），供「更新话术」点选换绑。
+Map<String, dynamic> _loopSeed() {
+  final now = DateTime.now().toUtc().toIso8601String();
+  return <String, dynamic>{
+    'id': 'loop-001',
+    'title': '午市循环',
+    'sourceScriptId': null,
+    'createdAt': now,
+    'updatedAt': now,
+    'items': <Map<String, dynamic>>[
+      <String, dynamic>{
+        'id': 'li-1',
+        'seq': 1,
+        'kind': 'opening',
+        'text': '欢迎新进直播间的朋友',
+        'gapAfterSeconds': 6,
+      },
+      <String, dynamic>{
+        'id': 'li-2',
+        'seq': 2,
+        'kind': 'product',
+        'text': '双人火锅套餐锅底现炒，欢迎到店品尝',
+        'gapAfterSeconds': 8,
+      },
+    ],
+  };
+}
+
+/// 走真实路由渲染工作台：覆盖「更新话术 → 台本库点选 → 换绑」闭环。
+/// 页面内含 3s 轮询与 1s 秒表定时器，故全程用固定 pump，不用 pumpAndSettle。
+Future<void> _pumpMonitorRouter(WidgetTester tester, FakeBackend backend) async {
+  SharedPreferences.setMockInitialValues(const <String, Object>{});
+  tester.view.physicalSize = const Size(1200, 2600);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
+  final router = GoRouter(
+    initialLocation: '/lives/live-001/monitor',
+    routes: <RouteBase>[
+      GoRoute(
+        path: '/lives/:id/monitor',
+        builder: (context, state) =>
+            LiveMonitorPage(liveId: state.pathParameters['id'] ?? ''),
+      ),
+      GoRoute(
+        path: '/loop-scripts',
+        builder: (context, state) => LoopScriptLibraryPage(
+          selectable: state.uri.queryParameters['select'] == '1',
+        ),
+      ),
+    ],
+  );
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [dioProvider.overrideWithValue(buildMockDio(backend))],
+      child: MaterialApp.router(routerConfig: router),
+    ),
+  );
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 50));
+  await tester.pump(const Duration(milliseconds: 50));
 }
 
 /// 渲染现场直播工作台并等待首次 monitor / danmaku 返回。
@@ -398,6 +462,36 @@ void main() {
     expect(find.textContaining('时长余额抵扣 10 分钟'), findsOneWidget);
     expect(backend.balanceMinutes, 110);
     expect(backend.lives.single['status'], 'ended');
+
+    await _unmount(tester);
+  });
+
+  testWidgets('直播中热更话术：点选台本后换绑并在下一轮生效（M4）', (tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
+      ],
+      loopScripts: <Map<String, dynamic>>[_loopSeed()],
+    );
+    await _pumpMonitorRouter(tester, backend);
+
+    // 直播中才有热更入口；点入台本库选择模式
+    expect(find.byKey(const Key('liveMonitorUpdateLoopButton')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('liveMonitorUpdateLoopButton')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.byKey(const Key('loopScriptLibraryPage')), findsOneWidget);
+
+    // 点选整本台本 → 返回工作台 → 服务端换绑 + 提示
+    await tester.tap(find.byKey(const Key('loopScriptCard_loop-001')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(backend.lives.single['loopScriptId'], 'loop-001');
+    expect(find.text('话术已更新，将在下一轮生效'), findsOneWidget);
 
     await _unmount(tester);
   });

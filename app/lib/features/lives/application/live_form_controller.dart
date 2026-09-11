@@ -1,6 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:starvoice_app/core/models/coupon.dart';
 import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/models/script.dart';
 import 'package:starvoice_app/core/models/voice.dart';
@@ -10,7 +9,7 @@ import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/core/storage/voice_cache_store.dart';
 
 /// 开播配置表单页 UI 状态（新建与编辑共用）。
-/// 除可选项下拉数据（音色/话术/团购券）外，编辑模式还缓存初始 Live 用于预填。
+/// 除可选项下拉数据（音色/话术）外，编辑模式还缓存初始 Live 用于预填。
 class LiveFormState {
   const LiveFormState({
     this.initial,
@@ -19,7 +18,6 @@ class LiveFormState {
     this.presetGroups = const <VolcPresetGroup>[],
     this.defaultPresetId = '',
     this.scripts = const <Script>[],
-    this.coupons = const <Coupon>[],
     this.loading = false,
     this.loadError,
     this.saving = false,
@@ -43,9 +41,6 @@ class LiveFormState {
   /// 可选话术（仅 status=ready 的可选，blocked/draft 禁用展示）
   final List<Script> scripts;
 
-  /// 团购券（选择后展示券名；未绑定抖音拉不到时券名降级为券 id）
-  final List<Coupon> coupons;
-
   /// 引用数据 / 初始配置加载中
   final bool loading;
 
@@ -62,7 +57,6 @@ class LiveFormState {
     List<VolcPresetGroup>? presetGroups,
     String? defaultPresetId,
     List<Script>? scripts,
-    List<Coupon>? coupons,
     bool? loading,
     String? loadError,
     bool clearError = false,
@@ -75,7 +69,6 @@ class LiveFormState {
       presetGroups: presetGroups ?? this.presetGroups,
       defaultPresetId: defaultPresetId ?? this.defaultPresetId,
       scripts: scripts ?? this.scripts,
-      coupons: coupons ?? this.coupons,
       loading: loading ?? this.loading,
       loadError: clearError ? null : loadError ?? this.loadError,
       saving: saving ?? this.saving,
@@ -101,7 +94,7 @@ class LiveFormController extends StateNotifier<LiveFormState> {
 
   bool get isEditMode => liveId.isNotEmpty;
 
-  /// 拉取表单数据：音色 / 话术 / 团购券；编辑模式额外拉取初始配置用于预填。
+  /// 拉取表单数据：音色 / 话术；编辑模式额外拉取初始配置用于预填。
   Future<void> load() async {
     state = const LiveFormState(loading: true);
     try {
@@ -109,8 +102,6 @@ class LiveFormController extends StateNotifier<LiveFormState> {
       final scripts = await _apiClient.listScripts();
       // 火山预设音色目录（含分组与默认音色）尽力而为：失败不阻塞表单，音色区只剩克隆组
       final catalog = await _loadPresetsBestEffort();
-      // 团购券需先绑定抖音；未绑定等失败不阻塞表单，券名降级为券 id
-      final coupons = await _loadCouponsBestEffort();
       Live? initial;
       if (isEditMode) {
         initial = await _apiClient.getLive(liveId);
@@ -125,7 +116,6 @@ class LiveFormController extends StateNotifier<LiveFormState> {
         presetGroups: catalog.groups,
         defaultPresetId: catalog.defaultPresetId,
         scripts: scripts,
-        coupons: coupons,
         loading: false,
       );
     } on ApiException catch (error) {
@@ -144,7 +134,6 @@ class LiveFormController extends StateNotifier<LiveFormState> {
     String? voiceId,
     String? scriptId,
     String? loopScriptId,
-    String? couponId,
   }) async {
     state = state.copyWith(saving: true, clearError: true);
     try {
@@ -157,7 +146,6 @@ class LiveFormController extends StateNotifier<LiveFormState> {
           voiceId: voiceId,
           scriptId: scriptId,
           loopScriptId: loopScriptId,
-          couponId: couponId,
         );
       }
       return await _apiClient.createLive(
@@ -167,22 +155,12 @@ class LiveFormController extends StateNotifier<LiveFormState> {
         voiceId: voiceId,
         scriptId: scriptId,
         loopScriptId: loopScriptId,
-        couponId: couponId,
       );
     } on ApiException {
       if (mounted) {
         state = state.copyWith(saving: false);
       }
       rethrow;
-    }
-  }
-
-  /// 团购券列表尽力而为：失败返回空列表。
-  Future<List<Coupon>> _loadCouponsBestEffort() async {
-    try {
-      return await _apiClient.fetchCoupons();
-    } on ApiException {
-      return <Coupon>[];
     }
   }
 

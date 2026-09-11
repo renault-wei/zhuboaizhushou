@@ -13,7 +13,7 @@
 | Q3 | 条数与字数 | 默认生成 6 条；每条 15–80 字；上限 12 条 / 单条 200 字。 |
 | Q4 | 节奏 | 条间间隔默认 6s（可配 0–60）；**每轮休息 20s**（可配 0–300）。 |
 | Q5 | 弹幕与循环 | 弹幕回复只在**空档期**插入，**不打断**循环句；若因循环句较长导致回复被顺延、等待时间过长，**频控从回复实际插入出声的时间点重新起算**。 |
-| Q6 | 直播中改台本 | 允许改（改台本库），但**当前场次生效需手动结束直播后重新开播**；不做热更新。 |
+| Q6 | 直播中改台本 | **支持热更新**（2026-09-11 修订）：工作台「更新话术」入口或 `POST /api/lives/:id/loop-script` 换绑，引擎**每轮开头重读**台本，于**下一轮**生效、不打断当前句；清空/解绑则本场停止循环只回弹幕。 |
 | Q7 | 循环暂停/继续 | 本轮不做；循环停止入口 = 结束直播（真人接管/插话闪避沿用暂缓口径）。 |
 
 > 剩余一处解读备注（若有出入请指出）：Q2 的「随机话术」按「从未绑定台本的场次里，任选该客户一条 ready 话术整段切句循环」实现为**临时测试声源**（不进台本库、随场次结束丢弃）；正式台本绑定后一律用台本。
@@ -90,7 +90,7 @@ loopScriptId: uuid('loop_script_id').references(() => loopScripts.id, { onDelete
 ```
 
 ### 3.2 数据口径
-- **台本是库、场次是引用**：`lives.loopScriptId` 指向台本。循环播报引擎在 `start(live)` 时**读一次台本快照驻内存**，此后台本库改动不影响进行中的场次（Q6）。
+- **台本是库、场次是引用**：`lives.loopScriptId` 指向台本。循环播报引擎**每轮开头重读**当前绑定的台本（首轮用开播快照），直播中改绑/改库于**下一轮**生效、不打断当前句；读失败沿用上一轮快照（Q6 修订 2026-09-11）。
 - **快照在 items，不随 sourceScript 漂移**：从话术生成台本后，话术再改不影响已生成台本。
 - 表结构变更遵守既有口径：本地 `npm run db:push`；需要迁移文件时补 `db:generate` + `db:migrate`。
 - 条数/单条校验：`1–12` 条、单条 trim 后 `1–200` 字；`gapAfterSeconds` 为 `null` 或 `0–60` 整数。
@@ -117,8 +117,8 @@ loopScriptId: uuid('loop_script_id').references(() => loopScripts.id, { onDelete
 
 ### 5.1 归属与状态规则
 - 台本归属当前用户；他人/不存在 → 404。
-- 删除台本：先解除引用（把 `lives.loopScriptId` 引用它的行置 null），再删除台本与条目。**正在 live 的场次引用台本时**：允许删除但该场次内存快照不受影响（继续播到结束）。
-- 编辑台本（标题/条目整体替换）任何状态都允许（不依赖场次状态）；场次侧只在「开播（ready→live）」时读一次快照。
+- 删除台本：先解除引用（把 `lives.loopScriptId` 引用它的行置 null），再删除台本与条目。**正在 live 的场次引用台本时**：删除 → 该场次下一轮重读为空 → 停止循环只回弹幕（已播出的句子不受影响）。
+- 编辑台本（标题/条目整体替换）任何状态都允许（不依赖场次状态）；**已 live 的场次于下一轮开头重读生效**，无需结束重开。
 
 ### 5.2 API
 
@@ -127,7 +127,7 @@ loopScriptId: uuid('loop_script_id').references(() => loopScripts.id, { onDelete
 | GET | `/api/loop-scripts` | 我的台本列表（含条数摘要），updatedAt 倒序 |
 | GET | `/api/loop-scripts/:id` | 台本详情（含 items，seq 升序） |
 | POST | `/api/loop-scripts` | 新建台本：`{ title, items: [{ kind?, text, gapAfterSeconds? }] }`；全部过扫描后事务落库 |
-| PUT | `/api/loop-scripts/:id` | 整体替换标题与 items（seq=下标+1）；引用它的场次待下次开播生效 |
+| PUT | `/api/loop-scripts/:id` | 整体替换标题与 items（seq=下标+1）；已 live 的引用场次**下一轮开头重读生效**（Q6 修订 2026-09-11） |
 | DELETE | `/api/loop-scripts/:id` | 解引用后删除台本与条目 |
 | POST | `/api/loop-scripts/generate` | M2：生成不落库，返回草稿 `{ items }` 供「预览后保存」 |
 
@@ -214,11 +214,16 @@ interface LoopCaster {
 ```
 start(liveId):
   if running(liveId): return            // 幂等
-  items = await loadItems(liveId)       // 启动时读一次快照 → 内存循环（Q6：中途改库不影响本场）
+  items = await loadItems(liveId)       // 首轮读快照；此后每轮开头重读（Q6 修订：改绑下一轮生效）
   if items 为 null 或空:
     工作台状态置「未绑定循环台本」；本场只回弹幕（Q2：正常流程不出现；测试声源另议）
     return                              // 不启动 Runner
   loop:
+    if round > 0:                         // Q6 修订：轮间休息后重读台本
+      await sleep(loopRestSeconds)        // Q4：每轮休息 20s
+      reloaded = await loadItems(liveId)  // 改绑下一轮生效；读失败沿用上一轮快照
+      if reloaded 为空: break             // 运行中解绑/清空 → 停止循环只回弹幕
+      items = reloaded
     round += 1
     for i, item of items:
       if cancelled: break
@@ -227,7 +232,6 @@ start(liveId):
       await speak(item.text)            // 本地端播完 resolve；远程端入队即返回
       if cancelled: break
       await sleep(item.gapAfterSeconds ?? itemGapSeconds)
-    if !cancelled: await sleep(loopRestSeconds)   // Q4：每轮休息 20s
 ```
 
 ### 8.3 与弹幕回复的协调（Q5 落地）
@@ -240,6 +244,7 @@ start(liveId):
 
 ### 8.4 M4 测试清单
 - 顺序调用、gap/rest 节奏（注入假时钟断言 sleep 参数）、空台本不启动、幂等 start/stop、stop 后不再 speak、空档避让轮询、全程注入假 speak/sleep（**测试不出真实声音**）。
+- **热更台本（M4 修订）**：运行中改绑台本 → 下一轮起用新台本；运行中解绑/清空 → 停止循环只回弹幕；重读抛错 → 沿用上一轮快照不中断。
 
 ---
 
@@ -247,6 +252,7 @@ start(liveId):
 
 ### 9.1 服务端
 - `routes/lives.ts`：`POST .../start` 成功返回后 `loopCaster.start(live.id)`；`POST .../end` 先 `loopCaster.stop(live.id)` 再/或并行结束。
+- `POST /api/lives/:id/loop-script`（M4 修订）：直播中热更循环台本。非 live → 409 `LIVE_NOT_LIVE`；台本非本人 → 400 `LOOP_SCRIPT_NOT_OWNED`；空参数 → 400 `LOOP_SCRIPT_REQUIRED`；成功后幂等补 `loopCaster.start(live.id)`。**仅改 `loopScriptId`，不触碰 `scriptId`（话术仍由开播配置绑定）。**
 - 接线测试用 `vi.mock` 隔离 loopCaster/liveSpeaker，避免真实出声。
 - 已知限制登记：进程重启后 live 状态为 live 但 Runner 不自动恢复（内存态，单商家一期接受）。
 
