@@ -649,8 +649,8 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     );
   }
 
-  /// 首次启用助播出声时弹一次后台保活引导：透明玻璃卡片告知「切后台 /
-  /// 锁屏可能被系统冻结导致出声中断」，并给一键去系统设置放行的入口。
+  /// 首次启用助播出声时弹一次后台保活引导：极简系统风弹窗告知「锁屏可能
+  /// 导致出声中断」，并给一键去系统设置放行的入口。
   /// 仅 Android 有效（电池优化设置是 Android 概念）；仅引导一次、不阻断。
   Future<void> _maybeShowKeepAliveGuide() async {
     if (!mounted || defaultTargetPlatform != TargetPlatform.android) {

@@ -1,4 +1,4 @@
-/// 助播保活引导弹窗（M9 手机线）Widget 测试：透明玻璃卡片渲染、
+/// 助播保活引导弹窗（M9 手机线 / 极简系统风）Widget 测试：标题 + 一句说明渲染、
 /// 电量优化状态随入参变化、两个动作按钮的关闭与回调行为。
 library;
 
@@ -37,14 +37,12 @@ Future<void> _openGuide(
 }
 
 void main() {
-  testWidgets('渲染透明玻璃卡片：标题 + 三条要点 + 两个动作按钮', (tester) async {
+  testWidgets('渲染系统风弹窗：标题 + 一句说明 + 两个动作按钮', (tester) async {
     await _openGuide(tester, exempt: false);
 
     expect(find.byKey(const Key('keepAliveGuideDialog')), findsOneWidget);
-    expect(find.text('让 AI 助播在后台继续说'), findsOneWidget);
-    expect(find.text('切后台不断声'), findsOneWidget);
-    expect(find.text('持续拉队列'), findsOneWidget);
-    expect(find.text('随时可关'), findsOneWidget);
+    expect(find.text('提示'), findsOneWidget);
+    expect(find.text('直播中锁屏会让 AI 声音中断，需放行后台运行。'), findsOneWidget);
     expect(find.byKey(const Key('keepAliveGuideLater')), findsOneWidget);
     expect(find.byKey(const Key('keepAliveGuideGo')), findsOneWidget);
   });
