@@ -19,7 +19,10 @@ import {
 import { createDouyinHttpSigner, createDouyinLiveAdapter } from '../collectors/douyinLiveAdapter';
 import { eventToIngestInput } from '../collectors/events';
 import { createLinkResolver, type ResolveShareResult } from '../collectors/linkResolver';
-import { createHttpShortLinkExpander } from '../collectors/shortLinkExpander';
+import {
+  createDouyinTtwidFetcher,
+  createHttpShortLinkExpander,
+} from '../collectors/shortLinkExpander';
 import type { CollectorAdapter, DanmakuPlatform, UnifiedDanmakuEvent } from '../collectors/types';
 import { env } from '../config/env';
 import { danmakuGateway, type DanmakuIngestInput } from './danmaku';
@@ -106,8 +109,10 @@ export interface LiveCollectorDeps {
   adapters?: readonly CollectorAdapter[];
   /** 事件落库出口；缺省走既有弹幕网关 */
   ingest?: (userId: string, liveId: string, input: DanmakuIngestInput) => Promise<unknown>;
-  /** 链接解析；缺省用 linkResolver 单例 */
+  /** 链接解析；缺省用带短链展开器的解析器 */
   resolveShareText?: (text: string) => Promise<ResolveShareResult>;
+  /** 按房间号现取 ttwid（完整链接 / 纯房间号场景）；缺省真网络，测试可注入 */
+  fetchTtwid?: (roomRef: string) => Promise<string | null>;
   now?: () => Date;
   warn?: (message: string) => void;
 }
@@ -143,6 +148,7 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
     deps.ingest ?? ((userId: string, liveId: string, input: DanmakuIngestInput) => danmakuGateway.ingest(userId, liveId, input));
   const resolveShareText =
     deps.resolveShareText ?? ((text: string) => defaultLinkResolver.resolveShareText(text));
+  const fetchTtwid = deps.fetchTtwid ?? createDouyinTtwidFetcher();
   const warn = deps.warn ?? ((message: string) => console.warn(`[liveCollector] ${message}`));
   const now = deps.now ?? (() => new Date());
 
@@ -202,8 +208,8 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
   ): Promise<{ platform: DanmakuPlatform; roomRef: string; connectHeaders?: Record<string, string> }> {
     const directRoomRef = input.roomRef?.trim();
     if (directRoomRef) {
-      // 直接给房间号时没有跳转链，取不到 ttwid —— 抖音 wss 会握手失败，先在这里说清楚
-      return { platform: 'douyin', roomRef: directRoomRef };
+      // 直接给房间号：没有跳转链，ttwid 得按房间号现取（见下）
+      return withTtwid('douyin', directRoomRef, undefined);
     }
     const shareText = input.shareText?.trim();
     if (!shareText) {
@@ -213,12 +219,28 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
     if (!resolved.ok) {
       throw new CollectorSourceError('RESOLVE_FAILED', `直播间解析失败（${resolved.code}）：${resolved.reason}`);
     }
-    const cookie = resolved.room.connectHints?.cookie;
-    return {
-      platform: resolved.room.platform,
-      roomRef: resolved.room.roomRef,
-      ...(cookie ? { connectHeaders: { Cookie: cookie } } : {}),
-    };
+    return withTtwid(resolved.room.platform, resolved.room.roomRef, resolved.room.connectHints?.cookie);
+  }
+
+  /**
+   * 保证抖音场景一定拿到 ttwid。
+   * - 短链路径：展开时已顺带取到，直接用；
+   * - 完整链接 / 纯房间号路径：解析是静态的、没发过请求，**必须现取一次** ——
+   *   否则 wss 握手会被回 HTTP 200（2026-09-16 对照实验实测）。
+   */
+  async function withTtwid(
+    platform: DanmakuPlatform,
+    roomRef: string,
+    existingCookie: string | undefined,
+  ): Promise<{ platform: DanmakuPlatform; roomRef: string; connectHeaders?: Record<string, string> }> {
+    if (existingCookie) {
+      return { platform, roomRef, connectHeaders: { Cookie: existingCookie } };
+    }
+    if (platform !== 'douyin') {
+      return { platform, roomRef };
+    }
+    const fetched = await fetchTtwid(roomRef);
+    return fetched ? { platform, roomRef, connectHeaders: { Cookie: fetched } } : { platform, roomRef };
   }
 
   return {

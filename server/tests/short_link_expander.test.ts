@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { createLinkResolver } from '../src/collectors/linkResolver';
 import {
+  createDouyinTtwidFetcher,
   createHttpShortLinkExpander,
   ShortLinkExpandError,
 } from '../src/collectors/shortLinkExpander';
@@ -150,6 +151,23 @@ it('端到端解析：分享短链的真实落点是 webcast.amemv.com/reflow/<�
   expect(resolved.room.roomRef).toBe('7686117195721837352');
 });
 
+
+it('按房间号现取 ttwid：完整链接 / 纯房间号路径也能拿到连接 Cookie', async () => {
+  const fetchImpl = vi.fn(async (url: string) => {
+    expect(String(url)).toBe('https://live.douyin.com/369324308707');
+    return fakeResponse({ setCookies: [`ttwid=${TTWID}; Domain=.douyin.com; Path=/`], body: '<html></html>' });
+  }) as unknown as typeof fetch;
+  const fetchTtwid = createDouyinTtwidFetcher({ fetchImpl, retries: 0 });
+  await expect(fetchTtwid('369324308707')).resolves.toBe(`ttwid=${TTWID}`);
+});
+
+it('现取 ttwid：页面没下发 Set-Cookie 时返回 null（不阻断，交由 wss 报错）', async () => {
+  const fetchImpl = vi.fn(async () =>
+    fakeResponse({ body: '<html></html>' }),
+  ) as unknown as typeof fetch;
+  const fetchTtwid = createDouyinTtwidFetcher({ fetchImpl, retries: 0 });
+  await expect(fetchTtwid('369324308707')).resolves.toBeNull();
+});
 it('不带展开器时短链返回 SHORT_LINK_ONLY —— 锁住「为什么必须注入展开器」', async () => {
   const resolver = createLinkResolver();
   const resolved = await resolver.resolveShareText('看看直播 ' + SHORT_URL);

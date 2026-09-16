@@ -2,7 +2,10 @@ import 'dotenv/config';
 import { createCollectorManager } from '../src/collectors/collectorManager';
 import { createDouyinHttpSigner, createDouyinLiveAdapter } from '../src/collectors/douyinLiveAdapter';
 import { createLinkResolver } from '../src/collectors/linkResolver';
-import { createHttpShortLinkExpander } from '../src/collectors/shortLinkExpander';
+import {
+  createDouyinTtwidFetcher,
+  createHttpShortLinkExpander,
+} from '../src/collectors/shortLinkExpander';
 
 // 真实弹幕采集探针（R5 验收用）：贴一段抖音分享文本 → 解析房间 → 签名 → 真连 wss → 打印收到的弹幕。
 // 仅手动运行（npm run collect:smoke -- "<分享文本或链接>" [监听秒数]）：
@@ -51,7 +54,13 @@ async function main(): Promise<void> {
     },
   });
 
-  const cookie = resolved.room.connectHints?.cookie;
+  // 短链路径解析时已顺带取到 ttwid；完整链接 / 纯房间号路径是静态解析、没发过请求，
+  // 必须按房间号现取一次 —— 否则 wss 握手会被回 HTTP 200（2026-09-16 对照实验实测）。
+  const cookie =
+    resolved.room.connectHints?.cookie ??
+    (resolved.room.platform === 'douyin'
+      ? await createDouyinTtwidFetcher()(resolved.room.roomRef)
+      : undefined);
   console.log(`③.5 连接 Cookie：${cookie ? cookie.slice(0, 40) + '…' : '(未取到 —— 抖音 wss 握手会失败)'}`);
 
   const started = await manager.startWatching({
