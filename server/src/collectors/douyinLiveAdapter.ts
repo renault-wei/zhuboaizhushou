@@ -229,7 +229,8 @@ export function createDouyinLiveAdapter(deps: DouyinLiveAdapterDeps = {}): Colle
           .then((wssUrl) => {
             sessionSeq += 1;
             const seqOfSession = sessionSeq;
-            const headers = { 'User-Agent': DEFAULT_UA, ...deps.headers };
+            // 目标级头（如 ttwid Cookie）覆盖适配器默认头：ttwid 每房一份，只能随 target 进来
+            const headers = { 'User-Agent': DEFAULT_UA, ...deps.headers, ...target.headers };
             const socket = deps.connect ? deps.connect(wssUrl, headers) : openWsSocket(wssUrl, headers);
             let closed = false;
             let heartbeatTimer: ReturnType<typeof setInterval> | null = null;

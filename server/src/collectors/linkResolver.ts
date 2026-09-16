@@ -1,4 +1,5 @@
 import type { DanmakuPlatform } from './types';
+import type { ShortLinkExpansion } from './shortLinkExpander';
 
 // D1 链接解析（DANMAKU-COLLECTOR-PLAN D1.1~D1.3 静态部分）：
 // 直播间分享文本 / 口令 → 抽取 URL → 平台路由 → 解析直播间稳定身份（roomRef）。
@@ -19,6 +20,11 @@ export interface ResolvedRoom {
   roomRef: string;
   /** 命中的原始链接（短链场景为待展开链接） */
   matchedUrl: string;
+  /**
+   * 解析过程中顺带取到的连接提示。目前只有抖音用得上：wss 握手**必须**带 `ttwid` Cookie，
+   * 而它只在短链跳转链上下发一次 —— 所以「解析房间号」与「取 ttwid」本来就是同一次网络请求。
+   */
+  connectHints?: { cookie?: string };
 }
 
 export type ResolveShareResult =
@@ -26,8 +32,12 @@ export type ResolveShareResult =
   | { ok: false; code: ResolveFailureCode; reason: string; platform?: DanmakuPlatform; shortUrl?: string };
 
 export interface LinkResolverDeps {
-  /** 短链展开（唯一网络点）：本期默认不注入；注入后由调用方负责超时与失败语义 */
-  expandShortLink?(url: string): Promise<string>;
+  /**
+   * 短链展开 —— **整条链路唯一的网络解析点**。可返回纯地址，或返回带连接 Cookie 的展开结果
+   * （抖音要的 ttwid 就在这条跳转链上，展开与取 Cookie 是同一次请求）。
+   * 默认不注入；注入后由调用方负责超时与失败语义。
+   */
+  expandShortLink?(url: string): Promise<string | ShortLinkExpansion>;
 }
 
 export interface LinkResolver {
@@ -47,6 +57,9 @@ const HOST_RULES: Array<{ host: string; rule: HostRule }> = [
   { host: 'live.douyin.com', rule: { platform: 'douyin', short: false } },
   { host: 'www.douyin.com', rule: { platform: 'douyin', short: false } },
   { host: 'v.douyin.com', rule: { platform: 'douyin', short: true } },
+  // 分享短链的**真实落点**：v.douyin.com 会跳到 webcast.amemv.com/douyin/webcast/reflow/<房间号>
+  // （2026-09-16 真链接实测；此前只认 live.douyin.com，导致真分享链接解析失败）
+  { host: 'webcast.amemv.com', rule: { platform: 'douyin', short: false } },
   { host: 'live.bilibili.com', rule: { platform: 'bilibili', short: false } },
   { host: 'b23.tv', rule: { platform: 'bilibili', short: true } },
   { host: 'live.kuaishou.com', rule: { platform: 'kuaishou', short: false } },
@@ -130,6 +143,11 @@ function staticRoomRefOf(url: string, host: string): string | null {
     const digits = parsed.pathname.split('/').find((segment) => /^[0-9]+$/.test(segment));
     return digits ?? null;
   }
+  if (hostKey === 'webcast.amemv.com') {
+    // 分享短链落点形态：/douyin/webcast/reflow/<房间号>
+    const reflow = /\/reflow\/([0-9]{5,})/.exec(parsed.pathname);
+    return reflow?.[1] ?? null;
+  }
   if (hostKey === 'live.kuaishou.com') {
     // 快手 live 主页形态（/u/{userId}）无数字房间号，spike 后再定（D1.4）
     return null;
@@ -151,7 +169,7 @@ const MAX_EXPAND_DEPTH = 3;
 export function createLinkResolver(deps: LinkResolverDeps = {}): LinkResolver {
   const { expandShortLink } = deps;
 
-  async function resolve(text: string, depth: number): Promise<ResolveShareResult> {
+  async function resolve(text: string, depth: number, cookie?: string): Promise<ResolveShareResult> {
     const candidates = extractCandidateUrls(text);
     if (candidates.length === 0) {
       return failure('NO_URL_FOUND', '分享文本中未找到直播间链接');
@@ -164,7 +182,15 @@ export function createLinkResolver(deps: LinkResolverDeps = {}): LinkResolver {
       }
       const roomRef = staticRoomRefOf(candidate.url, candidate.host);
       if (roomRef) {
-        return { ok: true, room: { platform: candidate.platform, roomRef, matchedUrl: candidate.url } };
+        return {
+          ok: true,
+          room: {
+            platform: candidate.platform,
+            roomRef,
+            matchedUrl: candidate.url,
+            ...(cookie ? { connectHints: { cookie } } : {}),
+          },
+        };
       }
     }
 
@@ -187,15 +213,18 @@ export function createLinkResolver(deps: LinkResolverDeps = {}): LinkResolver {
         });
       }
       try {
-        const expanded = await expandShortLink(candidate.url);
-        if (!expanded || expanded.trim().length === 0) {
+        const raw = await expandShortLink(candidate.url);
+        const expansion: ShortLinkExpansion = typeof raw === 'string' ? { url: raw } : raw;
+        const expandedUrl = expansion.url?.trim() ?? '';
+        if (expandedUrl.length === 0) {
           return failure('EXPAND_FAILED', '短链展开返回空内容', {
             platform: candidate.platform,
             shortUrl: candidate.url,
           });
         }
         attemptedShortUrl = candidate.url;
-        const followed = await resolve(expanded, depth + 1);
+        // 把展开时取到的 Cookie 一路带下去（最终会挂到 ResolvedRoom.connectHints）
+        const followed = await resolve(expandedUrl, depth + 1, expansion.cookie ?? cookie);
         if (followed.ok || followed.code !== 'NO_URL_FOUND') {
           return followed;
         }

@@ -17,7 +17,25 @@ export class ShortLinkExpandError extends Error {
   }
 }
 
-export type ShortLinkExpander = (url: string) => Promise<string>;
+/** 展开结果：最终地址 + 顺带取到的连接 Cookie（抖音要的 ttwid 就在这条跳转链上） */
+export interface ShortLinkExpansion {
+  url: string;
+  /** 形如 `ttwid=…`；未取到则无此字段 */
+  cookie?: string;
+}
+
+export type ShortLinkExpander = (url: string) => Promise<ShortLinkExpansion>;
+
+/** 从 Set-Cookie 里挑出 ttwid（值含 % 编码与竖线，不能按分号粗暴切完就丢） */
+function ttwidOf(setCookies: readonly string[]): string | null {
+  for (const one of setCookies) {
+    const matched = /(?:^|[;,\s])ttwid=([^;]+)/.exec(one);
+    if (matched?.[1]) {
+      return `ttwid=${matched[1]}`;
+    }
+  }
+  return null;
+}
 
 export interface ShortLinkExpanderDeps {
   /** 可注入：单测用替身，全离线 */
@@ -55,7 +73,7 @@ export function createHttpShortLinkExpander(deps: ShortLinkExpanderDeps = {}): S
   const userAgent = deps.userAgent ?? DEFAULT_USER_AGENT;
   const maxBodyBytes = deps.maxBodyBytes ?? 200_000;
 
-  return async (url: string): Promise<string> => {
+  return async (url: string): Promise<ShortLinkExpansion> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -66,20 +84,27 @@ export function createHttpShortLinkExpander(deps: ShortLinkExpanderDeps = {}): S
         signal: controller.signal,
       });
 
+      // 顺带取出连接 Cookie：抖音 wss 握手必须要 ttwid，而它只在这条跳转链上发一次
+      const setCookies =
+        typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
+      const cookie = ttwidOf(setCookies);
+      const withCookie = (finalUrl: string): ShortLinkExpansion =>
+        cookie ? { url: finalUrl, cookie } : { url: finalUrl };
+
       // 常规情形：302 跟随后 response.url 已是最终地址
       if (response.url && response.url !== url) {
-        return response.url;
+        return withCookie(response.url);
       }
       const location = response.headers.get('location');
       if (location) {
-        return new URL(location, url).toString();
+        return withCookie(new URL(location, url).toString());
       }
 
       // 兜底：正文里捞房间号，合成一个静态可解的直播页地址交给 linkResolver 二次解析
       const html = (await response.text()).slice(0, maxBodyBytes);
       const roomRef = roomRefFromHtml(html);
       if (roomRef) {
-        return `https://live.douyin.com/${roomRef}`;
+        return withCookie(`https://live.douyin.com/${roomRef}`);
       }
       throw new ShortLinkExpandError(
         '短链未发生跳转，且页面里找不到直播间号（可能已失效，或该链接不是直播分享）',

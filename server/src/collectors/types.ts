@@ -48,6 +48,12 @@ export interface WatchTarget {
   roomRef: string;
   /** 归属场次（可空：落库接线层回填前允许先监听） */
   liveId: string | null;
+  /**
+   * 该目标专属的连接头（与适配器默认头合并，同名以本处为准）。
+   * 用途：抖音 wss **必须**带 `Cookie: ttwid=…`，而 ttwid 来自分享短链跳转、每个直播间一份，
+   * 不能固定在适配器上。2026-09-16 真链接实测：不带 ttwid 时握手被回 HTTP 200 而非 101。
+   */
+  headers?: Record<string, string>;
 }
 
 /** 会话连接状态：manager 据此驱动心跳与断线重连 */

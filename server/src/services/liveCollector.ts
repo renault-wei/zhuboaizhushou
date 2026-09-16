@@ -54,6 +54,11 @@ export interface LiveCollectorBinding {
   /** manager 的会话幂等键（= source:platform:roomRef） */
   watchKey: string;
   startedAt: string;
+  /**
+   * 该场连接 wss 时必需的头（目前是抖音的 `Cookie: ttwid=…`）。
+   * 来自短链解析那一次请求的 Set-Cookie —— 每个直播间一份，所以必须随绑定存下来。
+   */
+  connectHeaders?: Record<string, string>;
 }
 
 export interface LiveCollectorStatus {
@@ -184,6 +189,7 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
       platform: binding.platform,
       roomRef: binding.roomRef,
       liveId: binding.liveId,
+      ...(binding.connectHeaders ? { headers: binding.connectHeaders } : {}),
     };
     const result = await manager.startWatching(target);
     if (!result.ok) {
@@ -191,9 +197,12 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
     }
   }
 
-  async function resolveRoom(input: StartCollectorInput): Promise<{ platform: DanmakuPlatform; roomRef: string }> {
+  async function resolveRoom(
+    input: StartCollectorInput,
+  ): Promise<{ platform: DanmakuPlatform; roomRef: string; connectHeaders?: Record<string, string> }> {
     const directRoomRef = input.roomRef?.trim();
     if (directRoomRef) {
+      // 直接给房间号时没有跳转链，取不到 ttwid —— 抖音 wss 会握手失败，先在这里说清楚
       return { platform: 'douyin', roomRef: directRoomRef };
     }
     const shareText = input.shareText?.trim();
@@ -204,7 +213,12 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
     if (!resolved.ok) {
       throw new CollectorSourceError('RESOLVE_FAILED', `直播间解析失败（${resolved.code}）：${resolved.reason}`);
     }
-    return { platform: resolved.room.platform, roomRef: resolved.room.roomRef };
+    const cookie = resolved.room.connectHints?.cookie;
+    return {
+      platform: resolved.room.platform,
+      roomRef: resolved.room.roomRef,
+      ...(cookie ? { connectHeaders: { Cookie: cookie } } : {}),
+    };
   }
 
   return {
@@ -231,6 +245,7 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
         roomRef: room.roomRef,
         watchKey,
         startedAt: now().toISOString(),
+        ...(room.connectHeaders ? { connectHeaders: room.connectHeaders } : {}),
       };
       bindings.set(input.liveId, binding);
       return binding;
