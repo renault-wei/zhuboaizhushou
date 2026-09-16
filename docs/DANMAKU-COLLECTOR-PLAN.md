@@ -1,5 +1,18 @@
-# 多平台弹幕采集器内嵌方案与任务清单（D 系列 · 已结项 2026-09-08）
+# 多平台弹幕采集器内嵌方案与任务清单（D 系列 · 2026-09-16 重启）
 
+> 状态：**已重启（2026-09-16）**。重启理由 = 当初关闭的硬阻塞已消除：用户提供了 `apikey-dy-*` 格式的
+> SignWss Web API Key，探针实测返回 `Code:0` 与带签名的 wss 地址。
+> （`docs/COMPETITOR-XCAI.md` §6.4 当时的结论正是「需另购 SignWss 可用的 Web API Key，到手后重跑 `sign:smoke`」。）
+>
+> **交付边界 = 自用自测**（自有直播间 / 低流量 / 观众身份）。对外产品分发是另一个决策
+> （AIOBS 合伙人档以上授权 + 平台风控连带），**不在本批次**。
+>
+> 重启批次票表见 **§11**；执行中把状态回写到该表。
+>
+> ---
+>
+> 以下 **2026-09-08 结项时的原文保留不改写**（历史记录）：
+>
 > 状态：**已结项 / 关闭**。拍板记录 = 2026-09-08 用户：「弹幕抓取需求先关闭，其余收尾 / 结项」。
 > 历史轨迹：v0.2 审核通过（2026-09-08）→ v0.3 按 D0.1 审计收口（引入合规拍板门 D2.5）→
 > D1 + D2.1/D2.2 + D2.3 + D5.2 离线可自测代码与 AIOBS 签名调查全部归档（提交 `797cae9`，douyin 适配器单测 35 例全绿）。
@@ -213,5 +226,60 @@ interface UnifiedDanmakuEvent {
 | wss / protobuf 协议资料时效 | D0 审计保留参考仓库 commit hash 与日期；自研层避免贴死单一版本 |
 | 测试依赖真实网络 | 全部 mock / fixture；真机复测仅在自用直播间低流量执行 |
 | 报文异常 / 内容超长 | 归一化层兜底，沿用既有 CONTENT_INVALID 等错误模型，不冒 500 |
+
+## 11. 重启批次票表（2026-09-16 · 自用自测口径）
+
+> 编号**沿用** §5 既有 D 编号，**不新起一套**——本仓库已有六套并行编号（G / T / M / 阶段 A-D / D 系列 / LOWCOST-T），
+> 再加一套只会让"说 D 的时候指哪个"更难分辨（见 `CONTEXT.md` 任务编号节）。
+> 每批独立提交、守 ≤500 行；服务端 typecheck / lint / 全量测试全绿才算完成。
+
+### 11.1 既有票的现状盘点（2026-09-16 实测）
+
+| 编号 | 任务 | 状态 | 证据 / 缺口 |
+|---|---|---|---|
+| D0.1 | 开源逐仓许可审计 | ✅ | `docs/COLLECTOR-OPENSOURCE-AUDIT.md` |
+| D0.2 | 收录落地 | ✅ | 本期无可收录对象，`vendor/third_party/` 留空 |
+| D0.3 | 合规口径修订 | ⬜ | §7 的修订稿在结项时被口径回归覆盖，需重做 → **R0** |
+| D1.1 | LinkResolver | ✅ | `server/src/collectors/linkResolver.ts` |
+| D1.2 | 抖音 resolve | 🟡 | 短链展开已有；live 页取 room 信息未接 |
+| D1.3 | B站 resolve | ⬜ | 非一期（自用自测只走抖音） |
+| D1.4 | 快手 spike | ⬜ | P1，不做 |
+| D2.1 | 统一事件模型 | ✅ | `collectors/types.ts` / `events.ts` |
+| D2.2 | CollectorManager | ✅ | `collectors/collectorManager.ts`：注册 / 每房一 worker / 心跳 / 有界重连 / 并发上限 / 优雅退出 |
+| D2.3 | 抖音 adapter（含签名器） | ✅ | `collectors/douyinLiveAdapter.ts`；`createDouyinHttpSigner` 与 SignWss 文档**逐字段同构** |
+| D2.4 | B站 adapter | ⬜ | 非一期 |
+| D2.5 | 合规门解锁 | ✅ | 2026-09-08 已解锁；2026-09-16 Key 实测 `Code:0` |
+| D3.1 | **落库与幂等** | ⬜ | `live_danmaku` 现仅有 `live_id` / `sent_at` 两个索引，**无 platform / room_ref / msg_key / msg_type，无 (platform,msg_key) 唯一索引**；`collector_watches` 表不存在 |
+| D3.2 | **采集控制 API** | ⬜ | `server/src/collectors/*` 是**零生产调用点的库**——`app.ts` / 15 个路由 / `liveSession.ts` 全不引用，仅测试驱动 |
+| D4.1 | 本地演示联调台 | ⬜ | App 无绑定直播间入口 |
+| D4.2 | 边界用例 | ⬜ | 含"自己账号弹幕不回"防自嗨 |
+| D5.1 | **事件接线到既有网关** | ⬜ | 缺口。注意 `interactionEngine` **无需改动**：`src/index.ts:12` 已在 `subscribe()`，事件一旦进 `danmakuGateway.ingest()` 就自动驱动 AI 链路 |
+| D5.2 | 真机复测 | ⛔ | 需真实房间 ID + 正在开播 |
+| D6.1 | 全量测试 | 🟡 | 本机已复现 **37 文件 / 384 用例：383 passed / 1 skipped / 0 failed**（前置 = `server/.env`；1 skip 为 ffmpeg smoke） |
+| D6.2 | 文档同步 | ⬜ | |
+| D6.3 | 归档 | ⬜ | |
+
+### 11.2 重启批次（按序执行）
+
+| ID | 任务 | 改动面 | 前置阻塞 | 验收口径 | 状态 |
+|---|---|---|---|---|---|
+| **R0** | 改范围与口径（= D0.3 重做） | `AGENTS.md`、本文件头部与 §5 结项注、`docs/DANMAKU-CAPTURE-PLAN.md`、`docs/PLATFORM-NEUTRAL-VOICE.md`、`docs/PROGRESS.md`、新增 `docs/adr/0003-*.md` | 无 | 全文口径一致，无"不自研平台采集"残留表述；ADR 写明"当初为什么关、现在为什么开" | ⬜ |
+| **R1** | 落库与幂等（= D3.1） | `server/src/db/schema.ts`（`liveDanmaku` 增 4 列 + `uniqueIndex('live_danmaku_platform_msg_key_unique')`）、新增 `server/drizzle/*_v11_danmaku_collector.sql`、`server/src/services/danmaku.ts`（写入新列 + 幂等冲突处理） | 无 | 迁移本机可执行；重复 msgKey 幂等不炸；**既有测试弹幕注入路径行为不变** | ⬜ |
+| **R2** | 采集控制 API（= D3.2 · 核心） | 新增 `server/src/services/liveCollector.ts`（单例 Manager + 适配器注册 + `liveId→userId` 映射 + start/stop/status）、新增 `server/src/routes/danmakuSource.ts`（`POST/DELETE/GET /api/lives/:id/danmaku-source`）、`server/src/config/env.ts`（新增 `douyinSign` 段）、`server/src/app.ts` 注册、`server/src/index.ts` 关停 `dispose()` | R1 | 替身 adapter 单测：start 幂等 / stop 幂等 / 状态查询 / 非本人 404 / 非直播中 409 / 解析失败 400；**未配 Key 时优雅降级**为"仅测试注入" | ⬜ |
+| **R3** | 事件接线（= D5.1） | `server/src/services/liveCollector.ts` 的 `onEvent` → `danmakuGateway.ingest(userId, liveId, {content, senderNickname})` | R2 | 注入 mock 弹幕 → 落 `live_danmaku` → `interactionEngine` 回复 → 出声队列收到 wav | ⬜ |
+| **R4** | 开播联动与边界（= D4.1 / D4.2） | `server/src/services/liveSession.ts`、`server/src/routes/lives.ts`（`/start` 自动起、`/end` 自动停）；边界：自己账号弹幕不回、停播自动停 | R3 | 开播即采集、结束即停；自嗨边界用例通过 | ⬜ |
+| **R5** | 真连验收（= D5.2 · 自用自测） | 无代码；取证归档 | R4 ＋ **真实房间 ID / 正在开播** | `sign:smoke` → 真连 wss → 收一条真 chat 落库 → AI 回复出声；留 wav + 日志 + DB 行取证 | ⛔ |
+| **R6** | 收口（= D6.2 / D6.3） | 全量测试、文档同步、`CONTEXT.md` 术语补充、归档 | R5 | 服务端全绿；文档无矛盾 | ⬜ |
+
+### 11.3 设计要点与已知坑
+
+- **`userId` 不在采集事件里。** `UnifiedDanmakuEvent` 只带 `liveId`（`types.ts` 注释明说"接线层把 watch 绑到 lives 后回填"），
+  而 `danmakuGateway.ingest(userId, liveId, …)` 需要 `userId` → **接线层必须在 start 时记下 `liveId → userId`**。
+- **`watchKeyOf` 不含 liveId**（键 = `source:platform:roomRef`）。同一房间被两个账号监听会撞键；开播互斥（`LIVE_IN_PROGRESS`）
+  挡住了同账号并发，但跨账号同房需在 R2 明确取舍。
+- **`collector_watches` 表建议不建。** §6 草案里有它，但 `collectorManager.status()` 已提供内存态；
+  自用自测口径下应先砍（AGENTS：能砍就砍）。R1 只做 `live_danmaku` 扩列。
+- **R2 大概率超过 500 行上限**（service + routes + env + 装配四块），需按 AGENTS 第 8 条拆成 R2a（service + env）/ R2b（routes + 装配）。
+- **云端迁移**：R1 的迁移在本机执行后，云端 ECS `113.44.226.189` 也要执行（沿用既有部署流程）。
 
 
