@@ -97,7 +97,7 @@ zhuboaizhushou/
 - 路由 `server/src/routes/`（15 个）：`admin`、`agreements`、`atmosphereSettings`、`atmosphereTemplates`、`auth`、`billing`、`billingAdmin`、`douyin`、`health`、`lives`、`loopScripts`、`loopScriptSamples`、`scripts`、`speechOut`、`voices`
 - 服务 `server/src/services/`（35 个），关键几个：
   - `liveSpeaker.ts` —— 出声总控（合成 → 播放 → 缓存，缓存旁路属阶段 A1）
-  - `volcTTS.ts` —— 火山 TTS 合成（当前整段提交，A5 需内部分段）
+  - `volcTTS.ts` —— 火山 TTS 合成（A5-1 已并入「内部分段合成 + ffmpeg 拼装」，用户话术不删字、不截断）
   - `liveVoice.ts` —— 音色 / 语速载入
   - `loopCaster.ts` —— 循环台本轮播调度
   - `loopScript.ts` / `loopScriptSamples.ts` —— 台本模型与三场景骨架
@@ -184,7 +184,7 @@ zhuboaizhushou/
 | A2 | 循环首轮预热 | `services/loopCaster.ts`（start 前 fire-and-forget 预热，取消即中止，失败逐条 warn） | 预热后整轮全命中，start 不被阻塞 | 待开工（依赖 A1） |
 | A3 | 用量计量接线 | `services/liveSpeaker.ts`（仅 miss 且合成成功才 `recordTtsUsage`） | `usage_logs` 仅含真实新合成；命中不写流水、不扣额度 | 待开工（依赖 A1） |
 | A4 | 直播中欠费闸门 | `routes/lives.ts`、`services/liveBilling.ts`、`services/quota.ts`、`services/loopCaster.ts`、App 工作台提示 | 余额与免费分钟同时耗尽时**只停口播**、画面继续；工作台提示续费；续费后自动恢复 | 待开工（口径已定） |
-| A5 | 话术字数放开与节奏 | `routes/loopScripts.ts:94`（取消 200 字硬拒绝）、`services/loopScript.ts:11`（AI 侧改宽松上限）、`services/volcTTS.ts`（超长文本内部分段 + 拼接） | 用户话术不删字不截断、可保存任意长度；整段出声无句中停顿；条间 2s / 轮间 6s 维持 | **进行中**（见第八节） |
+| A5 | 话术字数放开与节奏 | `routes/loopScripts.ts:94`（取消 200 字硬拒绝）、`services/loopScript.ts:11`（AI 侧改宽松上限）、`services/volcTTS.ts`（超长文本内部分段 + 拼接） | 用户话术不删字不截断、可保存任意长度；整段出声无句中停顿；条间 2s / 轮间 6s 维持 | **A5-1 已完成**（分段合成 + 拼装，本批并入）；**A5-2 待开工**（收起 200 字硬拒绝、手填上限放到 2000 字） |
 
 ### 阶段 B —— 需外部资源 / 会真花钱
 
@@ -210,7 +210,7 @@ D1 货盘商品池最小版 ｜ D2 卡密归因到人 / 转副播账户 ｜ D3 �
 
 ### 待复核（不阻塞开工）
 
-- 火山 TTS 单次请求文本长度上限的实测值；若小于用户可能输入的长度，A5 必须补「合成层内部分段 + 拼接」。
+- 火山 TTS 单次请求文本长度上限的**云端实测值**尚未复测；当前实现按保守的 200 字/请求分段（`VOLC_TTS_MAX_CHARS_PER_REQUEST`），实测上限更高时只是少切几刀，不影响正确性。
 
 ## 八、遗留阻塞与在飞半成品
 
@@ -228,13 +228,10 @@ D1 货盘商品池最小版 ｜ D2 卡密归因到人 / 转副播账户 ｜ D3 �
 | 静默看门狗 | 方案待拍板 |
 | `loopScripts.test.ts` | 存在改动前即失败的用例，非本批引入 |
 
-### 8.2 在飞半成品（**本批未并入，切勿与交接提交混提**）
+### 8.2 在飞半成品
 
-- `server/src/services/volcTTS.ts` —— A5 的「分段合成 + 拼装」改动，**当前是未提交状态且未验证**。
-- `a5-tests.tmp.patch`（仓库外，位于 `D:\codex_project\2026-09-06\give-me-skill\`）—— 面向 `server/tests/volc_tts.test.ts` 的测试补丁，尚未应用。
-- A5-2（手填话术 200 → 2000 字放开）尚未开工。
-
-> 接手同学注意：交接时工作区仅应保留本批文档改动；若看到 `volcTTS.ts` 被修改，那是上一位同学的在飞工作，需单独评审后再决定是否提交。
+- A5-2（收起 200 字硬拒绝、手填话术上限放到 2000 字）尚未开工；本批并入的是 A5-1（合成层分段 + 拼装）。
+- 仓库外的中间产物 `a5-tests.tmp.patch`、`a5-snippet.tmp.txt`（位于 `D:\codex_project\2026-09-06\give-me-skill` 根目录）内容已并入 `server/tests/volc_tts.test.ts`，可直接删除，仓库内不保留。
 
 ## 九、验收命令与验证结果
 
@@ -245,13 +242,13 @@ D1 货盘商品池最小版 ｜ D2 卡密归因到人 / 转副播账户 ｜ D3 �
 | App 静态检查 | `flutter analyze`（工作目录 `app/`） | **No issues found!** |
 | 服务端类型检查 | `npm run typecheck`（工作目录 `server/`） | 通过 |
 | 服务端 Lint | `npm run lint`（工作目录 `server/`） | 通过 |
-| 服务端用例 | `npx vitest run --no-file-parallelism`（工作目录 `server/`） | 33 passed \| 4 skipped（37 文件）；**220 passed \| 160 skipped（380 用例）** |
+| 服务端用例 | `npx vitest run`（工作目录 `server/`，本机 PostgreSQL 已启动） | **37 passed（37 文件）**；**384 passed（384 用例），0 fail / 0 skip** |
 
 **读法说明**
 
 - `skipped` 全部是数据库相关用例：本机未起 PostgreSQL 时会被静默跳过，**skip 不等于通过**。本地复验前请先启动 PG（见 §四）。
 - 工具版本：Flutter 3.47.2（`E:\dev\flutter`）。
-- 历史口径差异：`docs/PROGRESS.md` 头部与 §6 中的用例数（216/372、379）为本批之前的数据，**以本表 220/380 为交接基线**。
+- 历史口径差异：`docs/PROGRESS.md` 头部与 §6 中的用例数（220/380、216/372 等）为本批之前的数据，**以本表 37 文件 / 384 用例为交接基线**。
 
 ## 十、敏感信息说明
 
