@@ -18,7 +18,8 @@ import {
 } from '../collectors/collectorManager';
 import { createDouyinHttpSigner, createDouyinLiveAdapter } from '../collectors/douyinLiveAdapter';
 import { eventToIngestInput } from '../collectors/events';
-import { linkResolver, type ResolveShareResult } from '../collectors/linkResolver';
+import { createLinkResolver, type ResolveShareResult } from '../collectors/linkResolver';
+import { createHttpShortLinkExpander } from '../collectors/shortLinkExpander';
 import type { CollectorAdapter, DanmakuPlatform, UnifiedDanmakuEvent } from '../collectors/types';
 import { env } from '../config/env';
 import { danmakuGateway, type DanmakuIngestInput } from './danmaku';
@@ -106,6 +107,15 @@ export interface LiveCollectorDeps {
   warn?: (message: string) => void;
 }
 
+/**
+ * 默认解析器**带短链展开器**：抖音 App 分享出来的就是 `v.douyin.com` 短链，
+ * 而直播间身份只在跳转后的 `live.douyin.com/<房间号>` 里 —— 不带展开器时「只给链接」走不通
+ * （linkResolver 会返回 SHORT_LINK_ONLY）。
+ */
+const defaultLinkResolver = createLinkResolver({
+  expandShortLink: createHttpShortLinkExpander(),
+});
+
 /** 按环境构造适配器：没有签名 Key 就一个都不注册 → 采集通道优雅降级 */
 function defaultAdapters(): CollectorAdapter[] {
   const { apiKey, endpointUrl, userUniqueId } = env.douyinSign;
@@ -126,7 +136,8 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
   const adapters = deps.adapters ?? defaultAdapters();
   const ingest =
     deps.ingest ?? ((userId: string, liveId: string, input: DanmakuIngestInput) => danmakuGateway.ingest(userId, liveId, input));
-  const resolveShareText = deps.resolveShareText ?? ((text: string) => linkResolver.resolveShareText(text));
+  const resolveShareText =
+    deps.resolveShareText ?? ((text: string) => defaultLinkResolver.resolveShareText(text));
   const warn = deps.warn ?? ((message: string) => console.warn(`[liveCollector] ${message}`));
   const now = deps.now ?? (() => new Date());
 

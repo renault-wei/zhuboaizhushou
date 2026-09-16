@@ -241,7 +241,7 @@ interface UnifiedDanmakuEvent {
 | D0.2 | 收录落地 | ✅ | 本期无可收录对象，`vendor/third_party/` 留空 |
 | D0.3 | 合规口径修订 | ✅ | 已由 **R0** 重做：`AGENTS.md` 范围行 + 本文件头部 + `docs/adr/0003-danmaku-collector-reopened.md` |
 | D1.1 | LinkResolver | ✅ | `server/src/collectors/linkResolver.ts` |
-| D1.2 | 抖音 resolve | 🟡 | 短链展开已有；live 页取 room 信息未接 |
+| D1.2 | 抖音 resolve | ✅ | 短链展开器已接（`collectors/shortLinkExpander.ts`：302 跟随 / Location 兜底 / 正文捞 `web_rid`），注入 `linkResolver` 后可直接解 `v.douyin.com` 分享文本 |
 | D1.3 | B站 resolve | ⬜ | 非一期（自用自测只走抖音） |
 | D1.4 | 快手 spike | ⬜ | P1，不做 |
 | D2.1 | 统一事件模型 | ✅ | `collectors/types.ts` / `events.ts` |
