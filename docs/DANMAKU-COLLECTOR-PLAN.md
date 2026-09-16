@@ -282,4 +282,30 @@ interface UnifiedDanmakuEvent {
 - **R2 大概率超过 500 行上限**（service + routes + env + 装配四块），需按 AGENTS 第 8 条拆成 R2a（service + env）/ R2b（routes + 装配）。
 - **云端迁移**：R1 的迁移在本机执行后，云端 ECS `113.44.226.189` 也要执行（沿用既有部署流程）。
 
+## 12. 云端部署与真机出声批次（2026-09-16 · R7~R11）
+
+> 起因：真机联调（USB 装包 + adb 驱动）暴露两个问题 ——
+> ① **采集卡状态不轮询**：绑定成功后卡片一直停在「连接中…」，必须退出重进才更新（真机实测踩到）；
+> ② **AI 语音从电脑发出而不是手机**：本地 `.env` 是 `LIVE_SPEAKER_OUTPUT=pc` + `LIVE_TTS_PROVIDER=local`，
+> 即「在本机用 Windows SAPI 合成并就地播放」，根本不会进手机轮询的那个远程队列。
+> **云端生产口径本来就是 `phone` + `volc`**，所以「上云」与「修出声」是同一张票的两面。
+
+| ID | 任务 | 改动面 | 前置阻塞 | 验收口径 | 状态 |
+|---|---|---|---|---|---|
+| **R7** | 采集卡状态纳入轮询 | `app/lib/features/lives/presentation/live_monitor_page.dart`：`_monitorTimer` 回调里一并调 `_loadDanmakuSource()` | 无 | 绑定后**无需退出重进**，卡片自行从「连接中…」变为「监听中 · 已收到 N 条」 | ✅ 已完成 |
+| **R8** | 服务端上云（代码 + 迁移 + 凭据） | 云端执行 `server/drizzle/20260916_v11_danmaku_collector.sql`；`git archive HEAD server` 整包对齐 `/opt/starvoice/`；云端 `.env` 补 `DOUYIN_SIGN_ENDPOINT_URL` / `API_KEY` / `USER_UNIQUE_ID`；`npm run build` → `systemctl restart starvoice.service` | SSH 免密（**已通**） | 公网 `/health` 200；云端 `npm run sign:smoke -- <房间号>` 返回签名 wss；云端采集真连收到弹幕 | ✅ 已完成（`/health` 200、v11 迁移 6→10 列、签名 285ms、真连 `connected`） |
+| **R9** | 手机出声口径归位 | 云端 `.env` 已是 `LIVE_SPEAKER_OUTPUT=phone` + `LIVE_TTS_PROVIDER=volc`；**本地**若要手机出声也须改这两项并配真实 `VOLC_TTS_API_KEY`（当前是占位值） | R8 | AI 回复经火山合成 → 入远程队列 → 手机助播机轮询播放；**声音从手机出、不从电脑出** | 🟡 云端口径已就位（`volc` + `phone`），待云版 APK 真机复验 |
+| **R10** | 防自嗨 | 给 `UnifiedDanmakuEvent` 补 `senderId`（`douyinWire.ts` 的 `DouyinUserLite.id` 已解出），再与自身账号比对 | 无 | 自己账号发的弹幕不触发回复 | ⬜ |
+| **R11** | 云版 APK 与真机复验 | `flutter build apk --dart-define=API_BASE_URL=http://113.44.226.189:3000` + `adb install -r` | R8 | 手机连云端跑通「开播 → 贴链接采集 → 真弹幕 → AI 回复 → **手机出声**」 | ⬜ |
+
+### 12.1 真机联调方法论（本次首次跑通，值得沿用）
+
+`adb screencap` 截图 → **我读图判断** → `adb shell input tap/text` 操作 → 再截图 + **服务端日志交叉核对**。
+
+两个坑：
+1. **Flutter 默认不向 `uiautomator` 暴露控件** —— `uiautomator dump` 只有 6 个空容器节点，所以必须**看图点坐标**，不能靠语义树。
+2. **`keyevent 4` 在键盘已收起时会弹掉整个页面**（本次把工作台整个弹回首页）。别把它当收键盘用。
+
+> 这套方法证明：「我不能操控手机」是个错误判断。真正做不到的只有一件 —— 我无法成为用户抖音直播间里的观众去发那条弹幕。
+
 

@@ -118,7 +118,12 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
       _loadMonitor();
       _loadDanmaku();
       _loadDanmakuSource();
-      _monitorTimer = Timer.periodic(_monitorInterval, (_) => _loadMonitor());
+      _monitorTimer = Timer.periodic(_monitorInterval, (_) {
+        _loadMonitor();
+        // R7：采集状态也纳入轮询。此前只在进入页面 / 手动刷新 / 绑定成功三处拉取，
+        // 导致真机上绑定成功后卡片一直停在「连接中…」，必须退出重进才更新（实测踩到）。
+        _loadDanmakuSource();
+      });
       _danmakuTimer = Timer.periodic(_danmakuInterval, (_) => _loadDanmaku());
       // 已播时长每秒递增：monitor 未刷新时也能平滑走动
       _ticker = Timer.periodic(const Duration(seconds: 1), (_) {

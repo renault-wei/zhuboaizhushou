@@ -24,7 +24,10 @@ async function main(): Promise<void> {
   if (!roomId) {
     throw new Error('缺少房间号参数：npm run sign:smoke -- <抖音 web 房间号>');
   }
-  const userUniqueId = process.argv[3] ?? undefined;
+  // 优先命令行第三参，其次读 .env（与 collect:smoke 口径一致）。
+  // UserUniqueId 是 SignWss 的必填项：只传房间号时若不回落到 .env，会得到
+  // 「UserUniqueId is required.」——那是配置读取问题，不是 Key 无效，极易误判。
+  const userUniqueId = process.argv[3] ?? process.env.DOUYIN_SIGN_USER_UNIQUE_ID ?? undefined;
   const signer = createDouyinHttpSigner({ endpointUrl, apiKey, userUniqueId });
   const startedAt = Date.now();
   const wssUrl = await signer.signWssUrl(roomId);
