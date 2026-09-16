@@ -50,21 +50,25 @@ export const danmakuSourceRoutes: FastifyPluginAsync = async (app) => {
     if (!live) {
       return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
     }
-    if (live.status !== 'live') {
+    // 已结束 / 失败的场次不再接受登记；草稿与就绪态允许「先把直播间配好」（R4 开播联动的前置）
+    if (live.status === 'ended' || live.status === 'failed') {
       return reply.code(409).send({
-        error: 'LIVE_NOT_LIVE',
-        message: `只有直播中的场次才能起弹幕采集（当前：${live.status}）`,
+        error: 'LIVE_NOT_COLLECTABLE',
+        message: `已结束 / 失败的场次不能再登记弹幕采集（当前：${live.status}）`,
       });
     }
     const body = readSourceBody(request.body);
     try {
-      const binding = await liveCollector.start({
+      const input = {
         userId: request.user.userId,
         liveId: id,
         ...(body.roomRef ? { roomRef: body.roomRef } : {}),
         ...(body.shareText ? { shareText: body.shareText } : {}),
-      });
-      return reply.code(201).send({ source: binding });
+      };
+      // 直播中 → 登记并立刻起采集；未开播 → 只登记，由 /start 联动拉起（见 routes/lives.ts）
+      const running = live.status === 'live';
+      const binding = running ? await liveCollector.start(input) : await liveCollector.bind(input);
+      return reply.code(201).send({ source: binding, running });
     } catch (err) {
       if (err instanceof CollectorSourceError) {
         return reply.code(sourceStatusOf(err.code)).send({ error: err.code, message: err.message });

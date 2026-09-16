@@ -75,8 +75,19 @@ export interface StartCollectorInput {
 export interface LiveCollector {
   /** 采集通道是否已启用（未配 Key → false，路由层据此给出明确提示而不是报错） */
   enabled(): boolean;
+  /**
+   * 只登记采集源（解析 + 记绑定），**不起会话**。
+   * 用途 = 「开播前先把直播间配好」：场次还没直播时无法起会话（入库会被 LIVE_NOT_LIVE 拒），
+   * 但可以先把房间号记下来，等 /start 时由 resume 拉起。
+   */
+  bind(input: StartCollectorInput): Promise<LiveCollectorBinding>;
+  /** 绑定并起会话（= bind + resume；幂等） */
   start(input: StartCollectorInput): Promise<LiveCollectorBinding>;
-  /** 停止并解绑；返回是否存在过绑定（幂等） */
+  /** 为已有绑定起会话（幂等）；无绑定返回 null，供 /start 开播联动 */
+  resume(liveId: string): Promise<LiveCollectorBinding | null>;
+  /** 只停会话、**保留绑定**（供 /end；下次开播 resume 即可复用同一房间号） */
+  suspend(liveId: string): Promise<boolean>;
+  /** 停会话并清绑定（幂等），供 DELETE */
   stop(liveId: string): Promise<boolean>;
   statusOf(liveId: string): LiveCollectorStatus;
   /** 停止全部会话并清理（服务关停 / 测试收尾） */
@@ -117,6 +128,7 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
     deps.ingest ?? ((userId: string, liveId: string, input: DanmakuIngestInput) => danmakuGateway.ingest(userId, liveId, input));
   const resolveShareText = deps.resolveShareText ?? ((text: string) => linkResolver.resolveShareText(text));
   const warn = deps.warn ?? ((message: string) => console.warn(`[liveCollector] ${message}`));
+  const now = deps.now ?? (() => new Date());
 
   /** liveId → 绑定：采集事件只带 liveId，靠它反查 userId */
   const bindings = new Map<string, LiveCollectorBinding>();
@@ -154,6 +166,20 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
     return adapters.length > 0;
   }
 
+  /** 为一个绑定起（或复用）采集会话：manager 自带幂等，同 watchKey 不会重复起 worker */
+  async function startWatch(binding: LiveCollectorBinding): Promise<void> {
+    const target = {
+      source: binding.platform,
+      platform: binding.platform,
+      roomRef: binding.roomRef,
+      liveId: binding.liveId,
+    };
+    const result = await manager.startWatching(target);
+    if (!result.ok) {
+      throw new CollectorSourceError('START_FAILED', `启动采集失败（${result.code}）：${result.reason}`);
+    }
+  }
+
   async function resolveRoom(input: StartCollectorInput): Promise<{ platform: DanmakuPlatform; roomRef: string }> {
     const directRoomRef = input.roomRef?.trim();
     if (directRoomRef) {
@@ -173,7 +199,7 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
   return {
     enabled,
 
-    async start(input: StartCollectorInput): Promise<LiveCollectorBinding> {
+    async bind(input: StartCollectorInput): Promise<LiveCollectorBinding> {
       if (!enabled()) {
         throw new CollectorSourceError(
           'SOURCE_DISABLED',
@@ -181,27 +207,46 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
         );
       }
       const room = await resolveRoom(input);
-      const target = {
+      const watchKey = watchKeyOf({
         source: room.platform,
         platform: room.platform,
         roomRef: room.roomRef,
         liveId: input.liveId,
-      };
-      const watchKey = watchKeyOf(target);
-      const result = await manager.startWatching(target);
-      if (!result.ok) {
-        throw new CollectorSourceError('START_FAILED', `启动采集失败（${result.code}）：${result.reason}`);
-      }
+      });
       const binding: LiveCollectorBinding = {
         liveId: input.liveId,
         userId: input.userId,
         platform: room.platform,
         roomRef: room.roomRef,
         watchKey,
-        startedAt: result.summary.startedAt,
+        startedAt: now().toISOString(),
       };
       bindings.set(input.liveId, binding);
       return binding;
+    },
+
+    async start(input: StartCollectorInput): Promise<LiveCollectorBinding> {
+      const binding = await this.bind(input);
+      await startWatch(binding);
+      return binding;
+    },
+
+    async resume(liveId: string): Promise<LiveCollectorBinding | null> {
+      const binding = bindings.get(liveId);
+      if (!binding) {
+        return null;
+      }
+      await startWatch(binding);
+      return binding;
+    },
+
+    async suspend(liveId: string): Promise<boolean> {
+      const binding = bindings.get(liveId);
+      if (!binding) {
+        return false;
+      }
+      await manager.stopWatching(binding.watchKey);
+      return true;
     },
 
     async stop(liveId: string): Promise<boolean> {

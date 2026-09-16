@@ -20,6 +20,7 @@ import { endLive, getLiveMonitor, listDanmaku, startLive } from '../services/liv
 import { settleLiveSession } from '../services/liveBilling';
 import { danmakuGateway, DanmakuError } from '../services/danmaku';
 import { loopCaster } from '../services/loopCaster';
+import { liveCollector } from '../services/liveCollector';
 import { atmosphereScheduler } from '../services/atmosphereScheduler';
 import { captureLiveSpeech, clampLiveSpeechRate, forgetLiveSpeech } from '../services/liveVoice';
 
@@ -497,6 +498,13 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       loopCaster.start(live.id);
       // M10：开播即读一次氛围语快照（空档插播取词用；无氛围语 → 空快照，不影响循环）
       atmosphereScheduler.start(live.id);
+      // R4：开播联动拉起本场已登记的弹幕采集（未登记 → null，静默跳过）。
+      // 采集起不来绝不能阻断开播（可能是第三方签名服务不可用），失败只告警。
+      try {
+        await liveCollector.resume(live.id);
+      } catch (err) {
+        request.log.warn({ err }, '开播联动启动弹幕采集失败（不阻断开播）');
+      }
       return { live };
     } catch (err) {
       if (err instanceof LiveError) {
@@ -516,6 +524,13 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       }
       // M5：结束直播 = 循环播报唯一停止入口（正在播的当前句播完即止，不打断真人接管）
       loopCaster.stop(live.id);
+      // R4：结束直播停掉本场采集会话（保留绑定，下次开播 resume 复用同一房间号）。
+      // 不停会泄漏 wss 连接与重连定时器；停止失败同样只告警，不阻断结束。
+      try {
+        await liveCollector.suspend(live.id);
+      } catch (err) {
+        request.log.warn({ err }, '结束直播停止弹幕采集失败（不阻断结束）');
+      }
       // 音色快照随场次结束丢弃，避免内存滞留（下一场开播重新抓）
       forgetLiveSpeech(live.id);
       // M10：结束直播同时清掉氛围语快照与频控记账

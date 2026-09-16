@@ -14,6 +14,10 @@ import type {
   UnifiedDanmakuEvent,
   WatchTarget,
 } from '../src/collectors/types';
+import {
+  createInteractionEngine,
+  type InteractionReply,
+} from '../src/services/interactionEngine';
 
 const app: FastifyInstance = buildApp();
 
@@ -37,6 +41,18 @@ afterAll(async () => {
 
 const PHONE_SRC = '13920000313';
 const PHONE_SRC_OTHER = '13920000314';
+const PHONE_R3 = '13920000315';
+
+/** 轮询等待（引擎回复是异步的：入库 → 广播 → 生成） */
+async function waitFor(check: () => boolean, timeoutMs = 3000): Promise<void> {
+  const startedAt = Date.now();
+  while (!check()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error('等待超时：条件在超时前未成立');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 function bearer(token: string): { authorization: string } {
   return { authorization: `Bearer ${token}` };
@@ -245,19 +261,40 @@ dbIt('归属隔离：对他人场次起采集返回 404', async () => {
   expect(res.statusCode).toBe(404);
 });
 
-dbIt('非直播中场次起采集返回 409 LIVE_NOT_LIVE', async () => {
+dbIt('草稿态只登记不起会话（running=false，绑定被调用）；已结束场次拒绝登记（409）', async () => {
   const token = await registerAndGetToken(PHONE_SRC);
   await resetUserData(PHONE_SRC);
   const liveId = await createLiveDraft(token);
 
-  const res = await app.inject({
+  // R4 起：草稿 / 就绪态允许「先把直播间配好」，但**不起会话** —— 开播时由 /start 联动拉起
+  const bindSpy = vi.spyOn(liveCollector, 'bind').mockResolvedValue({
+    liveId,
+    userId: await userIdOf(PHONE_SRC),
+    platform: 'douyin',
+    roomRef: '7123456789012345678',
+    watchKey: 'douyin:douyin:7123456789012345678',
+    startedAt: new Date().toISOString(),
+  });
+  const draft = await app.inject({
     method: 'POST',
     url: `/api/lives/${liveId}/danmaku-source`,
     headers: bearer(token),
     payload: { roomRef: '7123456789012345678' },
   });
-  expect(res.statusCode).toBe(409);
-  expect(res.json()).toMatchObject({ error: 'LIVE_NOT_LIVE' });
+  expect(draft.statusCode).toBe(201);
+  expect(draft.json()).toMatchObject({ running: false });
+  expect(bindSpy).toHaveBeenCalledTimes(1);
+
+  vi.restoreAllMocks();
+  await setLiveStatus(liveId, 'ended');
+  const ended = await app.inject({
+    method: 'POST',
+    url: `/api/lives/${liveId}/danmaku-source`,
+    headers: bearer(token),
+    payload: { roomRef: '7123456789012345678' },
+  });
+  expect(ended.statusCode).toBe(409);
+  expect(ended.json()).toMatchObject({ error: 'LIVE_NOT_COLLECTABLE' });
 });
 
 dbIt('直播中起采集返回 201，未启用通道时返回 503（打桩，不触网）', async () => {
@@ -302,3 +339,138 @@ dbIt('直播中起采集返回 201，未启用通道时返回 503（打桩，不
   expect(status.statusCode).toBe(200);
   expect(status.json()).toMatchObject({ enabled: true });
 });
+// ---------- R3 端到端：采集事件 → 真实落库 → 互动引擎回复 ----------
+
+dbIt('采集事件走真实弹幕网关：落 live_danmaku（含幂等键）并触发引擎回复', async () => {
+  const token = await registerAndGetToken(PHONE_R3);
+  await resetUserData(PHONE_R3);
+  const liveId = await createLiveDraft(token);
+  await setLiveStatus(liveId, 'live');
+  const userId = await userIdOf(PHONE_R3);
+
+  const fake = createFakeAdapter();
+  // 【关键】不注入 ingest → 走真实 danmakuGateway，这条链路是真的；只有平台侧是替身
+  const collector = createLiveCollector({ adapters: [fake.adapter] });
+
+  const replies: InteractionReply[] = [];
+  const engine = createInteractionEngine({
+    globalIntervalMs: 0,
+    senderIntervalMs: 0,
+    generateReply: vi.fn(async () => '咱家套餐在直播间团购链接里，欢迎下单～'),
+    onReply: (reply) => {
+      replies.push(reply);
+    },
+  });
+  const unsubscribe = engine.subscribe();
+  try {
+    await collector.start({ userId, liveId, roomRef: '7123456789012345678' });
+    fake.emit(chatEvent(liveId, 'douyin:r3-1', '老板这个双人餐多少钱？'));
+
+    await waitFor(() => replies.length >= 1);
+    expect(replies).toHaveLength(1);
+    expect(replies[0]?.source).toBe('generated');
+    expect(replies[0]?.liveId).toBe(liveId);
+
+    // 取证：采集事件确实落了库，且采集通道字段（幂等键）一并写入
+    const rows = await pool.query(
+      'SELECT platform, room_ref, msg_key, msg_type, content FROM live_danmaku WHERE live_id = $1',
+      [liveId],
+    );
+    expect(rows.rowCount).toBe(1);
+    expect(rows.rows[0]).toMatchObject({
+      platform: 'douyin',
+      room_ref: '7123456789012345678',
+      msg_key: 'douyin:r3-1',
+      msg_type: 'chat',
+      content: '老板这个双人餐多少钱？',
+    });
+  } finally {
+    unsubscribe();
+    await collector.dispose();
+  }
+});
+
+// ---------- R4 生命周期：配置与会话分离 + 开播 / 结束联动 ----------
+
+it('生命周期：bind 不起会话、resume 起、suspend 只停会话保留绑定、stop 清绑定', async () => {
+  const fake = createFakeAdapter();
+  let calls = 0;
+  const collector = createLiveCollector({
+    adapters: [fake.adapter],
+    ingest: async () => {
+      calls += 1;
+      return {};
+    },
+  });
+  try {
+    const binding = await collector.bind({
+      userId: 'u-9',
+      liveId: 'live-9',
+      roomRef: '7123456789012345678',
+    });
+    expect(binding.watchKey).toBe('douyin:douyin:7123456789012345678');
+    expect(fake.opened()).toBe(0);
+    fake.emit(chatEvent('live-9', 'douyin:x1'));
+    expect(calls).toBe(0);
+
+    expect(await collector.resume('live-9')).not.toBeNull();
+    expect(fake.opened()).toBe(1);
+    fake.emit(chatEvent('live-9', 'douyin:x2'));
+    expect(calls).toBe(1);
+
+    // 结束直播只停会话，绑定保留（下次开播复用同一房间号）
+    expect(await collector.suspend('live-9')).toBe(true);
+    expect(fake.closed()).toBe(true);
+    expect(collector.statusOf('live-9').binding).not.toBeNull();
+
+    // 显式解绑才清掉
+    expect(await collector.stop('live-9')).toBe(true);
+    expect(collector.statusOf('live-9').binding).toBeNull();
+  } finally {
+    await collector.dispose();
+  }
+});
+
+it('resume 对未登记的场次返回 null（开播联动静默跳过，不报错）', async () => {
+  const collector = createLiveCollector({ adapters: [createFakeAdapter().adapter] });
+  expect(await collector.resume('never-bound')).toBeNull();
+  await collector.dispose();
+});
+
+dbIt('开播联动：/start 调 resume 拉起采集；采集起不来也绝不让开播失败', async () => {
+  const token = await registerAndGetToken(PHONE_SRC);
+  await resetUserData(PHONE_SRC);
+  const liveId = await createLiveDraft(token);
+  await setLiveStatus(liveId, 'ready');
+
+  // 让采集服务抛错，验证「不阻断开播」这条硬保证
+  const resumeSpy = vi
+    .spyOn(liveCollector, 'resume')
+    .mockRejectedValue(new CollectorSourceError('START_FAILED', '第三方签名服务不可用'));
+
+  const res = await app.inject({
+    method: 'POST',
+    url: `/api/lives/${liveId}/start`,
+    headers: bearer(token),
+  });
+  expect(res.statusCode).toBe(200);
+  expect(resumeSpy).toHaveBeenCalledWith(liveId);
+});
+
+dbIt('结束联动：/end 调 suspend 停掉本场采集', async () => {
+  const token = await registerAndGetToken(PHONE_SRC);
+  await resetUserData(PHONE_SRC);
+  const liveId = await createLiveDraft(token);
+  await setLiveStatus(liveId, 'live');
+
+  const suspendSpy = vi.spyOn(liveCollector, 'suspend').mockResolvedValue(true);
+  const res = await app.inject({
+    method: 'POST',
+    url: `/api/lives/${liveId}/end`,
+    headers: bearer(token),
+  });
+  expect(res.statusCode).toBe(200);
+  expect(suspendSpy).toHaveBeenCalledWith(liveId);
+});
+
+
