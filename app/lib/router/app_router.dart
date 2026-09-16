@@ -4,6 +4,7 @@ import 'package:starvoice_app/features/auth/application/auth_controller.dart';
 import 'package:starvoice_app/features/auth/presentation/login_page.dart';
 import 'package:starvoice_app/features/agreement/presentation/voice_agreement_page.dart';
 import 'package:starvoice_app/features/coupons/presentation/coupon_list_page.dart';
+import 'package:starvoice_app/features/danmaku_watch/presentation/danmaku_watch_page.dart';
 import 'package:starvoice_app/core/navigation/app_shell.dart';
 import 'package:starvoice_app/features/douyin/presentation/douyin_bind_page.dart';
 import 'package:starvoice_app/features/home/presentation/home_page.dart';
@@ -146,6 +147,11 @@ GoRouter createAppRouter(AuthController authController) {
             LiveMonitorPage(liveId: state.pathParameters['id'] ?? ''),
       ),
       GoRoute(path: '/wallet', builder: (context, state) => const WalletPage()),
+      // R16b：独立弹幕监控（不绑场次、不落库）—— 贴链接即可看弹幕流水
+      GoRoute(
+        path: '/danmaku-watch',
+        builder: (context, state) => const DanmakuWatchPage(),
+      ),
       // 「我的」页帮助与协议静态子页：隐私政策 / 服务协议 / AI 说明 / 客服 / 关于
       GoRoute(
         path: '/profile/privacy',

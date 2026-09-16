@@ -238,6 +238,16 @@ class FakeBackend implements HttpClientAdapter {
   /// 采集通道是否启用（模拟服务端未配签名 Key 的部署 → false）。
   bool danmakuSourceEnabled = true;
 
+  // ---------- R16b 独立弹幕监控（内存态） ----------
+  /// 当前在跑的独立监控。
+  final List<Map<String, dynamic>> danmakuWatches = <Map<String, dynamic>>[];
+  /// watchId → 事件缓冲（测试可直接往里塞事件来驱动轮询）。
+  final Map<String, List<Map<String, dynamic>>> danmakuWatchEvents =
+      <String, List<Map<String, dynamic>>>{};
+  /// 是否启用采集通道（模拟未配 Key 的部署）。
+  bool danmakuWatchEnabled = true;
+  int _watchSeq = 0;
+
   /// 模拟已收到的事件数。
   int danmakuSourceEventCount = 0;
 
@@ -460,6 +470,21 @@ class FakeBackend implements HttpClientAdapter {
     }
     if (voiceItem != null && options.method == 'DELETE') {
       return _deleteVoice(voiceItem.group(1)!);
+    }
+    // R16b 独立弹幕监控（不绑场次、不落库）：注意放在 /api/lives 兜底之前
+    if (options.method == 'POST' && path.endsWith('/api/danmaku-watch')) {
+      return _startDanmakuWatch(options);
+    }
+    if (options.method == 'GET' && path.endsWith('/api/danmaku-watch')) {
+      return _jsonResponse({'watches': danmakuWatches});
+    }
+    final watchEvents = RegExp(r'^/api/danmaku-watch/([^/]+)/events$').firstMatch(path);
+    if (watchEvents != null && options.method == 'GET') {
+      return _danmakuWatchEventsOf(watchEvents.group(1)!, options);
+    }
+    final watchItem = RegExp(r'^/api/danmaku-watch/([^/]+)$').firstMatch(path);
+    if (watchItem != null && options.method == 'DELETE') {
+      return _stopDanmakuWatch(watchItem.group(1)!);
     }
     if (options.method == 'GET' && path.endsWith('/api/out/speech/next')) {
       return _nextSpeechOut();
@@ -1233,6 +1258,68 @@ class FakeBackend implements HttpClientAdapter {
     return _jsonResponse({'danmaku': record}, 201);
   }
 
+
+  /// 起独立监控（R16b）：POST /api/danmaku-watch
+  ResponseBody _startDanmakuWatch(RequestOptions options) {
+    if (!danmakuWatchEnabled) {
+      return _jsonResponse({
+        'error': 'SOURCE_DISABLED',
+        'message': '未配置 DOUYIN_SIGN_API_KEY，采集通道未启用',
+      }, 503);
+    }
+    final body = _readBody(options);
+    final shareText = body['shareText']?.toString().trim() ?? '';
+    final matched = RegExp(r'(\d{5,})').firstMatch(shareText);
+    final roomRef = matched?.group(1) ?? '7686079594273327906';
+    _watchSeq += 1;
+    final watchId = 'mon-${_watchSeq.toString().padLeft(3, '0')}';
+    final watch = <String, dynamic>{
+      'watchId': watchId,
+      'userId': 'user-fake',
+      'platform': 'douyin',
+      'roomRef': roomRef,
+      'watchKey': 'douyin:douyin:$roomRef',
+      'startedAt': DateTime.now().toUtc().toIso8601String(),
+    };
+    danmakuWatches.add(watch);
+    danmakuWatchEvents[watchId] = <Map<String, dynamic>>[];
+    return _jsonResponse({'watch': watch}, 201);
+  }
+
+  /// 读弹幕流水（R16b）：支持 ?since=N 增量，非负整数校验与真服务端同口径
+  ResponseBody _danmakuWatchEventsOf(String watchId, RequestOptions options) {
+    final buffer = danmakuWatchEvents[watchId];
+    if (buffer == null) {
+      return _jsonResponse({'error': 'WATCH_NOT_FOUND', 'message': '监控不存在'}, 404);
+    }
+    final rawSince = options.queryParameters['since']?.toString();
+    int? since;
+    if (rawSince != null) {
+      since = int.tryParse(rawSince);
+      if (since == null || since < 0) {
+        return _jsonResponse({
+          'error': 'SINCE_INVALID',
+          'message': 'since 必须为非负整数',
+        }, 400);
+      }
+    }
+    final events = since == null
+        ? buffer
+        : buffer
+              .where((item) => ((item['seq'] as int?) ?? 0) > (since ?? 0))
+              .toList();
+    final lastSeq = events.isEmpty
+        ? (since ?? 0)
+        : ((events.last['seq'] as int?) ?? 0);
+    return _jsonResponse({'events': events, 'lastSeq': lastSeq});
+  }
+
+  /// 停独立监控（R16b）：幂等
+  ResponseBody _stopDanmakuWatch(String watchId) {
+    final existed = danmakuWatchEvents.remove(watchId) != null;
+    danmakuWatches.removeWhere((item) => item['watchId'] == watchId);
+    return _jsonResponse({'stopped': existed});
+  }
 
   /// 弹幕采集源状态（R2）：GET /api/lives/:id/danmaku-source
   ResponseBody _getDanmakuSource(String liveId) {

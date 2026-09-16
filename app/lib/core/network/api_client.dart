@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:starvoice_app/core/models/coupon.dart';
 import 'package:starvoice_app/core/models/app_config.dart';
 import 'package:starvoice_app/core/models/danmaku_source.dart';
+import 'package:starvoice_app/core/models/danmaku_watch.dart';
 import 'package:starvoice_app/core/models/douyin_bind_status.dart';
 import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/models/user_profile.dart';
@@ -912,6 +913,70 @@ class ApiClient {
       return DanmakuSourceStatus.fromJson(
         response.data ?? <String, dynamic>{},
       );
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+
+  // ---------- R16：独立弹幕监控（不绑场次、不落库） ----------
+
+  /// 起一个独立弹幕监控：贴分享链接即可，**不需要先开播**。
+  /// 未配签名 Key 的部署服务端返回 503 SOURCE_DISABLED；链接解析失败返回 400。
+  Future<DanmakuWatch> startDanmakuWatch({required String shareText}) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/danmaku-watch',
+        data: <String, dynamic>{'shareText': shareText},
+      );
+      final raw = response.data?['watch'];
+      return DanmakuWatch.fromJson(
+        raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{},
+      );
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 列出我当前的独立监控。
+  Future<List<DanmakuWatch>> listDanmakuWatches() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/api/danmaku-watch');
+      final raw = response.data?['watches'];
+      return raw is List
+          ? raw
+                .whereType<Map>()
+                .map((item) => DanmakuWatch.fromJson(Map<String, dynamic>.from(item)))
+                .toList()
+          : <DanmakuWatch>[];
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 读弹幕流水。传 [since] 只回 seq 更大的（增量轮询用）。
+  Future<DanmakuWatchEvents> fetchDanmakuWatchEvents(
+    String watchId, {
+    int? since,
+  }) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/api/danmaku-watch/$watchId/events',
+        queryParameters: since == null ? null : <String, dynamic>{'since': since},
+      );
+      return DanmakuWatchEvents.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 停止并移除一个独立监控（幂等）。
+  Future<bool> stopDanmakuWatch(String watchId) async {
+    try {
+      final response = await _dio.delete<Map<String, dynamic>>(
+        '/api/danmaku-watch/$watchId',
+      );
+      return response.data?['stopped'] == true;
     } on DioException catch (error) {
       throw _toApiException(error);
     }

@@ -38,6 +38,8 @@ class HomePage extends StatelessWidget {
             ),
             SizedBox(height: 10),
             _LiveStartHeroCard(),
+            SizedBox(height: 10),
+            _DanmakuWatchEntryCard(),
             SizedBox(height: 24),
             _SectionHeader(
               icon: Icons.record_voice_over_rounded,
@@ -171,6 +173,63 @@ class _SectionHeader extends StatelessWidget {
 /// 「AI 语音开播」主入口卡片：首页顶部主行动入口，状态化展示当前场次
 /// （直播中 / 已就绪 / 草稿待完善 / 空态），点击直达对应工作台或列表页；
 /// 从页面返回后自动刷新，保证与列表页状态一致。
+/// 首页「AI 直播」区的弹幕监控入口（R16b）。
+/// 与上面的开播卡并列：那张是"要开工"，这张是"先看看"——不绑场次、不落库。
+class _DanmakuWatchEntryCard extends StatelessWidget {
+  const _DanmakuWatchEntryCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      key: const Key('homeDanmakuWatchEntry'),
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => context.push('/danmaku-watch'),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: <Widget>[
+              const Icon(
+                Icons.podcasts_outlined,
+                size: 20,
+                color: AppColors.info,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      '弹幕监控',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '贴个直播链接就能看弹幕流水（不用开播）',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(
+                Icons.chevron_right_rounded,
+                size: 20,
+                color: AppColors.textHint,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _LiveStartHeroCard extends ConsumerStatefulWidget {
   const _LiveStartHeroCard();
 
