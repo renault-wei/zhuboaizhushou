@@ -4,11 +4,17 @@ import { SENSITIVE_GUARD_PROMPT } from './sensitive';
 // ---------- 常量与对外类型 ----------
 
 // 台本条目数与单条字数口径（与 docs/LOOP-BROADCAST-PLAN.md §3.2 对齐）：
-// 默认生成 6 条；每条 15-80 字（AI 生成口径，代码只保上限）；上限 12 条 / 单条 200 字。
+// 默认生成 6 条；每条 15-80 字是 **AI 生成的建议口径**，代码只保上限；上限 12 条。
+//
+// ⚠️ MAX_LOOP_ITEM_TEXT_LENGTH 的语义（2026-09-17 · A5-2 拍板后变更）：
+//   它是**宽松安全上限**（拦模型异常 / 防滥用），**不是业务字数限制**。
+//   用户自带话术**不删字、不截断、不拒绝保存**（用户拍板：放开 200 字限制）。
+//   长文本的合成由 volcTTS 的分段合成（A5-1）承接：按标点切段 → 逐段合成 → 拼回单段音频，
+//   对外仍是一次出声、**句中不停顿**（见 services/volcTTS.ts 的 splitTtsSegments）。
 export const MIN_LOOP_ITEMS = 1;
 export const MAX_LOOP_ITEMS = 12;
 export const DEFAULT_LOOP_ITEM_COUNT = 6;
-export const MAX_LOOP_ITEM_TEXT_LENGTH = 200;
+export const MAX_LOOP_ITEM_TEXT_LENGTH = 2000;
 
 /** 合法段落类型（宽松存储：未知类型一律按 null 落库） */
 export const LOOP_ITEM_KINDS = [

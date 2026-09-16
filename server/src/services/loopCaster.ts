@@ -17,9 +17,11 @@ import { atmosphereScheduler } from './atmosphereScheduler';
 
 // ---------- 常量（口径 docs/LOOP-BROADCAST-PLAN.md §8）----------
 
-/** 条间默认间隔（秒）：条目未配置 gapAfterSeconds 时使用
- *  2026-09-11 由 6s 收紧到 2s：6s 停顿静默占比近 60%，听感像念稿、且长时间静默有平台判定风险 */
-export const DEFAULT_ITEM_GAP_SECONDS = 2;
+/** 条间默认间隔（秒）：条目未配置 gapAfterSeconds 时使用。
+ *  2026-09-11 由 6s 收紧到 2s：6s 停顿静默占比近 60%，听感像念稿、且长时间静默有平台判定风险。
+ *  2026-09-17 用户拍板「循环话本播放期间间隔默认 0s」→ 再压到 0：连读更顺、静默几乎归零；
+ *  单条时长与停顿由台本自身的标点与语速承担（长文本的句中不停顿由 volcTTS 分段合成保证）。*/
+export const DEFAULT_ITEM_GAP_SECONDS = 0;
 /** 每轮播完后的轮间休息（秒）：2026-09-11 由 20s 收紧到 6s（一轮结束不长时间留白） */
 export const DEFAULT_LOOP_REST_SECONDS = 6;
 /** 出声链路忙时的空档避让轮询步长（ms） */

@@ -40,6 +40,7 @@ const PHONE_GEN_ERROR = '13930000015';
 const PHONE_GEN_NOT_READY = '13930000017';
 const PHONE_GEN_SCENARIO = '13930000018';
 const PHONE_SOURCE_OTHER = '13930000018';
+const PHONE_SEGMENT = '13930000019';
 
 async function registerAndGetToken(phone: string): Promise<string> {
   const send = await app.inject({
@@ -277,8 +278,9 @@ dbIt('条目数/单条字数/空文本/标题非法返回对应 400，且不触�
   expect(noText.statusCode).toBe(400);
   expect(noText.json()).toMatchObject({ error: 'ITEM_TEXT_REQUIRED' });
 
-  // 单条超过 200 字
-  const longText = await app.inject({
+  // A5-2（2026-09-17）：200 字**业务限制已放开** —— 201 字必须能存，
+  // 用户话术不删字、不截断、不拒绝保存（用户拍板「允许话术生成超过 200 字限制」）。
+  const over200 = await app.inject({
     method: 'POST',
     url: '/api/loop-scripts',
     headers: bearer(token),
@@ -287,8 +289,22 @@ dbIt('条目数/单条字数/空文本/标题非法返回对应 400，且不触�
       items: [{ kind: 'custom', text: '字'.repeat(201), gapAfterSeconds: null }],
     },
   });
-  expect(longText.statusCode).toBe(400);
-  expect(longText.json()).toMatchObject({ error: 'ITEM_TEXT_TOO_LONG' });
+  expect(over200.statusCode).toBe(201);
+  const savedItems = (over200.json() as { items: Array<{ text: string }> }).items;
+  expect(savedItems[0]?.text.length).toBe(201);
+
+  // 但仍保留一个**宽松安全上限**（拦模型异常 / 防滥用）——它是安全阀，不是业务字数限制
+  const tooLong = await app.inject({
+    method: 'POST',
+    url: '/api/loop-scripts',
+    headers: bearer(token),
+    payload: {
+      title: '标题',
+      items: [{ kind: 'custom', text: '字'.repeat(2001), gapAfterSeconds: null }],
+    },
+  });
+  expect(tooLong.statusCode).toBe(400);
+  expect(tooLong.json()).toMatchObject({ error: 'ITEM_TEXT_TOO_LONG' });
 
   // 标题空 / 超长
   const badTitle = await app.inject({
@@ -787,4 +803,92 @@ dbIt('DeepSeek 异常 / 非 JSON 返回 → 502 GENERATION_FAILED', async () => 
   });
   expect(parseError.statusCode).toBe(502);
   expect(parseError.json()).toMatchObject({ error: 'GENERATION_FAILED' });
+});
+
+// R19（2026-09-17）：放开 200 字之后，长话术走「按标点切段 → 逐段合成 → 拼回单段音频」，
+// 用户需要看得见「会被切成几份、断点落在哪」。
+dbIt('R19：分段预览回带份数与断点，且拼回等于原文（不丢字不加字）', async () => {
+  const token = await registerAndGetToken(PHONE_SEGMENT);
+
+  // 245 字、句末标点充足：前 200 字正好是 25 个整句，余 45 字 → 期望 2 段
+  const line = '欢迎来到直播间。'.repeat(30) + '最后收个尾';
+  expect(line.length).toBe(245);
+
+  const preview = await app.inject({
+    method: 'POST',
+    url: '/api/tts/segment-preview',
+    headers: bearer(token),
+    payload: { text: line },
+  });
+  expect(preview.statusCode).toBe(200);
+  const pv = preview.json() as {
+    maxCharsPerRequest: number;
+    charCount: number;
+    segmentCount: number;
+    segments: Array<{ index: number; chars: number; text: string }>;
+  };
+  expect(pv.charCount).toBe(245);
+  expect(pv.maxCharsPerRequest).toBe(200);
+  expect(pv.segmentCount).toBe(2);
+  expect(pv.segments[0]?.chars).toBe(200);
+  expect(pv.segments[1]?.chars).toBe(45);
+  // 断点必须落在句末标点上：第一段以「。」收尾，听感才不会句中停顿
+  expect(pv.segments[0]?.text.endsWith('。')).toBe(true);
+  // 不变式：拼回去必须与原文本逐字相等
+  expect(pv.segments.map((seg) => seg.text).join('')).toBe(line);
+
+  // 空文本 / 超安全上限 → 400
+  expect(
+    (
+      await app.inject({
+        method: 'POST',
+        url: '/api/tts/segment-preview',
+        headers: bearer(token),
+        payload: { text: '   ' },
+      })
+    ).statusCode,
+  ).toBe(400);
+  expect(
+    (
+      await app.inject({
+        method: 'POST',
+        url: '/api/tts/segment-preview',
+        headers: bearer(token),
+        payload: { text: '字'.repeat(2001) },
+      })
+    ).statusCode,
+  ).toBe(400);
+});
+
+dbIt('R19：台本详情里每条回带 ttsSegmentCount（与预览口径一致）', async () => {
+  const token = await registerAndGetToken(PHONE_SEGMENT);
+  const shortLine = '一句话就够。';
+  const longLine = '欢迎来到直播间。'.repeat(30) + '最后收个尾';
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/loop-scripts',
+    headers: bearer(token),
+    payload: {
+      title: 'R19 分段份数',
+      items: [
+        { kind: 'custom', text: shortLine, gapAfterSeconds: null },
+        { kind: 'custom', text: longLine, gapAfterSeconds: null },
+      ],
+    },
+  });
+  expect(created.statusCode).toBe(201);
+  const scriptId = (created.json() as { id: string }).id;
+
+  const detail = await app.inject({
+    method: 'GET',
+    url: `/api/loop-scripts/${scriptId}`,
+    headers: bearer(token),
+  });
+  expect(detail.statusCode).toBe(200);
+  const body = detail.json() as { items: Array<{ text: string; ttsSegmentCount: number }> };
+  expect(body.items).toHaveLength(2);
+  // 短句 1 段；245 字长句 2 段 —— 与预览接口同一口径（都走 splitTtsSegments）
+  expect(body.items[0]?.ttsSegmentCount).toBe(1);
+  expect(body.items[1]?.ttsSegmentCount).toBe(2);
 });

@@ -14,6 +14,7 @@ import { healthRoutes } from './routes/health';
 import { livesRoutes } from './routes/lives';
 import { danmakuSourceRoutes } from './routes/danmakuSource';
 import { danmakuWatchRoutes } from './routes/danmakuWatch';
+import { ttsRoutes } from './routes/tts';
 import { loopScriptSamplesRoutes } from './routes/loopScriptSamples';
 import { loopScriptsRoutes } from './routes/loopScripts';
 import { scriptsRoutes } from './routes/scripts';
@@ -60,6 +61,8 @@ export function buildApp() {
   app.register(danmakuSourceRoutes);
   // 独立弹幕监控（R16）：不绑场次、不落库，贴链接即可看弹幕流水
   app.register(danmakuWatchRoutes);
+  // TTS 分段预览（R19）：长话术会被切成几段合成、断点在哪
+  app.register(ttsRoutes);
   // 谈单演示：只读示例循环台本（套用后走 /api/loop-scripts 落库链路）
   app.register(loopScriptSamplesRoutes);
   app.register(loopScriptsRoutes);

@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createLoopCaster, DEFAULT_IDLE_POLL_MS } from '../src/services/loopCaster';
+import {
+  createLoopCaster,
+  DEFAULT_IDLE_POLL_MS,
+  DEFAULT_ITEM_GAP_SECONDS,
+} from '../src/services/loopCaster';
 import type { LoopCastItem, LoopCaster } from '../src/services/loopCaster';
 
 // M4 loopCaster 单元测试：speak / loadItems / sleep / isBusy 全注入替身，
@@ -76,6 +80,42 @@ describe('M4 loopCaster 循环台本播出引擎（§8.2/§8.3）', () => {
     expect(sleeps.slice(4)).toEqual([2000, 2000, 10000]);
     expect(stopRequested).toBe(true);
     expect(caster.status(LIVE_ID)).toBeNull();
+  });
+
+  // R20（2026-09-17）：用户拍板「循环话本播放期间间隔默认 0s」——连读更顺、静默几乎归零。
+  it('R20：条间默认间隔为 0s', () => {
+    expect(DEFAULT_ITEM_GAP_SECONDS).toBe(0);
+  });
+
+  it('R20：条间默认 0 时不产生条间睡眠（连读），只剩轮间休息', async () => {
+    const items: LoopCastItem[] = [
+      { text: '第一句。', gapAfterSeconds: null },
+      { text: '第二句。', gapAfterSeconds: null },
+    ];
+    const spoken: string[] = [];
+    const sleeps: number[] = [];
+    const caster = createLoopCaster({
+      // 不传 itemGapSeconds → 走默认 0；轮间给 1s，避免 0 间隔下紧密空转
+      loopRestSeconds: 1,
+      idlePollMs: DEFAULT_IDLE_POLL_MS,
+      loadItems: async () => items,
+      isBusy: () => false,
+      speak: async (text) => {
+        spoken.push(text);
+        return { spoken: true, reason: 'spoken' };
+      },
+      sleep: async (ms) => {
+        // 第一次睡眠即轮末休息：收到就收工，顺带回证「条间一次都没睡」
+        sleeps.push(ms);
+        caster.stop(LIVE_ID);
+      },
+    });
+
+    caster.start(LIVE_ID);
+    await waitRunnerGone(caster, LIVE_ID);
+
+    expect(spoken).toEqual(['第一句。', '第二句。']);
+    expect(sleeps).toEqual([1000]);
   });
 
   it.each([null, [] as LoopCastItem[]])('空台本（%p）不启动 Runner：不出声、状态即回 null', async (loaded) => {

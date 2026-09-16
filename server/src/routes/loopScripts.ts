@@ -19,6 +19,7 @@ import {
   MAX_LOOP_ITEMS,
   MIN_LOOP_ITEMS,
 } from '../services/loopScript';
+import { splitTtsSegments, VOLC_TTS_MAX_CHARS_PER_REQUEST } from '../services/volcTTS';
 
 // ---------- 常量与类型 ----------
 
@@ -67,7 +68,11 @@ interface LoopScriptSummary {
 
 // ---------- 读取与校验 ----------
 
-/** 台本条目归一化：条数 1-12、文本 trim 后 1-200 字、kind 落白名单否则 null、间隔 0-60 否则 null */
+/**
+ * 台本条目归一化：条数 1-12、文本 trim 后非空且不超**宽松安全上限**（2000 字）、
+ * kind 落白名单否则 null、间隔 0-60 否则 null。
+ * 用户话术不删字、不截断 —— 只有超过安全上限才拒绝（防滥用，不是业务字数限制）。
+ */
 function normalizeItems(raw: unknown): { items: ParsedItem[] } | { error: ItemError } {
   if (!Array.isArray(raw)) {
     return { error: { code: 'ITEMS_INVALID', message: '台本条目必须是非空数组' } };
@@ -95,7 +100,7 @@ function normalizeItems(raw: unknown): { items: ParsedItem[] } | { error: ItemEr
       return {
         error: {
           code: 'ITEM_TEXT_TOO_LONG',
-          message: `第 ${index + 1} 条台词不能超过 ${MAX_LOOP_ITEM_TEXT_LENGTH} 字`,
+          message: `第 ${index + 1} 条台词超过安全上限（${MAX_LOOP_ITEM_TEXT_LENGTH} 字）`,
         },
       };
     }
@@ -352,7 +357,14 @@ export const loopScriptsRoutes: FastifyPluginAsync = async (app) => {
       .from(loopScriptItemsTable)
       .where(eq(loopScriptItemsTable.loopScriptId, id))
       .orderBy(loopScriptItemsTable.seq);
-    return { ...header, items };
+    // R19：回带「这条会被切成几段合成」——放开了 200 字之后，用户需要看得见份数
+    return {
+      ...header,
+      items: items.map((item) => ({
+        ...item,
+        ttsSegmentCount: splitTtsSegments(item.text, VOLC_TTS_MAX_CHARS_PER_REQUEST).length,
+      })),
+    };
   });
 
   // 新建台本：全部条目过敏感词扫描后事务落库；可选 sourceScriptId（须归属当前用户）
