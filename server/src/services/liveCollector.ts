@@ -10,6 +10,7 @@
 //   只以观众身份连平台公开网页端，仅监听自己直播间，低流量、自用自测；
 //   未配置签名 Key 时整层降级为「仅测试弹幕注入」，不影响任何既有功能。
 
+import { randomUUID } from 'node:crypto';
 import {
   createCollectorManager,
   watchKeyOf,
@@ -65,6 +66,38 @@ export interface LiveCollectorBinding {
   connectHeaders?: Record<string, string>;
 }
 
+/**
+ * 独立监控绑定（R16 · 监听源与场次解耦）：
+ * **不绑场次、不落库**，只把事件放进有界环形缓冲供接口读取。
+ * 用途 = 用户要的「贴个链接就能单独看弹幕流水」，无需先开一场直播。
+ */
+export interface MonitorBinding {
+  /** 服务端生成的监听源 id */
+  watchId: string;
+  userId: string;
+  platform: DanmakuPlatform;
+  roomRef: string;
+  watchKey: string;
+  startedAt: string;
+  connectHeaders?: Record<string, string>;
+}
+
+/** 缓冲里的一条事件（只保留读流水需要的字段，不暴露原始报文） */
+export interface MonitorEvent {
+  /** 单调递增序号，供 since 增量拉取 */
+  seq: number;
+  msgType: string;
+  content: string | null;
+  senderNickname: string | null;
+  happenedAt: string;
+}
+
+export interface StartMonitorInput {
+  userId: string;
+  roomRef?: string;
+  shareText?: string;
+}
+
 export interface LiveCollectorStatus {
   /** 采集通道是否可用（= 已配签名 Key 且注册了适配器） */
   enabled: boolean;
@@ -100,6 +133,14 @@ export interface LiveCollector {
   /** 停会话并清绑定（幂等），供 DELETE */
   stop(liveId: string): Promise<boolean>;
   statusOf(liveId: string): LiveCollectorStatus;
+  /** R16：起一个**独立监控**（不绑场次、不落库，只进内存环形缓冲） */
+  startMonitor(input: StartMonitorInput): Promise<MonitorBinding>;
+  /** R16：停并移除独立监控（幂等；返回是否确实存在） */
+  stopMonitor(watchId: string, userId: string): Promise<boolean>;
+  /** R16：读某监控的最近事件（按 seq 升序）；`sinceSeq` 用于增量；非本人 / 不存在返回 null */
+  monitorEvents(watchId: string, userId: string, sinceSeq?: number): MonitorEvent[] | null;
+  /** R16：列出某用户当前的独立监控 */
+  listMonitors(userId: string): MonitorBinding[];
   /** 停止全部会话并清理（服务关停 / 测试收尾） */
   dispose(): Promise<void>;
 }
@@ -169,13 +210,55 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
    */
   const armed = new Set<string>();
 
+  // ---------- R16：独立监控（不绑场次、不落库） ----------
+  /** watchId → 监控绑定 */
+  const monitors = new Map<string, MonitorBinding>();
+  /** manager 会话键 → watchId（事件只带平台/房间，靠它反查监控） */
+  const monitorIdByWatchKey = new Map<string, string>();
+  /** watchId → 最近事件（有界环形，新的在后） */
+  const monitorBuffers = new Map<string, MonitorEvent[]>();
+  /** 全局单调序号：供 since 增量拉取，跨监控共享即可 */
+  let monitorSeq = 0;
+
+  /** 独立监控的事件缓冲上限（防长直播把内存吃满） */
+  const MAX_MONITOR_EVENTS = 200;
+
   /**
    * 采集事件 → 既有弹幕网关。
    * 任何失败只告警、绝不向上抛：单条弹幕入库失败不能拖垮整场采集会话。
    */
+  /** 独立监控：按「平台+房间」反查监控并把事件压入环形缓冲（不落库、不进 AI 链路） */
+  function bufferMonitorEvent(event: UnifiedDanmakuEvent): void {
+    const key = watchKeyOf({
+      source: event.platform,
+      platform: event.platform,
+      roomRef: event.roomRef,
+      liveId: null,
+    });
+    const watchId = monitorIdByWatchKey.get(key);
+    if (!watchId) {
+      return;
+    }
+    monitorSeq += 1;
+    const buffer = monitorBuffers.get(watchId) ?? [];
+    buffer.push({
+      seq: monitorSeq,
+      msgType: event.msgType,
+      content: event.content ?? null,
+      senderNickname: event.senderNickname ?? null,
+      happenedAt: event.happenedAt,
+    });
+    if (buffer.length > MAX_MONITOR_EVENTS) {
+      buffer.splice(0, buffer.length - MAX_MONITOR_EVENTS);
+    }
+    monitorBuffers.set(watchId, buffer);
+  }
+
   function handleEvent(event: UnifiedDanmakuEvent): void {
     const liveId = event.liveId;
     if (!liveId) {
+      // R16：独立监控（不绑场次）—— 只进环形缓冲，不落库、不触发 AI 回复
+      bufferMonitorEvent(event);
       return;
     }
     const binding = bindings.get(liveId);
@@ -203,13 +286,22 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
     return adapters.length > 0;
   }
 
+  /** 起会话所需的最小目标描述：场次绑定与独立监控绑定都满足（liveId 为 null = 独立监控） */
+  interface WatchTargetLike {
+    platform: DanmakuPlatform;
+    roomRef: string;
+    /** 有值 = 场次采集；缺省 / null = 独立监控（R16），事件不落库 */
+    liveId?: string | null;
+    connectHeaders?: Record<string, string>;
+  }
+
   /** 为一个绑定起（或复用）采集会话：manager 自带幂等，同 watchKey 不会重复起 worker */
-  async function startWatch(binding: LiveCollectorBinding): Promise<void> {
+  async function startWatch(binding: WatchTargetLike): Promise<void> {
     const target = {
       source: binding.platform,
       platform: binding.platform,
       roomRef: binding.roomRef,
-      liveId: binding.liveId,
+      liveId: binding.liveId ?? null,
       ...(binding.connectHeaders ? { headers: binding.connectHeaders } : {}),
     };
     const result = await manager.startWatching(target);
@@ -219,7 +311,7 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
   }
 
   async function resolveRoom(
-    input: StartCollectorInput,
+    input: { roomRef?: string; shareText?: string },
   ): Promise<{ platform: DanmakuPlatform; roomRef: string; connectHeaders?: Record<string, string> }> {
     const directRoomRef = input.roomRef?.trim();
     if (directRoomRef) {
@@ -265,7 +357,8 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
    */
   async function runWatchdog(): Promise<void> {
     for (const liveId of [...armed]) {
-      const binding = bindings.get(liveId);
+      // armed 里两种 id 混放：场次模式是 liveId，独立监控是 watchId
+      const binding = bindings.get(liveId) ?? monitors.get(liveId);
       if (!binding) {
         armed.delete(liveId);
         continue;
@@ -372,11 +465,87 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
       return { enabled: enabled(), binding, watch };
     },
 
+    // ---------- R16：独立监控（不绑场次、不落库） ----------
+
+    async startMonitor(input: StartMonitorInput): Promise<MonitorBinding> {
+      if (!enabled()) {
+        throw new CollectorSourceError(
+          'SOURCE_DISABLED',
+          '未配置 DOUYIN_SIGN_API_KEY，采集通道未启用（仍可用测试弹幕注入）',
+        );
+      }
+      const room = await resolveRoom(input);
+      const watchId = `mon-${randomUUID()}`;
+      const watchKey = watchKeyOf({
+        source: room.platform,
+        platform: room.platform,
+        roomRef: room.roomRef,
+        liveId: null,
+      });
+      const binding: MonitorBinding = {
+        watchId,
+        userId: input.userId,
+        platform: room.platform,
+        roomRef: room.roomRef,
+        watchKey,
+        startedAt: now().toISOString(),
+        ...(room.connectHeaders ? { connectHeaders: room.connectHeaders } : {}),
+      };
+      // 先登记再起会话：open 之后事件可能立刻到达，登记晚了会丢首批弹幕
+      monitors.set(watchId, binding);
+      monitorIdByWatchKey.set(watchKey, watchId);
+      monitorBuffers.set(watchId, []);
+      armed.add(watchId);
+      try {
+        await startWatch(binding);
+      } catch (err) {
+        // 起不来就回滚登记：不留「永远不会被拉起」的幽灵监控
+        monitors.delete(watchId);
+        monitorIdByWatchKey.delete(watchKey);
+        monitorBuffers.delete(watchId);
+        armed.delete(watchId);
+        throw err;
+      }
+      return binding;
+    },
+
+    async stopMonitor(watchId: string, userId: string): Promise<boolean> {
+      const binding = monitors.get(watchId);
+      if (!binding || binding.userId !== userId) {
+        return false;
+      }
+      armed.delete(watchId);
+      monitors.delete(watchId);
+      monitorIdByWatchKey.delete(binding.watchKey);
+      monitorBuffers.delete(watchId);
+      await manager.stopWatching(binding.watchKey);
+      return true;
+    },
+
+    monitorEvents(watchId: string, userId: string, sinceSeq?: number): MonitorEvent[] | null {
+      const binding = monitors.get(watchId);
+      if (!binding || binding.userId !== userId) {
+        return null;
+      }
+      const buffer = monitorBuffers.get(watchId) ?? [];
+      if (sinceSeq === undefined || !Number.isFinite(sinceSeq)) {
+        return [...buffer];
+      }
+      return buffer.filter((item) => item.seq > sinceSeq);
+    },
+
+    listMonitors(userId: string): MonitorBinding[] {
+      return [...monitors.values()].filter((item) => item.userId === userId);
+    },
+
     async dispose(): Promise<void> {
       if (watchdog !== null) {
         clearInterval(watchdog);
       }
       armed.clear();
+      monitors.clear();
+      monitorIdByWatchKey.clear();
+      monitorBuffers.clear();
       bindings.clear();
       await manager.dispose();
     },

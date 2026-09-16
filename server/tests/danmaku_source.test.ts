@@ -555,5 +555,120 @@ it('看门狗：已挂起（直播结束）的场次不会被拉起', async () =
   }
 });
 
+// ---------- R16 独立监控：不绑场次、不落库 ----------
+
+it('独立监控：事件只进内存缓冲，**不落库**（ingest 一次都不被调用）', async () => {
+  const fake = createFakeAdapter('douyin');
+  let ingestCalls = 0;
+  const collector = createLiveCollector({
+    adapters: [fake.adapter],
+    watchdogIntervalMs: 0,
+    ingest: async () => {
+      ingestCalls += 1;
+      return {};
+    },
+  });
+  try {
+    const binding = await collector.startMonitor({ userId: 'u-mon', roomRef: '7123456789012345678' });
+    expect(binding.watchId.startsWith('mon-')).toBe(true);
+    // 独立监控的目标 liveId 为 null：适配器发出来的事件也就没有场次归属
+    fake.emit({ ...chatEvent('ignored', 'douyin:m1'), liveId: null });
+    const events = collector.monitorEvents(binding.watchId, 'u-mon');
+    expect(events).toHaveLength(1);
+    expect(events?.[0]?.msgType).toBe('chat');
+    expect(events?.[0]?.content).toBe('这个套餐多少钱');
+    expect(events?.[0]?.senderNickname).toBe('观众甲');
+    // 核心：独立监控不进 AI 链路、不落库
+    expect(ingestCalls).toBe(0);
+  } finally {
+    await collector.dispose();
+  }
+});
+
+it('独立监控：非本人读不到、列不出（归属隔离）', async () => {
+  const fake = createFakeAdapter('douyin');
+  const collector = createLiveCollector({ adapters: [fake.adapter], watchdogIntervalMs: 0 });
+  try {
+    const binding = await collector.startMonitor({ userId: 'owner', roomRef: '7123456789012345678' });
+    expect(collector.monitorEvents(binding.watchId, 'intruder')).toBeNull();
+    expect(collector.listMonitors('intruder')).toHaveLength(0);
+    expect(collector.listMonitors('owner')).toHaveLength(1);
+    expect(await collector.stopMonitor(binding.watchId, 'intruder')).toBe(false);
+    expect(await collector.stopMonitor(binding.watchId, 'owner')).toBe(true);
+    expect(collector.monitorEvents(binding.watchId, 'owner')).toBeNull();
+  } finally {
+    await collector.dispose();
+  }
+});
+
+it('独立监控：since 增量只回更新的条目；缓冲有上限不无限涨', async () => {
+  const fake = createFakeAdapter('douyin');
+  const collector = createLiveCollector({ adapters: [fake.adapter], watchdogIntervalMs: 0 });
+  try {
+    const binding = await collector.startMonitor({ userId: 'u', roomRef: '7123456789012345678' });
+    for (let i = 1; i <= 3; i += 1) {
+      fake.emit({ ...chatEvent('ignored', `douyin:m${i}`, `第${i}条`), liveId: null });
+    }
+    const all = collector.monitorEvents(binding.watchId, 'u');
+    expect(all).toHaveLength(3);
+    const afterFirst = collector.monitorEvents(binding.watchId, 'u', all?.[0]?.seq ?? 0);
+    expect(afterFirst).toHaveLength(2);
+    expect(afterFirst?.[0]?.content).toBe('第2条');
+  } finally {
+    await collector.dispose();
+  }
+});
+
+dbIt('独立监控路由：起 / 读流水 / 停（打桩单例，不触网）', async () => {
+  const token = await registerAndGetToken(PHONE_SRC);
+  const watch = {
+    watchId: 'mon-test-1',
+    userId: await userIdOf(PHONE_SRC),
+    platform: 'douyin',
+    roomRef: '7686079594273327906',
+    watchKey: 'douyin:douyin:7686079594273327906',
+    startedAt: new Date().toISOString(),
+  };
+  vi.spyOn(liveCollector, 'startMonitor').mockResolvedValue(watch);
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/danmaku-watch',
+    headers: bearer(token),
+    payload: { shareText: 'https://v.douyin.com/xxxx/' },
+  });
+  expect(created.statusCode).toBe(201);
+  expect((created.json() as { watch: { watchId: string } }).watch.watchId).toBe('mon-test-1');
+
+  vi.spyOn(liveCollector, 'monitorEvents').mockReturnValue([
+    { seq: 7, msgType: 'chat', content: '豆豆健康就行', senderNickname: '软糖酱', happenedAt: new Date().toISOString() },
+  ]);
+  const read = await app.inject({
+    method: 'GET',
+    url: '/api/danmaku-watch/mon-test-1/events?since=3',
+    headers: bearer(token),
+  });
+  expect(read.statusCode).toBe(200);
+  const body = read.json() as { events: Array<{ content: string }>; lastSeq: number };
+  expect(body.events[0]?.content).toBe('豆豆健康就行');
+  expect(body.lastSeq).toBe(7);
+
+  const badSince = await app.inject({
+    method: 'GET',
+    url: '/api/danmaku-watch/mon-test-1/events?since=-1',
+    headers: bearer(token),
+  });
+  expect(badSince.statusCode).toBe(400);
+
+  vi.spyOn(liveCollector, 'stopMonitor').mockResolvedValue(true);
+  const stopped = await app.inject({
+    method: 'DELETE',
+    url: '/api/danmaku-watch/mon-test-1',
+    headers: bearer(token),
+  });
+  expect(stopped.statusCode).toBe(200);
+  expect((stopped.json() as { stopped: boolean }).stopped).toBe(true);
+});
+
+
 
 
