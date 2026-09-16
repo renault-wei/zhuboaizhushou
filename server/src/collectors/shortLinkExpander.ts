@@ -4,16 +4,28 @@
 // 它只做「跟着 HTTP 跳转走」一件事 —— 不抓包、不逆向、不带登录态，合规边界与 PLAN §7 一致。
 //
 // 为什么必须补：抖音 App 分享出来的就是短链（v.douyin.com/xxxx），而直播间身份只存在于
-// 跳转后的 live.douyin.com/<房间号> 里。没有它，「只给链接」这条路根本走不通。
+// 跳转后的 live.douyin.com/<房间号>（2026-09-16 真链接实测落点其实是
+// webcast.amemv.com/douyin/webcast/reflow/<房间号>）里。
+//
+// 为什么还要顺带取 Cookie：抖音 wss 握手**必须**带 `Cookie: ttwid=…`，而 ttwid 只在这条
+// 跳转链上下发一次 —— 「解析房间号」与「取 ttwid」本来就是同一次请求（实测：不带即回 HTTP 200）。
 
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 /** 短链展开失败（网络 / 超时 / 形态不认识）；上层翻成可读原因给接口调用方 */
 export class ShortLinkExpandError extends Error {
-  constructor(message: string) {
+  /**
+   * 是否值得重试。
+   * - true：网络中断、超时等**瞬时可恢复**故障（实测偶发）；
+   * - false：跳转正常但页面里找不到房间号等**确定性**失败，重试只是白等。
+   */
+  readonly retryable: boolean;
+
+  constructor(message: string, retryable = false) {
     super(message);
     this.name = 'ShortLinkExpandError';
+    this.retryable = retryable;
   }
 }
 
@@ -26,17 +38,6 @@ export interface ShortLinkExpansion {
 
 export type ShortLinkExpander = (url: string) => Promise<ShortLinkExpansion>;
 
-/** 从 Set-Cookie 里挑出 ttwid（值含 % 编码与竖线，不能按分号粗暴切完就丢） */
-function ttwidOf(setCookies: readonly string[]): string | null {
-  for (const one of setCookies) {
-    const matched = /(?:^|[;,\s])ttwid=([^;]+)/.exec(one);
-    if (matched?.[1]) {
-      return `ttwid=${matched[1]}`;
-    }
-  }
-  return null;
-}
-
 export interface ShortLinkExpanderDeps {
   /** 可注入：单测用替身，全离线 */
   fetchImpl?: typeof fetch;
@@ -44,6 +45,8 @@ export interface ShortLinkExpanderDeps {
   userAgent?: string;
   /** 兜底正则只看正文前 N 字节，避免把整页拉下来 */
   maxBodyBytes?: number;
+  /** 失败重试次数（不含首次）。默认 2：实测冷启动 TLS + 多跳链路会偶发打满超时 */
+  retries?: number;
 }
 
 /**
@@ -67,13 +70,27 @@ function roomRefFromHtml(html: string): string | null {
   return null;
 }
 
+/** 从 Set-Cookie 里挑出 ttwid（值含 % 编码与竖线，不能按分号粗暴切完就丢） */
+function ttwidOf(setCookies: readonly string[]): string | null {
+  for (const one of setCookies) {
+    const matched = /(?:^|[;,\s])ttwid=([^;]+)/.exec(one);
+    if (matched?.[1]) {
+      return `ttwid=${matched[1]}`;
+    }
+  }
+  return null;
+}
+
 export function createHttpShortLinkExpander(deps: ShortLinkExpanderDeps = {}): ShortLinkExpander {
   const doFetch = deps.fetchImpl ?? fetch;
-  const timeoutMs = deps.timeoutMs ?? 8000;
+  // 常态实测 <1s；8s 在冷启动 TLS + 多跳链路下偶发被打满（2026-09-16 真机实测一次
+  // "This operation was aborted"），放宽到 15s 作兜底。
+  const timeoutMs = deps.timeoutMs ?? 15000;
   const userAgent = deps.userAgent ?? DEFAULT_USER_AGENT;
   const maxBodyBytes = deps.maxBodyBytes ?? 200_000;
+  const retries = deps.retries ?? 2;
 
-  return async (url: string): Promise<ShortLinkExpansion> => {
+  async function attemptOnce(url: string): Promise<ShortLinkExpansion> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -106,6 +123,7 @@ export function createHttpShortLinkExpander(deps: ShortLinkExpanderDeps = {}): S
       if (roomRef) {
         return withCookie(`https://live.douyin.com/${roomRef}`);
       }
+      // 确定性失败：跳转拿到了、页面也读了，就是没有直播间号 —— 重试无意义
       throw new ShortLinkExpandError(
         '短链未发生跳转，且页面里找不到直播间号（可能已失效，或该链接不是直播分享）',
       );
@@ -114,9 +132,25 @@ export function createHttpShortLinkExpander(deps: ShortLinkExpanderDeps = {}): S
         throw err;
       }
       const message = err instanceof Error ? err.message : String(err);
-      throw new ShortLinkExpandError(`短链展开请求失败：${message}`);
+      // 网络 / 超时类：标记可重试
+      throw new ShortLinkExpandError(`短链展开请求失败：${message}`, true);
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  return async (url: string): Promise<ShortLinkExpansion> => {
+    let lastError: ShortLinkExpandError | null = null;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try {
+        return await attemptOnce(url);
+      } catch (err) {
+        if (!(err instanceof ShortLinkExpandError) || !err.retryable) {
+          throw err;
+        }
+        lastError = err;
+      }
+    }
+    throw lastError ?? new ShortLinkExpandError('短链展开失败：重试次数已用尽', true);
   };
 }

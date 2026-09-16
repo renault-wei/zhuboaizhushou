@@ -86,6 +86,40 @@ it('请求抛错 → 包成 ShortLinkExpandError，不冒原始异常', async ()
   await expect(expand(SHORT_URL)).rejects.toThrow(/短链展开请求失败/);
 });
 
+it('网络类失败会重试：第一次超时、第二次成功 → 整体成功', async () => {
+  let calls = 0;
+  const fetchImpl = vi.fn(async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw new Error('This operation was aborted');
+    }
+    return fakeResponse({ url: ROOM_URL });
+  }) as unknown as typeof fetch;
+  const expand = createHttpShortLinkExpander({ fetchImpl, retries: 2 });
+  await expect(expand(SHORT_URL)).resolves.toEqual({ url: ROOM_URL });
+  expect(calls).toBe(2);
+});
+
+it('确定性失败不重试（跳转正常但页面里没有房间号 → 只请求一次）', async () => {
+  let calls = 0;
+  const fetchImpl = vi.fn(async () => {
+    calls += 1;
+    return fakeResponse({ url: SHORT_URL, body: '<html>该链接已失效</html>' });
+  }) as unknown as typeof fetch;
+  const expand = createHttpShortLinkExpander({ fetchImpl, retries: 2 });
+  await expect(expand(SHORT_URL)).rejects.toBeInstanceOf(ShortLinkExpandError);
+  expect(calls).toBe(1);
+});
+
+it('重试次数用尽后抛出可重试标记的错误', async () => {
+  const fetchImpl = vi.fn(async () => {
+    throw new Error('socket hang up');
+  }) as unknown as typeof fetch;
+  const expand = createHttpShortLinkExpander({ fetchImpl, retries: 1 });
+  await expect(expand(SHORT_URL)).rejects.toMatchObject({ retryable: true });
+  expect(vi.mocked(fetchImpl)).toHaveBeenCalledTimes(2);
+});
+
 it('端到端解析：只给抖音分享文本（含短链）也能解出房间号', async () => {
   const resolver = createLinkResolver({
     expandShortLink: async () => ({ url: ROOM_URL, cookie: `ttwid=${TTWID}` }),
