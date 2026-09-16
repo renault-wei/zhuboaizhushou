@@ -1,11 +1,21 @@
 import { afterAll, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   buildVolcTtsRequestBody,
   collectVolcSseAudio,
   createVolcTtsSynth,
+  splitTtsSegments,
+  VOLC_TTS_MAX_CHARS_PER_REQUEST,
   VOLC_TTS_SSE_PATH,
   VolcTtsError,
   VolcTtsSynth,
@@ -261,4 +271,139 @@ it('HTTP 非 2xx：抛 VOLC_TTS_HTTP_FAILED 且带状态码', async () => {
     expect((err as VolcTtsError).code).toBe('VOLC_TTS_HTTP_FAILED');
     expect((err as VolcTtsError).message).toContain('403');
   }
+});
+
+// ---------- 超长文本分段合成 + 拼装 ----------
+
+it('splitTtsSegments：不丢字不改写，标点优先断开、超长硬切', () => {
+  const plain = 'a'.repeat(450);
+  const hardCut = splitTtsSegments(plain, 200);
+  expect(hardCut.map((segment) => segment.length)).toEqual([200, 200, 50]);
+  expect(hardCut.join('')).toBe(plain);
+
+  const punctuated = '欢迎光临本店，今天有团购优惠。'.repeat(20);
+  const segments = splitTtsSegments(punctuated, 200);
+  expect(segments.length).toBeGreaterThan(1);
+  expect(segments.every((segment) => segment.length <= 200)).toBe(true);
+  expect(segments.join('')).toBe(punctuated);
+  // 优先在句末标点后断开：除末段外都以句号收尾
+  expect(segments.slice(0, -1).every((segment) => segment.endsWith('。'))).toBe(true);
+
+  expect(splitTtsSegments('短文本', 200)).toEqual(['短文本']);
+  expect(splitTtsSegments('', 200)).toEqual([]);
+});
+
+it('短文本：只发一次请求、只转码一次，不触发拼装', async () => {
+  const audio = Buffer.from('single-segment-mp3');
+  const sseText = [
+    `data: ${JSON.stringify({ code: 0, data: audio.toString('base64') })}`,
+    `data: ${JSON.stringify({ code: 20000000 })}`,
+  ].join('\n');
+  let fetchCount = 0;
+  const fetchFn = async () => {
+    fetchCount += 1;
+    return new Response(sseText, { status: 200 });
+  };
+  const caseDir = join(tempRoot, 'single-segment');
+  mkdirSync(caseDir, { recursive: true });
+  const transcoder = makeFakeTranscoder();
+  let concatCount = 0;
+  const synth = createVolcTtsSynth({
+    apiKey: 'test-key',
+    sampleRate: 24000,
+    fetchFn,
+    outDir: caseDir,
+    transcode: transcoder,
+    concatMp3: async () => {
+      concatCount += 1;
+    },
+  });
+
+  const result = await synth.synthesize('你好，欢迎光临');
+
+  expect(fetchCount).toBe(1);
+  expect(concatCount).toBe(0);
+  expect(transcoder.calls).toHaveLength(1);
+  expect(transcoder.calls[0]?.mp3Path.endsWith('.mp3')).toBe(true);
+  expect(transcoder.calls[0]?.mp3Path).not.toContain('merged');
+  expect(existsSync(result.wavPath)).toBe(true);
+  // mp3 中间产物已清理，只剩交付的 wav
+  expect(readdirSync(caseDir).filter((name) => name.endsWith('.mp3'))).toEqual([]);
+  expect(readdirSync(caseDir).filter((name) => name.endsWith('.wav'))).toHaveLength(1);
+});
+
+it('超长文本：逐段请求、拼装一次、只转码一次，中间产物全部清理', async () => {
+  const text = '欢迎光临本店，今天有团购优惠。'.repeat(20);
+  const expectedSegments = splitTtsSegments(text, VOLC_TTS_MAX_CHARS_PER_REQUEST);
+  expect(expectedSegments.length).toBeGreaterThan(1);
+  const requestedTexts: string[] = [];
+  const fetchFn = async (_url: string, init: { body?: string }) => {
+    const body = JSON.parse(init.body ?? '{}') as { req_params?: { text?: string } };
+    requestedTexts.push(body.req_params?.text ?? '');
+    const audio = Buffer.from(`mp3-${requestedTexts.length}`);
+    const sseText = [
+      `data: ${JSON.stringify({ code: 0, data: audio.toString('base64') })}`,
+      `data: ${JSON.stringify({ code: 20000000 })}`,
+    ].join('\n');
+    return new Response(sseText, { status: 200 });
+  };
+  const caseDir = join(tempRoot, 'multi-segment');
+  mkdirSync(caseDir, { recursive: true });
+  const transcoder = makeFakeTranscoder();
+  const concatCalls: Array<{ inputs: string[]; outPath: string }> = [];
+  const synth = createVolcTtsSynth({
+    apiKey: 'test-key',
+    sampleRate: 24000,
+    fetchFn,
+    outDir: caseDir,
+    transcode: transcoder,
+    concatMp3: async (inputs, outPath) => {
+      concatCalls.push({ inputs: [...inputs], outPath });
+    },
+  });
+
+  const result = await synth.synthesize(text);
+
+  // 每段请求文本与分段一致，拼起来不丢字
+  expect(requestedTexts).toEqual(expectedSegments);
+  expect(requestedTexts.join('')).toBe(text);
+  expect(requestedTexts.every((segment) => segment.length <= VOLC_TTS_MAX_CHARS_PER_REQUEST)).toBe(true);
+
+  // 段数 >1：拼装一次，且只转码一次（转的是拼装产物）
+  expect(concatCalls).toHaveLength(1);
+  expect(concatCalls[0]?.inputs).toHaveLength(expectedSegments.length);
+  expect(concatCalls[0]?.outPath.endsWith('-merged.mp3')).toBe(true);
+  expect(transcoder.calls).toHaveLength(1);
+  expect(transcoder.calls[0]?.mp3Path).toBe(concatCalls[0]?.outPath);
+
+  expect(existsSync(result.wavPath)).toBe(true);
+  expect(readFileSync(result.wavPath).toString('utf8')).toBe('RIFF-test-wav');
+  // 分段 mp3 + 拼装 mp3 全部清理
+  expect(readdirSync(caseDir).filter((name) => name.endsWith('.mp3'))).toEqual([]);
+});
+
+it('拼装失败：抛 VOLC_TTS_TRANSCODE_FAILED 且不残留任何中间件', async () => {
+  const text = '欢迎光临本店，今天有团购优惠。'.repeat(20);
+  const audio = Buffer.from('multi-segment-mp3');
+  const sseText = [
+    `data: ${JSON.stringify({ code: 0, data: audio.toString('base64') })}`,
+    `data: ${JSON.stringify({ code: 20000000 })}`,
+  ].join('\n');
+  const fetchFn = async () => new Response(sseText, { status: 200 });
+  const caseDir = join(tempRoot, 'concat-failed');
+  mkdirSync(caseDir, { recursive: true });
+  const synth = createVolcTtsSynth({
+    apiKey: 'test-key',
+    sampleRate: 24000,
+    fetchFn,
+    outDir: caseDir,
+    transcode: makeFakeTranscoder(),
+    concatMp3: async () => {
+      throw new Error('ffmpeg concat 失败');
+    },
+  });
+
+  await expectVolcError(synth.synthesize(text), 'VOLC_TTS_TRANSCODE_FAILED');
+
+  expect(readdirSync(caseDir)).toEqual([]);
 });

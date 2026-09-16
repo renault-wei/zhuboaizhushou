@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { env } from '../config/env';
 import { locateFfmpeg } from './ffmpeg';
 import type { LocalWavSynth } from './liveSpeaker';
@@ -32,6 +32,64 @@ export const VOLC_TTS_MIN_SPEECH_RATE = -50;
 export const VOLC_TTS_MAX_SPEECH_RATE = 100;
 // 单次合成超时兜底（毫秒）：口播回复一般几秒返回，60s 足够
 export const VOLC_TTS_TIMEOUT_MS = 60_000;
+// 单次请求文本上限（字符数）：超长文本在合成层先分段、逐段合成再把音频拼回一条，
+// 避免撞上官方单请求长度限制导致整段话术合成失败（对外仍是「一次 synthesize 一条 wav」）。
+export const VOLC_TTS_MAX_CHARS_PER_REQUEST = 200;
+
+// ---------- 文本分段（纯函数，便于单测）----------
+
+/** 句末标点：优先在此断开，标点归前一段 */
+const TTS_SEGMENT_PRIMARY_BREAKS = new Set(['。', '！', '？', '；', '…', '!', '?', ';', '\n']);
+/** 次级标点：句末标点切完仍超长时，退而在此断开 */
+const TTS_SEGMENT_SECONDARY_BREAKS = new Set(['，', '、', ',']);
+
+/**
+ * 把一段长文本切成若干不超过 maxChars 个字符的片段（纯函数）：
+ * - 优先在句末标点后断开（标点随前一段），其次在逗号/顿号后断开，仍超长则硬切；
+ * - 不丢字、不加字、不改写，不变式 segments.join('') === text；
+ * - maxChars <= 0 或文本本身不超长时返回单段（空文本返回空数组）。
+ */
+export function splitTtsSegments(text: string, maxChars: number): string[] {
+  const limit = Math.floor(maxChars);
+  if (!Number.isFinite(limit) || limit <= 0 || text.length <= limit) {
+    return text.length === 0 ? [] : [text];
+  }
+  const segments: string[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const hardEnd = cursor + limit;
+    if (hardEnd >= text.length) {
+      segments.push(text.slice(cursor));
+      break;
+    }
+    let cut = -1;
+    for (let i = hardEnd - 1; i >= cursor; i -= 1) {
+      if (TTS_SEGMENT_PRIMARY_BREAKS.has(text[i] ?? '')) {
+        cut = i + 1;
+        break;
+      }
+    }
+    if (cut <= cursor) {
+      for (let i = hardEnd - 1; i >= cursor; i -= 1) {
+        if (TTS_SEGMENT_SECONDARY_BREAKS.has(text[i] ?? '')) {
+          cut = i + 1;
+          break;
+        }
+      }
+    }
+    if (cut <= cursor) {
+      cut = hardEnd;
+      // 硬切时避免把代理对（emoji 等）拦腰截断
+      const prev = text.charCodeAt(cut - 1);
+      if (prev >= 0xd800 && prev <= 0xdbff && cut - 1 > cursor) {
+        cut -= 1;
+      }
+    }
+    segments.push(text.slice(cursor, cut));
+    cursor = cut;
+  }
+  return segments;
+}
 
 // ---------- 错误类型 ----------
 
@@ -194,6 +252,59 @@ export const volcDefaultTranscoder: VolcTranscoder = async (
   }
 };
 
+// ---------- 多段音频拼接 ----------
+
+/** 多段 mp3 拼装器：测试可注入假实现，生产默认走 ffmpeg concat */
+export type VolcMp3Concatenator = (mp3Paths: string[], outPath: string) => Promise<void>;
+
+/**
+ * 生产拼装器：ffmpeg concat demuxer 把同一音色/同一参数下发返回的多段 mp3 拼成一条。
+ * - 分段出自同一编码器与同一参数，可 -c copy 直接拼接，无需二次编码；
+ * - 清单内路径统一转正斜杠（Windows 绝对路径的反斜杠会被 concat 清单当转义符吃掉）；
+ * - 清单文件与分段 mp3 一样属中间产物，无论成败就地清理。
+ */
+export const volcDefaultConcatMp3: VolcMp3Concatenator = async (mp3Paths, outPath) => {
+  let ffmpegPath: string;
+  try {
+    ffmpegPath = locateFfmpeg();
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new VolcTtsError('VOLC_TTS_FFMPEG_NOT_FOUND', detail);
+  }
+  // concat 清单语法：file '<路径>'；路径内反斜杠先转正斜杠，单引号按 ffmpeg 规则转义
+  const toListLine = (one: string): string =>
+    `file '${one.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`;
+  const listPath = join(dirname(outPath), `starvoice-volc-concat-${randomUUID()}.txt`);
+  try {
+    await writeFile(listPath, `${mp3Paths.map(toListLine).join('\n')}\n`, 'utf8');
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new VolcTtsError('VOLC_TTS_WRITE_FAILED', `写入音频拼接清单失败：${detail}`);
+  }
+  try {
+    const result = spawnSync(
+      ffmpegPath,
+      ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', outPath],
+      { encoding: 'utf8', windowsHide: true },
+    );
+    if (result.error) {
+      throw new VolcTtsError(
+        'VOLC_TTS_TRANSCODE_FAILED',
+        `启动 ffmpeg 拼接失败：${result.error.message}`,
+      );
+    }
+    if (result.status !== 0) {
+      const detail = (result.stderr ?? '').trim().slice(0, 300);
+      throw new VolcTtsError(
+        'VOLC_TTS_TRANSCODE_FAILED',
+        `ffmpeg 拼接分段音频失败${detail.length > 0 ? `：${detail}` : ''}`,
+      );
+    }
+  } finally {
+    await unlink(listPath).catch(() => undefined);
+  }
+};
+
 // ---------- 合成器（与 liveSpeaker 的 LocalWavSynth 同构）----------
 
 /** 单次合成覆盖项：缺省回落构造/环境变量默认值，liveSpeaker 现有调用（只传 text）行为完全不变 */
@@ -225,6 +336,8 @@ export interface VolcTtsSynthOptions {
   outDir?: string;
   /** 测试注入转码器；生产用 ffmpeg */
   transcode?: VolcTranscoder;
+  /** 测试注入多段拼装器；生产用 ffmpeg concat */
+  concatMp3?: VolcMp3Concatenator;
 }
 
 /**
@@ -268,62 +381,98 @@ export class VolcTtsSynth implements LocalWavSynth {
     const fetchFn = this.options.fetchFn ?? fetch;
     const outDir = this.options.outDir ?? tmpdir();
     const transcode = this.options.transcode ?? volcDefaultTranscoder;
+    const concatMp3 = this.options.concatMp3 ?? volcDefaultConcatMp3;
 
     const url = `${baseUrl}${VOLC_TTS_SSE_PATH}`;
-    const body = buildVolcTtsRequestBody({
-      text: cleaned,
-      speaker,
-      sampleRate,
-      speechRate,
-    });
+    // 超长文本先按标点分段，逐段合成 mp3，再拼回一条，最后只转码一次
+    const segments = splitTtsSegments(cleaned, VOLC_TTS_MAX_CHARS_PER_REQUEST);
 
-    let response: Response;
-    try {
-      response = await fetchFn(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Api-Key': apiKey,
-          'X-Api-Resource-Id': resourceId,
-          'X-Api-Request-Id': randomUUID(),
-        },
-        body,
-        signal: buildAbortSignal(timeoutMs),
+    /** 合成单个片段：请求 + 收流，返回该段 mp3 字节（错误语义与原单请求一致） */
+    const requestSegment = async (segmentText: string): Promise<Buffer> => {
+      const body = buildVolcTtsRequestBody({
+        text: segmentText,
+        speaker,
+        sampleRate,
+        speechRate,
       });
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      throw new VolcTtsError('VOLC_TTS_HTTP_FAILED', `调用火山 TTS 失败：${detail}`);
-    }
 
-    if (!response.ok) {
-      const detail = (await response.text().catch(() => '')).trim().slice(0, 300);
-      throw new VolcTtsError(
-        'VOLC_TTS_HTTP_FAILED',
-        `火山 TTS 返回异常状态 ${response.status}${detail.length > 0 ? `：${detail}` : ''}`,
-      );
-    }
-
-    let sseText: string;
-    try {
-      sseText = await response.text();
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      throw new VolcTtsError('VOLC_TTS_STREAM_PARSE_FAILED', `读取火山 TTS 响应失败：${detail}`);
-    }
-    const audioBytes = collectVolcSseAudio(sseText);
-
-    const id = randomUUID();
-    const mp3Path = join(outDir, `starvoice-volc-${id}.mp3`);
-    const wavPath = join(outDir, `starvoice-volc-${id}.wav`);
-    try {
+      let response: Response;
       try {
-        await writeFile(mp3Path, audioBytes);
+        response = await fetchFn(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Api-Key': apiKey,
+            'X-Api-Resource-Id': resourceId,
+            'X-Api-Request-Id': randomUUID(),
+          },
+          body,
+          signal: buildAbortSignal(timeoutMs),
+        });
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
-        throw new VolcTtsError('VOLC_TTS_WRITE_FAILED', `写入火山音频临时文件失败：${detail}`);
+        throw new VolcTtsError('VOLC_TTS_HTTP_FAILED', `调用火山 TTS 失败：${detail}`);
       }
+
+      if (!response.ok) {
+        const detail = (await response.text().catch(() => '')).trim().slice(0, 300);
+        throw new VolcTtsError(
+          'VOLC_TTS_HTTP_FAILED',
+          `火山 TTS 返回异常状态 ${response.status}${detail.length > 0 ? `：${detail}` : ''}`,
+        );
+      }
+
+      let sseText: string;
       try {
-        await transcode(mp3Path, wavPath, sampleRate);
+        sseText = await response.text();
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new VolcTtsError('VOLC_TTS_STREAM_PARSE_FAILED', `读取火山 TTS 响应失败：${detail}`);
+      }
+      return collectVolcSseAudio(sseText);
+    };
+
+    const id = randomUUID();
+    const wavPath = join(outDir, `starvoice-volc-${id}.wav`);
+    /** 已落盘的分段 mp3（中间产物，无论成败都要清理） */
+    const segmentMp3Paths: string[] = [];
+    /** 分段拼出的中间 mp3（仅多段时存在） */
+    let mergedMp3Path: string | undefined;
+    try {
+      for (let i = 0; i < segments.length; i += 1) {
+        const audioBytes = await requestSegment(segments[i] ?? '');
+        const segmentPath = join(outDir, `starvoice-volc-${id}-${i}.mp3`);
+        try {
+          await writeFile(segmentPath, audioBytes);
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err);
+          throw new VolcTtsError('VOLC_TTS_WRITE_FAILED', `写入火山音频临时文件失败：${detail}`);
+        }
+        segmentMp3Paths.push(segmentPath);
+      }
+
+      // 单段直接转码；多段先用 ffmpeg concat 拼成一条 mp3，再统一转码（只转一次）
+      let sourceMp3Path = segmentMp3Paths[0];
+      if (sourceMp3Path === undefined) {
+        throw new VolcTtsError('VOLC_TTS_INVALID_PARAMS', '待合成文本不能为空');
+      }
+      if (segmentMp3Paths.length > 1) {
+        const mergedPath = join(outDir, `starvoice-volc-${id}-merged.mp3`);
+        try {
+          await concatMp3(segmentMp3Paths, mergedPath);
+        } catch (err) {
+          if (err instanceof VolcTtsError) {
+            throw err;
+          }
+          const detail = err instanceof Error ? err.message : String(err);
+          throw new VolcTtsError('VOLC_TTS_TRANSCODE_FAILED', `拼接分段音频失败：${detail}`);
+        }
+        mergedMp3Path = mergedPath;
+        sourceMp3Path = mergedPath;
+      }
+
+      try {
+        await transcode(sourceMp3Path, wavPath, sampleRate);
       } catch (err) {
         if (err instanceof VolcTtsError) {
           throw err;
@@ -340,8 +489,13 @@ export class VolcTtsSynth implements LocalWavSynth {
       await unlink(wavPath).catch(() => undefined);
       throw err;
     } finally {
-      // mp3 中间产物不入库，无论成败都清理
-      await unlink(mp3Path).catch(() => undefined);
+      // mp3 中间产物不入库，无论成败都清理（含分段件与拼接件）
+      for (const segmentPath of segmentMp3Paths) {
+        await unlink(segmentPath).catch(() => undefined);
+      }
+      if (mergedMp3Path !== undefined) {
+        await unlink(mergedMp3Path).catch(() => undefined);
+      }
     }
   }
 }

@@ -619,7 +619,8 @@ dbIt('生成场景：缺省按团购、自定义透传参考素材、非法场�
   const token = await registerAndGetToken(PHONE_GEN_SCENARIO);
   await resetUserData(PHONE_GEN_SCENARIO);
   const sourceScriptId = await seedOwnedScript(PHONE_GEN_SCENARIO);
-  vi.mocked(fetch).mockResolvedValue(fakeDeepSeekResponse(cleanLoopJson()));
+  // 本用例会请求三次，需各自一份崭新的 Response（body 只能被消费一次）
+  vi.mocked(fetch).mockImplementation(() => Promise.resolve(fakeDeepSeekResponse(cleanLoopJson())));
 
   /** 取第 N 次 fetch 调用体里的 messages（system + user） */
   const messagesOf = (callIndex: number) => {
