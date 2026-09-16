@@ -315,10 +315,20 @@ export const liveDanmaku = pgTable(
     // 弹幕到达时间
     sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    // ---------- 采集通道字段（R1）----------
+    // 既有「测试弹幕注入」路径不传这些字段，全部保持 NULL（行为不变）；
+    // 自研采集通道落库后用于重连重放的幂等去重与排障审计。
+    platform: varchar('platform', { length: 16 }),
+    roomRef: varchar('room_ref', { length: 128 }),
+    msgKey: varchar('msg_key', { length: 128 }),
+    msgType: varchar('msg_type', { length: 16 }),
   },
   (table) => [
     index('live_danmaku_live_id_idx').on(table.liveId),
     index('live_danmaku_sent_at_idx').on(table.sentAt),
+    // 幂等键：同一平台同一条消息只落一行。PG 唯一索引默认 NULLS DISTINCT，
+    // 因此 platform / msg_key 为 NULL 的注入行与历史行不会互相冲突。
+    uniqueIndex('live_danmaku_platform_msg_key_unique').on(table.platform, table.msgKey),
   ],
 );
 

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app';
 import { pool } from '../src/db/client';
-import { onDanmaku, type LiveDanmakuRecord } from '../src/services/danmaku';
+import { danmakuGateway, onDanmaku, type LiveDanmakuRecord } from '../src/services/danmaku';
 
 const app: FastifyInstance = buildApp();
 
@@ -31,6 +31,8 @@ const PHONE_DM = '13920000307'; // 写入成功
 const PHONE_DM_IDLE = '13920000308'; // 非直播中场次
 const PHONE_OWNER_A = '13920000309'; // 归属隔离 A
 const PHONE_OWNER_B = '13920000310'; // 归属隔离 B
+const PHONE_DM_IDEM = '13920000311'; // R1 采集通道幂等
+const PHONE_DM_NULLKEY = '13920000312'; // R1 注入路径（无 msg_key）
 
 async function registerAndGetToken(phone: string): Promise<string> {
   const send = await app.inject({
@@ -207,4 +209,89 @@ dbIt('内容校验：空 / 超长 / 非字符串返回 400 CONTENT_INVALID，昵
   expect(ok.statusCode).toBe(201);
   const saved = (ok.json() as { danmaku: { senderNickname: string | null } }).danmaku;
   expect(saved.senderNickname?.length).toBe(50);
+});
+// ---------- R1：采集通道字段与幂等去重（自研采集重启） ----------
+
+dbIt('采集通道幂等：同 (platform, msgKey) 重放只落一行、且不二次广播', async () => {
+  const token = await registerAndGetToken(PHONE_DM_IDEM);
+  await resetUserData(PHONE_DM_IDEM);
+  const liveId = await createLiveDraft(token);
+  await setLiveStatus(liveId, 'live');
+  const userId = await userIdOf(PHONE_DM_IDEM);
+
+  const received: LiveDanmakuRecord[] = [];
+  const unsubscribe = onDanmaku((message) => received.push(message));
+  try {
+    const first = await danmakuGateway.ingest(userId, liveId, {
+      content: '这条平台会重放',
+      senderNickname: '重放测试',
+      platform: 'douyin',
+      roomRef: '7123456789012345678',
+      msgKey: 'msg-abc-1',
+      msgType: 'chat',
+    });
+    expect(received).toHaveLength(1);
+
+    // 断线重连后平台把同一条消息又推了一遍（msgKey 相同）
+    const second = await danmakuGateway.ingest(userId, liveId, {
+      content: '这条平台会重放',
+      senderNickname: '重放测试',
+      platform: 'douyin',
+      roomRef: '7123456789012345678',
+      msgKey: 'msg-abc-1',
+      msgType: 'chat',
+    });
+
+    // 幂等：返回同一条记录；【关键】不二次广播 —— 否则 G4 引擎重复回复，观众听到两次口播
+    expect(second.id).toBe(first.id);
+    expect(received).toHaveLength(1);
+
+    // 库里也只有一行，且采集字段落到位
+    const rows = await pool.query(
+      'SELECT platform, room_ref, msg_key, msg_type FROM live_danmaku WHERE live_id = $1',
+      [liveId],
+    );
+    expect(rows.rowCount).toBe(1);
+    expect(rows.rows[0]).toMatchObject({
+      platform: 'douyin',
+      room_ref: '7123456789012345678',
+      msg_key: 'msg-abc-1',
+      msg_type: 'chat',
+    });
+
+    // 换一个 msgKey 仍应正常写入并广播（唯一索引不能误伤新消息）
+    await danmakuGateway.ingest(userId, liveId, {
+      content: '另一条真的新消息',
+      platform: 'douyin',
+      roomRef: '7123456789012345678',
+      msgKey: 'msg-abc-2',
+      msgType: 'chat',
+    });
+    expect(received).toHaveLength(2);
+  } finally {
+    unsubscribe();
+  }
+});
+
+dbIt('注入路径不带采集字段：msg_key 为 NULL，多条并存不被唯一索引拦', async () => {
+  const token = await registerAndGetToken(PHONE_DM_NULLKEY);
+  await resetUserData(PHONE_DM_NULLKEY);
+  const liveId = await createLiveDraft(token);
+  await setLiveStatus(liveId, 'live');
+
+  for (const content of ['第一条', '第二条', '第三条']) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/lives/' + liveId + '/danmaku',
+      headers: bearer(token),
+      payload: { content },
+    });
+    expect(res.statusCode).toBe(201);
+  }
+
+  const rows = await pool.query(
+    'SELECT count(*)::int AS n FROM live_danmaku WHERE live_id = $1 AND msg_key IS NULL',
+    [liveId],
+  );
+  expect(rows.rows[0]).toMatchObject({ n: 3 });
 });
