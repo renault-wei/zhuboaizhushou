@@ -79,6 +79,17 @@ class ProfilePage extends ConsumerWidget {
             route: '/profile/terms',
           ),
           const SizedBox(height: 20),
+          const _GroupHeader('直播设置'),
+          const SizedBox(height: 8),
+          const _NavMenuTile(
+            entryKey: Key('profileLiveSettingsEntry'),
+            openButtonKey: Key('profileLiveSettingsOpenButton'),
+            icon: Icons.tune_rounded,
+            title: '智能回复与话术',
+            subtitle: '回复频次 · 违禁词 · 默认语速',
+            route: '/profile/live-settings',
+          ),
+          const SizedBox(height: 20),
           const _GroupHeader('帮助与支持'),
           const SizedBox(height: 8),
           const _NavMenuTile(

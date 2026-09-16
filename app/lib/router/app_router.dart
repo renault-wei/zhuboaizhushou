@@ -8,6 +8,7 @@ import 'package:starvoice_app/features/danmaku_watch/presentation/danmaku_watch_
 import 'package:starvoice_app/core/navigation/app_shell.dart';
 import 'package:starvoice_app/features/douyin/presentation/douyin_bind_page.dart';
 import 'package:starvoice_app/features/home/presentation/home_page.dart';
+import 'package:starvoice_app/features/live_settings/presentation/live_settings_page.dart';
 import 'package:starvoice_app/features/lives/presentation/live_form_page.dart';
 import 'package:starvoice_app/features/lives/presentation/live_list_page.dart';
 import 'package:starvoice_app/features/lives/presentation/live_monitor_page.dart';
@@ -153,6 +154,11 @@ GoRouter createAppRouter(AuthController authController) {
         builder: (context, state) => const DanmakuWatchPage(),
       ),
       // 「我的」页帮助与协议静态子页：隐私政策 / 服务协议 / AI 说明 / 客服 / 关于
+      // R23：账号级直播设置（智能回复 / 违禁词 / 默认语速）
+      GoRoute(
+        path: '/profile/live-settings',
+        builder: (context, state) => const LiveSettingsPage(),
+      ),
       GoRoute(
         path: '/profile/privacy',
         builder: (context, state) => const PrivacyPolicyPage(),

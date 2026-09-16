@@ -238,6 +238,15 @@ class FakeBackend implements HttpClientAdapter {
   /// 采集通道是否启用（模拟服务端未配签名 Key 的部署 → false）。
   bool danmakuSourceEnabled = true;
 
+  // ---------- R21 账号级直播设置（内存态，PATCH 合并语义与真服务端一致） ----------
+  final Map<String, dynamic> liveSettings = <String, dynamic>{
+    'replyEnabled': true,
+    'replyIntervalSeconds': 5,
+    'replyExtraKnowledge': null,
+    'bannedWords': null,
+    'defaultSpeechRate': null,
+  };
+
   // ---------- R16b 独立弹幕监控（内存态） ----------
   /// 当前在跑的独立监控。
   final List<Map<String, dynamic>> danmakuWatches = <Map<String, dynamic>>[];
@@ -463,6 +472,21 @@ class FakeBackend implements HttpClientAdapter {
     }
     if (options.method == 'POST' && path.endsWith('/api/voices')) {
       return _createVoice(options);
+    }
+    // R21 账号级直播设置（注意：limits 必须排在主路径之前判断）
+    if (options.method == 'GET' && path.endsWith('/api/me/live-settings/limits')) {
+      return _jsonResponse(<String, dynamic>{
+        'replyIntervalSeconds': <String, dynamic>{'min': 1, 'max': 60},
+        'autoEndMinutes': <String, dynamic>{'min': 10, 'max': 1440},
+        'defaultSpeechRate': <String, dynamic>{'min': -20, 'max': 60},
+        'maxTextLength': 2000,
+      });
+    }
+    if (options.method == 'GET' && path.endsWith('/api/me/live-settings')) {
+      return _jsonResponse(<String, dynamic>{'settings': liveSettings});
+    }
+    if (options.method == 'PATCH' && path.endsWith('/api/me/live-settings')) {
+      return _patchLiveSettings(options);
     }
     // R19 TTS 分段预览
     if (options.method == 'POST' && path.endsWith('/api/tts/segment-preview')) {
@@ -1262,6 +1286,15 @@ class FakeBackend implements HttpClientAdapter {
     return _jsonResponse({'danmaku': record}, 201);
   }
 
+
+  /// 账号级直播设置（R21）：PATCH 只覆盖传了的字段，其余保持原值（与真服务端同语义）
+  ResponseBody _patchLiveSettings(RequestOptions options) {
+    final body = _readBody(options);
+    for (final entry in body.entries) {
+      liveSettings[entry.key] = entry.value;
+    }
+    return _jsonResponse(<String, dynamic>{'settings': liveSettings});
+  }
 
   /// TTS 分段预览（R19）：**简化替身** —— 按「每 200 字一段」粗算段数。
   /// 真服务端的断点会找标点，这里不复刻（切段算法本身由服务端单测覆盖）；

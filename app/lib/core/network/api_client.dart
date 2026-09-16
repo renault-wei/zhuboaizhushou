@@ -8,6 +8,7 @@ import 'package:starvoice_app/core/models/app_config.dart';
 import 'package:starvoice_app/core/models/danmaku_source.dart';
 import 'package:starvoice_app/core/models/tts_segments.dart';
 import 'package:starvoice_app/core/models/danmaku_watch.dart';
+import 'package:starvoice_app/core/models/live_settings.dart';
 import 'package:starvoice_app/core/models/douyin_bind_status.dart';
 import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/models/user_profile.dart';
@@ -992,6 +993,49 @@ class ApiClient {
         data: <String, dynamic>{'text': text},
       );
       return TtsSegmentPreview.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  // ---------- R21：账号级直播设置 ----------
+
+  /// 读账号级直播设置（无记录时服务端回默认值，不会报错）。
+  Future<LiveSettings> fetchLiveSettings() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/api/me/live-settings');
+      final raw = response.data?['settings'];
+      return LiveSettings.fromJson(
+        raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{},
+      );
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 改账号级直播设置：**只传要改的字段**，其余服务端保持原值。
+  Future<LiveSettings> updateLiveSettings(LiveSettings settings) async {
+    try {
+      final response = await _dio.patch<Map<String, dynamic>>(
+        '/api/me/live-settings',
+        data: settings.toPatch(),
+      );
+      final raw = response.data?['settings'];
+      return LiveSettings.fromJson(
+        raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{},
+      );
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 读上下限（避免前端硬编码区间，与后端校验永远同源）。
+  Future<LiveSettingsLimits> fetchLiveSettingsLimits() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/api/me/live-settings/limits',
+      );
+      return LiveSettingsLimits.fromJson(response.data ?? <String, dynamic>{});
     } on DioException catch (error) {
       throw _toApiException(error);
     }
