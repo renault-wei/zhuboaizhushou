@@ -18,6 +18,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:starvoice_app/core/models/danmaku_source.dart';
 import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/models/loop_script.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
@@ -95,6 +96,20 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   /// 直播中热更话术（弹幕回复知识）进行中（防重复点击）
   bool _updatingScript = false;
 
+  /// 弹幕采集源状态（R2 · D4.1）：贴一段分享链接就能让服务端以观众身份连入
+  /// 本直播间监听真实弹幕 —— 落库后自动走既有的「AI 回复 → 出声」链路。
+  /// 拉取失败时保持上一次快照：它是旁路信息，不该打断工作台主流程。
+  DanmakuSourceStatus? _danmakuSource;
+
+  /// 采集源链接输入框（贴抖音分享文本 / 链接）
+  final TextEditingController _sourceController = TextEditingController();
+
+  /// 起采集进行中（防重复点击）
+  bool _bindingSource = false;
+
+  /// 停采集进行中（防重复点击）
+  bool _stoppingSource = false;
+
   @override
   void initState() {
     super.initState();
@@ -102,6 +117,7 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadMonitor();
       _loadDanmaku();
+      _loadDanmakuSource();
       _monitorTimer = Timer.periodic(_monitorInterval, (_) => _loadMonitor());
       _danmakuTimer = Timer.periodic(_danmakuInterval, (_) => _loadDanmaku());
       // 已播时长每秒递增：monitor 未刷新时也能平滑走动
@@ -121,6 +137,7 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     _danmakuTimer?.cancel();
     _ticker?.cancel();
     _testController.dispose();
+    _sourceController.dispose();
     final speaker = _speakerNotifier;
     if (speaker != null) {
       // 出声收口延后到当前卸载帧完成后再停用：元素已随页面卸载，同步
@@ -496,6 +513,7 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
       onRefresh: () async {
         await _loadMonitor();
         await _loadDanmaku();
+        await _loadDanmakuSource();
       },
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -512,6 +530,8 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
             const SizedBox(height: 12),
             _buildAssistantSpeakerCard(),
           ],
+          const SizedBox(height: 12),
+          _buildDanmakuSourceCard(monitor),
           const SizedBox(height: 12),
           _buildTestDanmakuSection(monitor),
           const SizedBox(height: 12),
@@ -1232,6 +1252,206 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
         setState(() => _updatingLoop = false);
       }
     }
+  }
+
+
+  /// 拉取本场采集源状态（只读）。失败静默：采集状态是旁路信息，
+  /// 拉不到就维持上一次快照，不打断工作台。
+  Future<void> _loadDanmakuSource() async {
+    try {
+      final status = await ref
+          .read(apiClientProvider)
+          .fetchDanmakuSource(widget.liveId);
+      if (mounted) {
+        setState(() => _danmakuSource = status);
+      }
+    } on ApiException {
+      // 旁路信息：静默保持旧快照
+    }
+  }
+
+  /// 起采集：把分享文本交给服务端（短链展开在服务端完成），以观众身份连入监听。
+  /// 仅直播中可用；服务端未配签名 Key 时返回 503 SOURCE_DISABLED。
+  Future<void> _bindDanmakuSource() async {
+    final text = _sourceController.text.trim();
+    if (text.isEmpty) {
+      return;
+    }
+    setState(() => _bindingSource = true);
+    try {
+      final binding = await ref
+          .read(apiClientProvider)
+          .bindDanmakuSource(widget.liveId, shareText: text);
+      if (!mounted) {
+        return;
+      }
+      _sourceController.clear();
+      _showSnack('正在监听 ${binding.platformLabel} 直播间 ${binding.roomRef}');
+      await _loadDanmakuSource();
+    } on ApiException catch (error) {
+      if (mounted) {
+        _showSnack('起采集失败：${error.message}');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _bindingSource = false);
+      }
+    }
+  }
+
+  /// 停采集并解绑（幂等）。
+  Future<void> _stopDanmakuSource() async {
+    setState(() => _stoppingSource = true);
+    try {
+      await ref.read(apiClientProvider).stopDanmakuSource(widget.liveId);
+      if (!mounted) {
+        return;
+      }
+      _showSnack('已停止采集');
+      await _loadDanmakuSource();
+    } on ApiException catch (error) {
+      if (mounted) {
+        _showSnack('停止采集失败：${error.message}');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _stoppingSource = false);
+      }
+    }
+  }
+
+  /// 采集状态文案：把「通道是否启用 / 有没有绑定 / 会话什么状态」讲成一句人话。
+  String _sourceHintText(LiveMonitor monitor) {
+    final source = _danmakuSource;
+    if (source != null && !source.enabled) {
+      return '该服务端未配置签名 Key，采集通道未启用';
+    }
+    final binding = source?.binding;
+    if (binding == null) {
+      return monitor.status == LiveStatus.live
+          ? '贴一段直播分享链接，服务端会以观众身份连入监听真实弹幕'
+          : '开播后即可开始采集';
+    }
+    final state = source?.watch?.label ?? '未在监听';
+    final err = source?.watch?.lastError;
+    return '${binding.platformLabel} · 房间 ${binding.roomRef} · $state'
+        '${err == null || err.isEmpty ? '' : '（$err）'}';
+  }
+
+  /// 弹幕采集卡（R2 · D4.1）：现场工作台里「真实弹幕」的入口。
+  /// 与下方「发送测试弹幕」并列 —— 一个喂真数据，一个手工联调。
+  Widget _buildDanmakuSourceCard(LiveMonitor monitor) {
+    final source = _danmakuSource;
+    final enabled = source?.enabled ?? true;
+    final binding = source?.binding;
+    final live = monitor.status == LiveStatus.live;
+    final canBind =
+        enabled && live && !_bindingSource && _sourceController.text.trim().isNotEmpty;
+    return Container(
+      key: const Key('liveMonitorSourceCard'),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.nightCard,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.nightStroke),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.live.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: const Icon(
+                  Icons.podcasts_outlined,
+                  size: 18,
+                  color: AppColors.live,
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  '弹幕采集',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.nightText,
+                  ),
+                ),
+              ),
+              if (binding != null)
+                TextButton(
+                  key: const Key('liveMonitorSourceStop'),
+                  onPressed: _stoppingSource ? null : _stopDanmakuSource,
+                  child: Text(_stoppingSource ? '停止中…' : '停止'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _sourceHintText(monitor),
+            key: const Key('liveMonitorSourceState'),
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppColors.nightTextDim,
+              height: 1.4,
+            ),
+          ),
+          if (enabled && binding == null) ...[
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: TextField(
+                    key: const Key('liveMonitorSourceInput'),
+                    controller: _sourceController,
+                    enabled: live && !_bindingSource,
+                    textInputAction: TextInputAction.done,
+                    onChanged: (_) => setState(() {}),
+                    onSubmitted: canBind ? (_) => _bindDanmakuSource() : null,
+                    style: const TextStyle(color: AppColors.nightText),
+                    decoration: InputDecoration(
+                      hintText: '粘贴抖音分享链接 / 文本',
+                      isDense: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  height: 48,
+                  child: FilledButton(
+                    key: const Key('liveMonitorSourceBind'),
+                    onPressed: canBind ? _bindDanmakuSource : null,
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: _bindingSource
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('开始采集'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   /// 测试弹幕注入区：模拟一条观众提问，跑通「弹幕 → AI 回复 → 语音播报」

@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 
 import 'package:starvoice_app/core/models/coupon.dart';
 import 'package:starvoice_app/core/models/app_config.dart';
+import 'package:starvoice_app/core/models/danmaku_source.dart';
 import 'package:starvoice_app/core/models/douyin_bind_status.dart';
 import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/models/user_profile.dart';
@@ -862,6 +863,54 @@ class ApiClient {
       final raw = response.data?['danmaku'];
       return LiveDanmaku.fromJson(
         raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{},
+      );
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+
+  /// 绑定弹幕采集源并起采集（R2）：贴一段抖音分享文本 / 链接（或直接给房间号）即可。
+  /// 仅**直播中**的场次可起采集（非 live 服务端 409 LIVE_NOT_LIVE）；
+  /// 该部署未配签名 Key 时服务端返回 503 SOURCE_DISABLED，调用方应展示 enabled=false 的提示。
+  Future<DanmakuSourceBinding> bindDanmakuSource(
+    String id, {
+    required String shareText,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/lives/$id/danmaku-source',
+        data: <String, dynamic>{'shareText': shareText},
+      );
+      final raw = response.data?['source'];
+      return DanmakuSourceBinding.fromJson(
+        raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{},
+      );
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 停止本场弹幕采集并解绑（幂等）：返回服务端是否确实存在过绑定。
+  Future<bool> stopDanmakuSource(String id) async {
+    try {
+      final response = await _dio.delete<Map<String, dynamic>>(
+        '/api/lives/$id/danmaku-source',
+      );
+      return response.data?['stopped'] == true;
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 查询本场采集状态（通道是否启用 + 绑定 + 运行态快照）。
+  Future<DanmakuSourceStatus> fetchDanmakuSource(String id) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/api/lives/$id/danmaku-source',
+      );
+      return DanmakuSourceStatus.fromJson(
+        response.data ?? <String, dynamic>{},
       );
     } on DioException catch (error) {
       throw _toApiException(error);

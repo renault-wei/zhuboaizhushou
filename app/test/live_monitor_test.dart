@@ -555,4 +555,52 @@ void main() {
 
     await _unmount(tester);
   });
+
+  testWidgets('弹幕采集卡：贴分享链接起采集 → 监听中 → 可停止（R2 · D4.1）', (tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
+      ],
+    );
+    await _pumpMonitor(tester, backend);
+
+    // 未绑定：卡片在，给出输入框与「开始采集」，没有停止按钮
+    expect(find.byKey(const Key('liveMonitorSourceCard')), findsOneWidget);
+    expect(find.byKey(const Key('liveMonitorSourceInput')), findsOneWidget);
+    expect(find.byKey(const Key('liveMonitorSourceStop')), findsNothing);
+
+    final input = find.byKey(const Key('liveMonitorSourceInput'));
+    await tester.ensureVisible(input);
+    await tester.enterText(input, 'https://live.douyin.com/7686117195721837352');
+    await tester.pump();
+
+    final bindButton = find.byKey(const Key('liveMonitorSourceBind'));
+    await tester.ensureVisible(bindButton);
+    await tester.tap(bindButton);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump(const Duration(milliseconds: 350));
+
+    // 绑定后：输入框收起、出现停止按钮；状态行报「监听中 · 已收到 N 条」
+    expect(find.byKey(const Key('liveMonitorSourceInput')), findsNothing);
+    expect(find.byKey(const Key('liveMonitorSourceStop')), findsOneWidget);
+    final stateText = tester.widget<Text>(
+      find.byKey(const Key('liveMonitorSourceState')),
+    );
+    expect(stateText.data, contains('监听中'));
+    // 房间号来自分享文本，由服务端解析后回填
+    expect(stateText.data, contains('7686117195721837352'));
+
+    final stopButton = find.byKey(const Key('liveMonitorSourceStop'));
+    await tester.ensureVisible(stopButton);
+    await tester.tap(stopButton);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump(const Duration(milliseconds: 350));
+
+    // 停止后回到未绑定态
+    expect(find.byKey(const Key('liveMonitorSourceInput')), findsOneWidget);
+
+    await _unmount(tester);
+  });
 }

@@ -232,6 +232,15 @@ class FakeBackend implements HttpClientAdapter {
   int _liveSeq = 0;
   int _danmakuSeq = 0;
 
+  /// 弹幕采集源绑定（R2 · D4.1）：内存态；null 表示本场未绑定。
+  Map<String, dynamic>? danmakuSource;
+
+  /// 采集通道是否启用（模拟服务端未配签名 Key 的部署 → false）。
+  bool danmakuSourceEnabled = true;
+
+  /// 模拟已收到的事件数。
+  int danmakuSourceEventCount = 0;
+
   /// 模拟 DeepSeek 返回的话术全文：生成接口使用，测试可自行配置。
   final String generatedScriptContent;
 
@@ -459,7 +468,7 @@ class FakeBackend implements HttpClientAdapter {
     // stream-status / start / end / monitor / danmaku）需先于单段正则匹配，
     // 避免被 /api/lives/:id 的 GET/PATCH/DELETE 规则吞掉。
     final liveAction = RegExp(
-      r'^/api/lives/([^/]+)/(video|prepare|stream-status|start|end|monitor|danmaku|loop-script|script)$',
+      r'^/api/lives/([^/]+)/(video|prepare|stream-status|start|end|monitor|danmaku-source|danmaku|loop-script|script)$',
     ).firstMatch(path);
     if (liveAction != null && options.method == 'POST') {
       switch (liveAction.group(2)) {
@@ -477,6 +486,8 @@ class FakeBackend implements HttpClientAdapter {
           return _endLive(liveAction.group(1)!);
         case 'danmaku':
           return _postDanmaku(liveAction.group(1)!, options);
+        case 'danmaku-source':
+          return _bindDanmakuSource(liveAction.group(1)!, options);
       }
     }
     if (liveAction != null && options.method == 'GET') {
@@ -487,6 +498,13 @@ class FakeBackend implements HttpClientAdapter {
           return _liveMonitor(liveAction.group(1)!);
         case 'danmaku':
           return _listDanmaku(liveAction.group(1)!, options);
+        case 'danmaku-source':
+          return _getDanmakuSource(liveAction.group(1)!);
+      }
+    }
+    if (liveAction != null && options.method == 'DELETE') {
+      if (liveAction.group(2) == 'danmaku-source') {
+        return _stopDanmakuSource(liveAction.group(1)!);
       }
     }
     final liveItem = RegExp(r'^/api/lives/([^/]+)$').firstMatch(path);
@@ -1213,6 +1231,77 @@ class FakeBackend implements HttpClientAdapter {
     };
     danmaku.insert(0, record);
     return _jsonResponse({'danmaku': record}, 201);
+  }
+
+
+  /// 弹幕采集源状态（R2）：GET /api/lives/:id/danmaku-source
+  ResponseBody _getDanmakuSource(String liveId) {
+    final binding = danmakuSource;
+    return _jsonResponse({
+      'enabled': danmakuSourceEnabled,
+      'binding': binding,
+      'watch': binding == null
+          ? null
+          : <String, dynamic>{
+              'key': binding['watchKey'],
+              'target': <String, dynamic>{
+                'source': binding['platform'],
+                'platform': binding['platform'],
+                'roomRef': binding['roomRef'],
+                'liveId': liveId,
+              },
+              'status': 'connected',
+              'openAttempts': 1,
+              'eventCount': danmakuSourceEventCount,
+              'invalidEvents': 0,
+              'startedAt': binding['startedAt'],
+              'connectedAt': binding['startedAt'],
+              'lastError': null,
+            },
+    });
+  }
+
+  /// 起采集（R2）：POST /api/lives/:id/danmaku-source（仅直播中可起）。
+  ResponseBody _bindDanmakuSource(String liveId, RequestOptions options) {
+    if (!danmakuSourceEnabled) {
+      return _jsonResponse({
+        'error': 'SOURCE_DISABLED',
+        'message': '未配置 DOUYIN_SIGN_API_KEY，采集通道未启用',
+      }, 503);
+    }
+    final live = _findLive(liveId);
+    if (live == null) {
+      return _jsonResponse({
+        'error': 'LIVE_NOT_FOUND',
+        'message': '开播配置不存在',
+      }, 404);
+    }
+    if (live['status'] != 'live') {
+      return _jsonResponse({
+        'error': 'LIVE_NOT_COLLECTABLE',
+        'message': '已结束 / 失败的场次不能再登记弹幕采集',
+      }, 409);
+    }
+    final body = _readBody(options);
+    final shareText = body['shareText']?.toString().trim() ?? '';
+    final matched = RegExp(r'(\d{5,})').firstMatch(shareText);
+    final roomRef = matched?.group(1) ?? '7000000000000000000';
+    danmakuSource = <String, dynamic>{
+      'liveId': liveId,
+      'userId': 'user-fake',
+      'platform': 'douyin',
+      'roomRef': roomRef,
+      'watchKey': 'douyin:douyin:$roomRef',
+      'startedAt': DateTime.now().toUtc().toIso8601String(),
+    };
+    return _jsonResponse({'source': danmakuSource, 'running': true}, 201);
+  }
+
+  /// 停采集（R2）：DELETE /api/lives/:id/danmaku-source（幂等）。
+  ResponseBody _stopDanmakuSource(String liveId) {
+    final existed = danmakuSource != null;
+    danmakuSource = null;
+    return _jsonResponse({'stopped': existed});
   }
 
   /// 某场次下的弹幕条目（按 liveId 过滤；预置条目必须带 liveId）。
