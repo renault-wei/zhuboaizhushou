@@ -18,10 +18,12 @@ export interface GenerateReplyInput {
   content: string;
   /** 发送者昵称（可为空） */
   senderNickname: string | null;
-  /** 商家知识：直播标题 / 绑定话术全文 / 商品快照，用于支撑真实回答 */
+  /** 商家知识：直播标题 / 绑定话术全文 / 补充知识 / 商品快照，用于支撑真实回答 */
   knowledge: {
     liveTitle: string;
     scriptContent: string | null;
+    /** 账号级「补充知识」（R22）：商家自己补的说明。**不覆盖绑定话术**，只作更正补充（用户拍板 D3） */
+    extraKnowledge?: string | null;
     productSnapshot: Record<string, string> | null;
   };
 }
@@ -79,9 +81,11 @@ export class DeepSeekReplyProvider implements ReplyProvider {
   }
 
   async generateReply(input: GenerateReplyInput): Promise<string | null> {
+    // 键序即优先级：绑定话术在前、补充知识在后（D3：绑定话术优先，补充知识只作更正补充）
     const knowledgeJson = JSON.stringify({
       liveTitle: input.knowledge.liveTitle,
       scriptContent: input.knowledge.scriptContent,
+      extraKnowledge: input.knowledge.extraKnowledge ?? null,
       productSnapshot: input.knowledge.productSnapshot,
     });
 

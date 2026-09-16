@@ -200,6 +200,8 @@ export const lives = pgTable(
     // 口播语速：火山 speech_rate 口径的商家滑块档（产品口径 -20~60，0 = 正常语速，默认 -10）；
     // NULL = 未设过，合成时回落 liveVoice 默认档（-10 ≈ 接近真人主播语速）
     speechRate: integer('speech_rate'),
+    // 定时关播（R26）：距开播 N 分钟后自动收尾；NULL = 不限。**最低 10 分钟**（对齐竞品口径）
+    autoEndMinutes: integer('auto_end_minutes'),
     voiceId: uuid('voice_id').references(() => voices.id, { onDelete: 'set null' }),
     scriptId: uuid('script_id').references(() => scripts.id, { onDelete: 'set null' }),
     // 绑定的循环台本（M1 起）：开播时读取一次快照驻内存，中途改台本库不影响进行中场次
@@ -299,6 +301,30 @@ export const atmosphereSettings = pgTable(
     uniqueIndex('atmosphere_settings_user_category_unique').on(table.userId, table.category),
   ],
 );
+
+// ---------- user_live_settings：账号级直播设置（R21/R27 · 2026-09-17）----------
+// 与 atmosphere_settings 的分工：那张表是「每类氛围语多久说一次」（按类别多行），
+// 本表是「这个账号的直播行为总开关」（**一账号一行**，用户拍板配置放账号级）。
+// 三块内容：
+//   ① 智能回复：开关 / 频次 / 补充知识（补充知识**不覆盖**绑定话术，只作更正补充 —— 用户拍板绑定话术优先）
+//   ② 自定义违禁词（R27）：商家自己的词表，中文顿号分隔；命中**整条丢弃不播**（区别于内置词库的兜底话术）
+//   ③ 语速默认档（D3）：账号级默认，场次 speech_rate 非空时由场次覆盖
+export const userLiveSettings = pgTable('user_live_settings', {
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  // 智能回复总开关：false = 一条都不生成（引擎 skip reason = REPLY_DISABLED，且不调 DeepSeek）
+  replyEnabled: boolean('reply_enabled').notNull().default(true),
+  // 场次级最小回复间隔（秒）：1~60，默认 5（与旧硬编码 DEFAULT_REPLY_INTERVAL_MS 同值）
+  replyIntervalSeconds: integer('reply_interval_seconds').notNull().default(5),
+  // 补充知识：拼在**绑定话术之后**，可为空
+  replyExtraKnowledge: text('reply_extra_knowledge'),
+  // 商家自定义违禁词：中文顿号分隔；**单字符词后端忽略**（对齐竞品口径，防误伤中文单字）
+  bannedWords: text('banned_words'),
+  // 账号级语速默认档：火山 speech_rate 口径 -20~60；场次非空时覆盖它
+  defaultSpeechRate: integer('default_speech_rate'),
+  ...timestamps(),
+});
 
 // ---------- live_danmaku：直播弹幕日志（T13 只读 + G3 弹幕网关写入）----------
 export const liveDanmaku = pgTable(

@@ -243,6 +243,58 @@ it('用户级频控：同昵称刷屏只回一次，其他用户不受影响', a
   expect(generateReply).toHaveBeenCalledTimes(2);
 });
 
+// ---------- R22 / R27：账号级配置生效 ----------
+
+it('R22：账号级关掉智能回复 → skip REPLY_DISABLED，且一次生成器都不调', async () => {
+  const generateReply = vi.fn(async () => '不该被调用');
+  const engine = createInteractionEngine({
+    loadContext: async () => makeContext({ replyEnabled: false }),
+    generateReply,
+    onReply: () => undefined,
+  });
+  const outcome = await engine.handle(makeMessage());
+  expect(outcome).toEqual({ action: 'skip', reason: 'REPLY_DISABLED' });
+  // 关掉就不该花钱：DEEPSEEK 一次都不调
+  expect(generateReply).not.toHaveBeenCalled();
+});
+
+it('R22：回复间隔取账号级设置，压过注入的默认值', async () => {
+  let clock = 0;
+  const engine = createInteractionEngine({
+    loadContext: async () => makeContext({ replyIntervalSeconds: 1 }),
+    // 故意注入 60s：若它赢了，第二条必被挡 —— 这就是优先级的判别式
+    globalIntervalMs: 60_000,
+    senderIntervalMs: 0,
+    now: () => clock,
+    generateReply: async () => '好的，双人套餐 99 元～',
+    onReply: () => undefined,
+  });
+
+  expect((await engine.handle(makeMessage())).action).toBe('reply');
+
+  clock = 500; // 0.5s < 账号级 1s → 挡
+  expect(await engine.handle(makeMessage())).toEqual({
+    action: 'skip',
+    reason: 'GLOBAL_THROTTLED',
+  });
+
+  clock = 1500; // 1.5s ≥ 账号级 1s → 放行
+  expect((await engine.handle(makeMessage())).action).toBe('reply');
+});
+
+it('R27：命中商家自定义违禁词 → 整条丢弃（BANNED_WORD），不改兜底话术', async () => {
+  const onReply = vi.fn();
+  const engine = createInteractionEngine({
+    loadContext: async () => makeContext({ bannedWords: ['最低价'] }),
+    generateReply: async () => '咱们家最低价只要 99 元哦',
+    onReply,
+  });
+  const outcome = await engine.handle(makeMessage());
+  expect(outcome).toEqual({ action: 'skip', reason: 'BANNED_WORD' });
+  // 关键区别（用户拍板 D4）：不是改念兜底话术，而是**整条不播** —— 出口一次都不该被调用
+  expect(onReply).not.toHaveBeenCalled();
+});
+
 // ---------- G4 联调：G3 写入 → 广播 → 引擎回复 ----------
 
 // 固定手机号（与 danmaku / live_session 测试互不重叠）
@@ -305,10 +357,12 @@ dbIt('联调：POST 弹幕 → onDanmaku 广播 → 引擎产出回复', async (
   await resetUserData(PHONE_G4);
   const liveId = await createLiveDraft(token);
   await setLiveStatus(liveId, 'live');
+  // R22 起「场次级频控」由**账号级设置**决定，注入的 globalIntervalMs 只是缺省回落。
+  // 本用例走真实上下文加载，所以下面断言的是**真实优先级**：连续弹幕会被账号级间隔挡下。
 
   const replies: InteractionReply[] = [];
   const engine = createInteractionEngine({
-    // 频控放宽到 0：本次只验证链路「弹幕入库 → 事件广播 → 真实上下文 → 回复」
+    // 注意：这里传 0 **不会**生效 —— 真实上下文里的账号级间隔优先（见 handle 的优先级注释）
     globalIntervalMs: 0,
     senderIntervalMs: 0,
     generateReply: vi.fn(async () => '咱家套餐详情可以看直播间团购链接，欢迎下单～'),
@@ -318,14 +372,7 @@ dbIt('联调：POST 弹幕 → onDanmaku 广播 → 引擎产出回复', async (
   });
   const unsubscribe = engine.subscribe();
   try {
-    const contents = [
-      '老板这个双人餐多少钱？',
-      '你们几点营业？',
-      '店在哪里？',
-      '可以到店直接核销吗？',
-      '有辣锅底吗？',
-    ];
-    for (const content of contents) {
+    const post = async (content: string): Promise<void> => {
       const res = await app.inject({
         method: 'POST',
         url: `/api/lives/${liveId}/danmaku`,
@@ -333,13 +380,22 @@ dbIt('联调：POST 弹幕 → onDanmaku 广播 → 引擎产出回复', async (
         payload: { content, senderNickname: '吃货小王' },
       });
       expect(res.statusCode).toBe(201);
-    }
+    };
 
-    await waitFor(() => replies.length >= contents.length);
-    expect(replies).toHaveLength(contents.length);
-    expect(replies.every((reply) => reply.liveId === liveId && reply.source === 'generated')).toBe(
-      true,
-    );
+    // 第 1 条：走完整链路（入库 → 广播 → 真实上下文 → 生成 → 出口）
+    await post('老板这个双人餐多少钱？');
+    await waitFor(() => replies.length >= 1);
+    expect(replies).toHaveLength(1);
+    expect(replies[0]?.liveId).toBe(liveId);
+    expect(replies[0]?.source).toBe('generated');
+
+    // 后 4 条紧接着发：账号级间隔（默认 5s）把它们挡下 —— 这就是新优先级的可见证据
+    await post('你们几点营业？');
+    await post('店在哪里？');
+    await post('可以到店直接核销吗？');
+    await post('有辣锅底吗？');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(replies).toHaveLength(1);
   } finally {
     unsubscribe();
   }

@@ -5,6 +5,7 @@ import { lives as livesTable, scripts as scriptsTable } from '../db/schema';
 import { onDanmaku, type LiveDanmakuRecord } from './danmaku';
 import type { LiveStatus } from './live';
 import { replyProvider, type GenerateReplyInput } from './reply';
+import { loadUserLiveSettings, matchBannedWords, parseBannedWords } from './liveSettings';
 import { scanSensitive } from './sensitive';
 import { liveSpeaker } from './liveSpeaker';
 import { getLiveSpeech, presetSpeechOverrides } from './liveVoice';
@@ -42,6 +43,14 @@ export interface LiveInteractionContext {
   volcPresetId: string | null;
   /** 场次口播语速档（商家滑块 -20~60）：回复出口透传，null = 用默认档（-10） */
   speechRate: number | null;
+  /** 账号级设置（R22）：智能回复开关。缺省（测试替身）= 开 */
+  replyEnabled?: boolean;
+  /** 账号级设置：最小回复间隔（秒）；缺省回落 options.globalIntervalMs */
+  replyIntervalSeconds?: number;
+  /** 账号级设置：补充知识（拼在绑定话术之后，不覆盖） */
+  replyExtraKnowledge?: string | null;
+  /** 账号级设置：已解析的自定义违禁词（单字符已剔除） */
+  bannedWords?: readonly string[];
 }
 
 /** 引擎产出的一条待播回复（出口交给 G5 TTS/播放队列） */
@@ -68,10 +77,14 @@ export type InteractionSkipReason =
   | 'LIVE_NOT_FOUND'
   | 'LIVE_NOT_LIVE'
   | 'DANMAKU_EMPTY'
+  /** R22：商家在账号级设置里关掉了智能回复（此时**不调 DeepSeek**，直接跳过） */
+  | 'REPLY_DISABLED'
   | 'GLOBAL_THROTTLED'
   | 'SENDER_THROTTLED'
   | 'NO_REPLY_NEEDED'
-  | 'GENERATION_FAILED';
+  | 'GENERATION_FAILED'
+  /** R27：生成结果命中**商家自定义违禁词** —— 按用户拍板 D4「整条丢弃不播」（区别于内置词库的兜底话术） */
+  | 'BANNED_WORD';
 
 export type InteractionOutcome =
   | { action: 'reply'; reply: InteractionReply }
@@ -126,6 +139,8 @@ export async function loadLiveInteractionContext(
   if (!row) {
     return null;
   }
+  // 账号级设置：与场次同一 userId。无记录时返回默认值（行为与上线前一致，零突变）
+  const settings = await loadUserLiveSettings(row.userId);
   return {
     liveId,
     userId: row.userId,
@@ -135,6 +150,10 @@ export async function loadLiveInteractionContext(
     productSnapshot: readProductSnapshot(row.productSnapshot),
     volcPresetId: row.volcPresetId ?? null,
     speechRate: row.speechRate ?? null,
+    replyEnabled: settings.replyEnabled,
+    replyIntervalSeconds: settings.replyIntervalSeconds,
+    replyExtraKnowledge: settings.replyExtraKnowledge,
+    bannedWords: parseBannedWords(settings.bannedWords),
   };
 }
 
@@ -181,11 +200,23 @@ class InteractionEngineImpl implements InteractionEngine {
     if (context.status !== 'live') {
       return { action: 'skip', reason: 'LIVE_NOT_LIVE' };
     }
+    // R22：商家关掉智能回复 → 直接跳过。**放在最前面**，一次 DeepSeek 都不调（省成本）
+    if (context.replyEnabled === false) {
+      return { action: 'skip', reason: 'REPLY_DISABLED' };
+    }
 
-    // 场次级频控：与上一条实际回复间隔不足则丢弃（防连续弹幕刷屏）
+    // 场次级频控：与上一条实际回复间隔不足则丢弃（防连续弹幕刷屏）。
+    //
+    // **优先级：账号级设置 > 注入的默认值**（R22）。理由：`options.globalIntervalMs` 是构造期
+    // 默认，而账号级设置是**商家的真实意图** —— 若反过来，一个部署级常量会悄悄压过商家配置。
+    // 替身上下文不带该字段时回落注入值，保证单测仍可自由控制。
+    const globalIntervalMs =
+      context.replyIntervalSeconds !== undefined
+        ? context.replyIntervalSeconds * 1000
+        : this.options.globalIntervalMs;
     const now = this.options.now();
     const lastGlobalReplyAt = this.lastReplyAtByLive.get(context.liveId);
-    if (lastGlobalReplyAt !== undefined && now - lastGlobalReplyAt < this.options.globalIntervalMs) {
+    if (lastGlobalReplyAt !== undefined && now - lastGlobalReplyAt < globalIntervalMs) {
       return { action: 'skip', reason: 'GLOBAL_THROTTLED' };
     }
     // 用户级频控：同一昵称刷屏只回一次（匿名为空昵称时不做单用户限制）
@@ -210,6 +241,7 @@ class InteractionEngineImpl implements InteractionEngine {
         knowledge: {
           liveTitle: context.liveTitle,
           scriptContent: context.scriptContent,
+          extraKnowledge: context.replyExtraKnowledge ?? null,
           productSnapshot: context.productSnapshot,
         },
       });
@@ -219,6 +251,13 @@ class InteractionEngineImpl implements InteractionEngine {
     }
     if (!generatedText) {
       return { action: 'skip', reason: 'NO_REPLY_NEEDED' };
+    }
+
+    // R27（D4）：命中**商家自定义违禁词** → 整条丢弃，**不走兜底话术**。
+    // 与内置词库的处置分开：商家写进词表的本意是「这句不要出现」，换个说法播反而是违背。
+    const banned = matchBannedWords(generatedText, context.bannedWords ?? []);
+    if (banned.length > 0) {
+      return { action: 'skip', reason: 'BANNED_WORD' };
     }
 
     // 合规兜底：命中拦截级敏感词不直接播，改念安全兜底话术
