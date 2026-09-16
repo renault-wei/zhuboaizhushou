@@ -2,6 +2,7 @@ import { buildApp } from './app';
 import { env } from './config/env';
 import { pool } from './db/client';
 import { interactionEngine } from './services/interactionEngine';
+import { liveCollector } from './services/liveCollector';
 
 const app = buildApp();
 
@@ -23,6 +24,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     void (async () => {
       try {
         await app.close();
+        // 先停掉全部弹幕采集会话（含 wss 连接与重连定时器），再关数据库连接池
+        await liveCollector.dispose();
         await pool.end();
         process.exit(0);
       } catch (err) {

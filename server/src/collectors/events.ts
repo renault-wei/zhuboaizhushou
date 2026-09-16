@@ -100,7 +100,11 @@ export function guardEvent(raw: unknown): EventGuardResult {
   return { ok: true, event };
 }
 
-/** 把 chat 统一事件转成 G3 弹幕网关入参（D5.1 接线缝）：非 chat 或空文本 → null，由调用方决定忽略 */
+/**
+ * 把 chat 统一事件转成 G3 弹幕网关入参（D5.1 接线缝）：非 chat 或空文本 → null，由调用方决定忽略。
+ * R1/R3 起同时透传采集通道字段（platform / roomRef / msgKey / msgType）——
+ * 缺了 msgKey，live_danmaku 的 (platform, msg_key) 唯一索引就永远是 NULL，重连重放的幂等会静默失效。
+ */
 export function eventToIngestInput(event: UnifiedDanmakuEvent): DanmakuIngestInput | null {
   if (event.msgType !== 'chat') {
     return null;
@@ -110,5 +114,13 @@ export function eventToIngestInput(event: UnifiedDanmakuEvent): DanmakuIngestInp
     return null;
   }
   const senderNickname = event.senderNickname?.trim().slice(0, MAX_DANMAKU_NICKNAME_LENGTH);
-  return senderNickname ? { content, senderNickname } : { content, senderNickname: null };
+  const carrier: DanmakuIngestInput = {
+    content,
+    senderNickname: senderNickname && senderNickname.length > 0 ? senderNickname : null,
+    platform: event.platform,
+    roomRef: event.roomRef,
+    msgKey: event.msgKey,
+    msgType: event.msgType,
+  };
+  return carrier;
 }

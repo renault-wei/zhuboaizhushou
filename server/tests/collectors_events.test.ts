@@ -138,15 +138,22 @@ describe('D2.1 eventToIngestInput 转 G3 网关入参', () => {
     });
   }
 
-  it('chat → { content, senderNickname }；昵称截断 50 字', () => {
+  it('chat → 透传 content / 昵称 + 采集通道幂等键；昵称截断 50 字', () => {
     const guarded = okEvent();
     expect(guarded.ok).toBe(true);
     if (!guarded.ok) {
       return;
     }
+    // R1/R3 起必须一并透传 platform / roomRef / msgKey / msgType：
+    // 缺 msgKey 时 live_danmaku 的 (platform, msg_key) 唯一索引永远为 NULL，
+    // 断线重连的重放会重复入库并让 G4 引擎重复回复 —— 幂等会静默失效，故在此锁死。
     expect(eventToIngestInput(guarded.event)).toEqual({
       content: '怎么卖？',
       senderNickname: '吃货小王',
+      platform: 'douyin',
+      roomRef: '1',
+      msgKey: 'douyin:9',
+      msgType: 'chat',
     });
   });
 

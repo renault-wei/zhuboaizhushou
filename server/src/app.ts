@@ -12,6 +12,7 @@ import { billingRoutes } from './routes/billing';
 import { douyinRoutes } from './routes/douyin';
 import { healthRoutes } from './routes/health';
 import { livesRoutes } from './routes/lives';
+import { danmakuSourceRoutes } from './routes/danmakuSource';
 import { loopScriptSamplesRoutes } from './routes/loopScriptSamples';
 import { loopScriptsRoutes } from './routes/loopScripts';
 import { scriptsRoutes } from './routes/scripts';
@@ -54,6 +55,8 @@ export function buildApp() {
   // 视频上传（multipart）：单文件上限 200MB，超出返回 413
   app.register(multipart, { limits: { fileSize: 200 * 1024 * 1024 } });
   app.register(livesRoutes);
+  // 弹幕采集源控制（R2b）：起 / 停 / 查某场的采集；未配签名 Key 时返回 503 且不影响既有功能
+  app.register(danmakuSourceRoutes);
   // 谈单演示：只读示例循环台本（套用后走 /api/loop-scripts 落库链路）
   app.register(loopScriptSamplesRoutes);
   app.register(loopScriptsRoutes);

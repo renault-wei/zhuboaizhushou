@@ -119,6 +119,15 @@ export const env = {
     forceMock: optionalEnv('MOCK_DOUYIN') === 'true',
   },
 
+  // 抖音 wss 采集签名服务（D2.3 / D2.5；R2 起接线到采集控制 API）
+  // 作用：把抖音 web 房间号换成可直连的抖音 im wss 地址（第三方签名，Key 由部署方自备，代码不内置）。
+  // 未配置 apiKey 时采集通道整体降级为「仅测试弹幕注入」，不影响既有功能。
+  douyinSign: {
+    endpointUrl: optionalEnv('DOUYIN_SIGN_ENDPOINT_URL') ?? 'https://api.aiobs.cn/Douyin/Douyin/SignWss',
+    apiKey: optionalEnv('DOUYIN_SIGN_API_KEY'),
+    userUniqueId: optionalEnv('DOUYIN_SIGN_USER_UNIQUE_ID'),
+  },
+
   // 微信支付：订阅支付
   wxpay: {
     appId: optionalEnv('WXPAY_APPID'),
