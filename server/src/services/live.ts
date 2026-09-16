@@ -1,4 +1,4 @@
-﻿import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import {
   lives as livesTable,
@@ -32,6 +32,8 @@ export interface Live {
   volcPresetId: string | null;
   /** 口播语速：商家滑块档 -20~60（火山 speech_rate 口径）；null = 未设过，合成时回落默认档（-10） */
   speechRate: number | null;
+  /** 定时关播（R26）：距开播 N 分钟后自动收尾；null = 不限。最低 10 分钟 */
+  autoEndMinutes: number | null;
   voiceId: string | null;
   scriptId: string | null;
   loopScriptId: string | null;
@@ -52,6 +54,8 @@ export interface CreateLiveInput {
   volcPresetId: string | null;
   /** 口播语速：可空（暂未设）；服务端按滑块区间 -20~60 钳制 */
   speechRate: number | null;
+  /** 定时关播（R26）：可空（= 不限）；服务端按 10~1440 分钟钳制 */
+  autoEndMinutes: number | null;
   /** 音色 id：可空（暂未选） */
   voiceId: string | null;
   /** 话术 id：可空（暂未选） */
@@ -71,6 +75,7 @@ export type UpdateLiveInput = Partial<
     | 'title'
     | 'volcPresetId'
     | 'speechRate'
+    | 'autoEndMinutes'
     | 'voiceId'
     | 'scriptId'
     | 'loopScriptId'
@@ -120,6 +125,7 @@ export function toLive(row: LiveRow): Live {
     rtmpUrl: row.rtmpUrl,
     volcPresetId: row.volcPresetId,
     speechRate: row.speechRate,
+    autoEndMinutes: row.autoEndMinutes,
     voiceId: row.voiceId,
     scriptId: row.scriptId,
     loopScriptId: row.loopScriptId,
@@ -259,6 +265,7 @@ export async function createLive(userId: string, input: CreateLiveInput): Promis
       couponId: input.couponId,
       volcPresetId: presetId,
       speechRate: input.speechRate,
+      autoEndMinutes: input.autoEndMinutes,
       voiceId,
       scriptId: input.scriptId,
       loopScriptId: input.loopScriptId,
@@ -292,6 +299,7 @@ export async function updateLive(
     couponId?: string | null;
     volcPresetId?: string | null;
     speechRate?: number | null;
+    autoEndMinutes?: number | null;
     voiceId?: string | null;
     scriptId?: string | null;
     loopScriptId?: string | null;
@@ -307,6 +315,9 @@ export async function updateLive(
   }
   if (patch.speechRate !== undefined) {
     changes.speechRate = patch.speechRate;
+  }
+  if (patch.autoEndMinutes !== undefined) {
+    changes.autoEndMinutes = patch.autoEndMinutes;
   }
 
   // 音色选择：基于现值叠加本次 patch，再做互斥归一化，保证 voiceId 与 volcPresetId 不同时非空

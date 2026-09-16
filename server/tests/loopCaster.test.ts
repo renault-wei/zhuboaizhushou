@@ -82,6 +82,48 @@ describe('M4 loopCaster 循环台本播出引擎（§8.2/§8.3）', () => {
     expect(caster.status(LIVE_ID)).toBeNull();
   });
 
+  // R22 / D1（2026-09-17）：弹幕回复与循环台本**共用同一条 FIFO 出声链路** + 台本每句前做空档避让，
+  // 因此回复必然排在「当前正在播的那句之后、下一句之前」，不会打断半句。
+  // 把这个顺序**钉成断言**：否则哪天有人把 FIFO 改成抢占式，线上极难复现。
+  it('R22：出声链路忙时台本不插队 —— 回复严格排在两句台本之间', async () => {
+    const order: string[] = [];
+    let pending = 0;
+    let spokeCount = 0;
+    const caster = createLoopCaster({
+      itemGapSeconds: 0,
+      loopRestSeconds: 1,
+      idlePollMs: 1,
+      loadItems: async () => [{ text: '台本句A。', gapAfterSeconds: null }],
+      // 忙闲 = 出声链路里还有没播完的东西（弹幕回复入队后就是 true）
+      isBusy: () => pending > 0,
+      speak: async (text) => {
+        order.push(text);
+        spokeCount += 1;
+        if (spokeCount === 1) {
+          // 第一句刚播完的瞬间，观众的弹幕回复入队
+          pending = 1;
+        }
+        if (spokeCount >= 2) {
+          caster.stop(LIVE_ID);
+        }
+        return { spoken: true, reason: 'spoken' };
+      },
+      sleep: async () => {
+        // 台本在等的这个空档里，排在队列前面的回复被播掉
+        if (pending > 0) {
+          order.push('【弹幕回复】');
+          pending = 0;
+        }
+      },
+    });
+
+    caster.start(LIVE_ID);
+    await waitRunnerGone(caster, LIVE_ID);
+
+    // 关键：回复**严格夹在两句台本之间**，而不是插进某句中间或跑到队尾
+    expect(order).toEqual(['台本句A。', '【弹幕回复】', '台本句A。']);
+  });
+
   // R20（2026-09-17）：用户拍板「循环话本播放期间间隔默认 0s」——连读更顺、静默几乎归零。
   it('R20：条间默认间隔为 0s', () => {
     expect(DEFAULT_ITEM_GAP_SECONDS).toBe(0);

@@ -7,6 +7,7 @@ import {
   getLiveById,
   getLiveComposeContext,
   listLives,
+  type Live,
   LiveError,
   LiveStatus,
   updateLive,
@@ -22,6 +23,8 @@ import { danmakuGateway, DanmakuError } from '../services/danmaku';
 import { loopCaster } from '../services/loopCaster';
 import { liveCollector } from '../services/liveCollector';
 import { atmosphereScheduler } from '../services/atmosphereScheduler';
+import { autoEndScheduler } from '../services/autoEnd';
+import { AUTO_END_MAX_MINUTES, AUTO_END_MIN_MINUTES } from '../services/liveSettings';
 import { captureLiveSpeech, clampLiveSpeechRate, forgetLiveSpeech } from '../services/liveVoice';
 
 // 直播状态全集：用于列表 ?status= 过滤校验（与服务端 live_status 枚举一致）
@@ -36,6 +39,7 @@ function readCreateBody(body: unknown): {
   title: string;
   volcPresetId: string | null;
   speechRate: number | null;
+  autoEndMinutes: number | null;
   voiceId: string | null;
   scriptId: string | null;
   loopScriptId: string | null;
@@ -47,6 +51,7 @@ function readCreateBody(body: unknown): {
       title: '',
       volcPresetId: null,
       speechRate: null,
+      autoEndMinutes: null,
       voiceId: null,
       scriptId: null,
       loopScriptId: null,
@@ -58,6 +63,7 @@ function readCreateBody(body: unknown): {
   const title = typeof rawTitle === 'string' ? rawTitle : '';
   const volcPresetId = readOptionalText(record.volcPresetId);
   const speechRate = readOptionalSpeechRate(record.speechRate);
+  const autoEndMinutes = readOptionalAutoEndMinutes(record.autoEndMinutes);
   const voiceId = readOptionalId(record.voiceId);
   const scriptId = readOptionalId(record.scriptId);
   const loopScriptId = readOptionalId(record.loopScriptId);
@@ -65,7 +71,17 @@ function readCreateBody(body: unknown): {
   const rawVideo = record.videoSourceUrl;
   // videoSourceUrl 非字符串一律回退空串，避免脏数据入库
   const videoSourceUrl = typeof rawVideo === 'string' ? rawVideo : '';
-  return { title, volcPresetId, speechRate, voiceId, scriptId, loopScriptId, couponId, videoSourceUrl };
+  return {
+    title,
+    volcPresetId,
+    speechRate,
+    autoEndMinutes,
+    voiceId,
+    scriptId,
+    loopScriptId,
+    couponId,
+    videoSourceUrl,
+  };
 }
 
 /** 读取 PATCH 更新请求体：字段缺省为 undefined（保留原值）；status/aiBadgeShown 字段一律忽略 */
@@ -73,6 +89,7 @@ function readUpdateBody(body: unknown): {
   title: string | undefined;
   volcPresetId: string | null | undefined;
   speechRate: number | null | undefined;
+  autoEndMinutes: number | null | undefined;
   voiceId: string | null | undefined;
   scriptId: string | null | undefined;
   loopScriptId: string | null | undefined;
@@ -84,6 +101,7 @@ function readUpdateBody(body: unknown): {
       title: undefined,
       volcPresetId: undefined,
       speechRate: undefined,
+      autoEndMinutes: undefined,
       voiceId: undefined,
       scriptId: undefined,
       loopScriptId: undefined,
@@ -103,6 +121,10 @@ function readUpdateBody(body: unknown): {
   let speechRate: number | null | undefined;
   if (Object.prototype.hasOwnProperty.call(record, 'speechRate')) {
     speechRate = readOptionalSpeechRate(record.speechRate);
+  }
+  let autoEndMinutes: number | null | undefined;
+  if (Object.prototype.hasOwnProperty.call(record, 'autoEndMinutes')) {
+    autoEndMinutes = readOptionalAutoEndMinutes(record.autoEndMinutes);
   }
   let voiceId: string | null | undefined;
   if (Object.prototype.hasOwnProperty.call(record, 'voiceId')) {
@@ -124,7 +146,17 @@ function readUpdateBody(body: unknown): {
   if (Object.prototype.hasOwnProperty.call(record, 'videoSourceUrl')) {
     videoSourceUrl = typeof record.videoSourceUrl === 'string' ? record.videoSourceUrl : '';
   }
-  return { title, volcPresetId, speechRate, voiceId, scriptId, loopScriptId, couponId, videoSourceUrl };
+  return {
+    title,
+    volcPresetId,
+    speechRate,
+    autoEndMinutes,
+    voiceId,
+    scriptId,
+    loopScriptId,
+    couponId,
+    videoSourceUrl,
+  };
 }
 
 /** 可选 uuid 字段：非空字符串才接收，其余一律视为 null */
@@ -135,6 +167,22 @@ function readOptionalId(raw: unknown): string | null {
 /** 可选文本字段：非空字符串才接收，其余一律视为 null */
 function readOptionalText(raw: unknown): string | null {
   return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : null;
+}
+
+/**
+ * 可选定时关播字段（R26）：只接收整数分钟并**钳到 10~1440**。
+ * 与语速字段同一「宽松归一」口径：非数字一律 null（= 不限），越界值钳到边界。
+ * 之所以钳而不是报错：竞品是前端拦（toast），我们前后端都拦一道，后端这道理应更宽容。
+ */
+function readOptionalAutoEndMinutes(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return null;
+  }
+  const minutes = Math.trunc(raw);
+  if (minutes < AUTO_END_MIN_MINUTES) {
+    return AUTO_END_MIN_MINUTES;
+  }
+  return minutes > AUTO_END_MAX_MINUTES ? AUTO_END_MAX_MINUTES : minutes;
 }
 
 /**
@@ -505,6 +553,25 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       } catch (err) {
         request.log.warn({ err }, '开播联动启动弹幕采集失败（不阻断开播）');
       }
+      // R26：登记定时关播（未设 → 不登记）。到点走与手动 /end **完全同一条收尾路径**。
+      const autoEndMinutes = live.autoEndMinutes;
+      if (autoEndMinutes !== null) {
+        const ownerId = request.user.userId;
+        const registration = autoEndScheduler.schedule({
+          liveId: live.id,
+          minutes: autoEndMinutes,
+          onFire: async (id) => {
+            await finishLive(ownerId, id, (message, err) => {
+              console.warn(
+                `[autoEnd] ${message}：${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+          },
+        });
+        console.info(
+          `[autoEnd] 场次 ${live.id} 已登记定时关播：${autoEndMinutes} 分钟后（${registration.endsAt}）`,
+        );
+      }
       return { live };
     } catch (err) {
       if (err instanceof LiveError) {
@@ -514,46 +581,65 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
+/**
+ * 结束直播的完整收尾（R26）。手动 /end 与**定时关播**共用同一条路径，避免两套收尾各自漂移。
+ *
+ * 优雅收尾（用户拍板 D2）：
+ *   * loopCaster.stop() 本身是「当前句播完即止」，不打断半句；
+ *   * 出声队列**不清空** —— 已入队的音频自然播完；
+ *   * 停采集 → 不再产生新回复；
+ *   * 取消可能存在的定时器（自触发那次已出表，取消是无害空操作）。
+ * 代价：实际静默时刻会比设定晚十几秒（用户已知并接受）。
+ */
+async function finishLive(
+  userId: string,
+  liveId: string,
+  warn: (message: string, err?: unknown) => void,
+): Promise<{ live: Live | null; billing: Awaited<ReturnType<typeof settleLiveSession>> | null }> {
+  const live = await endLive(userId, liveId);
+  if (!live) {
+    return { live: null, billing: null };
+  }
+  loopCaster.stop(live.id);
+  try {
+    await liveCollector.suspend(live.id);
+  } catch (err) {
+    warn('结束直播停止弹幕采集失败（不阻断结束）', err);
+  }
+  forgetLiveSpeech(live.id);
+  atmosphereScheduler.stop(live.id);
+  autoEndScheduler.cancel(live.id);
+  let billing: Awaited<ReturnType<typeof settleLiveSession>> | null = null;
+  try {
+    billing = await settleLiveSession({
+      userId,
+      liveId: live.id,
+      startedAt: live.startedAt,
+      endedAt: live.endedAt,
+    });
+    if (billing.settledMinutes > 0) {
+      console.info(
+        `[liveBilling] 场次 ${live.id} 结算 ${billing.settledMinutes} 分钟（余额 ${billing.drawnFromBalance} / 免费 ${billing.drawnFromQuota}）`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[liveBilling] 场次 ${live.id} 结算失败：${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  return { live, billing };
+}
+
   // 结束直播：live → ended（记录 endedAt）
   app.post('/api/lives/:id/end', { preHandler: app.authenticate }, async (request, reply) => {
     const { id } = request.params as LiveIdParams;
     try {
-      const live = await endLive(request.user.userId, id);
+      // R26：收尾逻辑抽到 finishLive —— 手动 /end 与定时关播**共用同一条路径**
+      const { live, billing } = await finishLive(request.user.userId, id, (message, err) => {
+        request.log.warn({ err, liveId: id }, message);
+      });
       if (!live) {
         return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
-      }
-      // M5：结束直播 = 循环播报唯一停止入口（正在播的当前句播完即止，不打断真人接管）
-      loopCaster.stop(live.id);
-      // R4：结束直播停掉本场采集会话（保留绑定，下次开播 resume 复用同一房间号）。
-      // 不停会泄漏 wss 连接与重连定时器；停止失败同样只告警，不阻断结束。
-      try {
-        await liveCollector.suspend(live.id);
-      } catch (err) {
-        request.log.warn({ err }, '结束直播停止弹幕采集失败（不阻断结束）');
-      }
-      // 音色快照随场次结束丢弃，避免内存滞留（下一场开播重新抓）
-      forgetLiveSpeech(live.id);
-      // M10：结束直播同时清掉氛围语快照与频控记账
-      atmosphereScheduler.stop(live.id);
-      // v0.3 结算接线：结束即按已播整分钟欠费式结算（先余额后免费分钟，缺额仅告警不阻断）。
-      // billing 随响应回给客户端：工作台结束弹层展示「本场结算时长与抵扣明细」。
-      let billing: Awaited<ReturnType<typeof settleLiveSession>> | null = null;
-      try {
-        billing = await settleLiveSession({
-          userId: request.user.userId,
-          liveId: live.id,
-          startedAt: live.startedAt,
-          endedAt: live.endedAt,
-        });
-        if (billing.settledMinutes > 0) {
-          console.info(
-            `[liveBilling] 场次 ${live.id} 结算 ${billing.settledMinutes} 分钟（余额 ${billing.drawnFromBalance} / 免费 ${billing.drawnFromQuota}${billing.shortfallMinutes > 0 ? `，缺额 ${billing.shortfallMinutes}` : ''}）`,
-          );
-        }
-      } catch (err) {
-        console.warn(
-          `[liveBilling] 场次 ${live.id} 结算失败：${err instanceof Error ? err.message : String(err)}`,
-        );
       }
       return { live, billing };
     } catch (err) {
