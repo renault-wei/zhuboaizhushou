@@ -382,7 +382,7 @@ function decodeGiftStructName(data: Uint8Array): string {
   return name || describe;
 }
 
-/** WebcastSocialMessage（关注）：user(2)。项目未建模 follow 事件，仅提供取昵称能力供上层忽略 */
+/** WebcastSocialMessage（关注）：user(2)。R15 起已建模为 follow 统一事件（此前只取昵称、上层丢弃） */
 export function decodeDouyinSocial(data: Uint8Array): DouyinUserLite {
   return decodeWithUser(data, 2, skipByField);
 }

@@ -11,10 +11,10 @@ export const KNOWN_PLATFORMS: readonly DanmakuPlatform[] = ['douyin', 'bilibili'
 export type CollectorSourceKey = 'simulator' | DanmakuPlatform;
 
 /** 归一化事件类型：采集输出只保留这五类，其余平台事件（关注 / 分享等）暂不建模 */
-export type DanmakuMessageType = 'chat' | 'gift' | 'like' | 'enter' | 'end';
+export type DanmakuMessageType = 'chat' | 'gift' | 'like' | 'enter' | 'follow' | 'end';
 
 /** 已知事件类型列表（守卫校验用） */
-export const KNOWN_MESSAGE_TYPES: readonly DanmakuMessageType[] = ['chat', 'gift', 'like', 'enter', 'end'];
+export const KNOWN_MESSAGE_TYPES: readonly DanmakuMessageType[] = ['chat', 'gift', 'like', 'enter', 'follow', 'end'];
 
 /** 单条弹幕内容上限：与 services/danmaku MAX_DANMAKU_CONTENT_LENGTH 对齐 */
 export const MAX_DANMAKU_CONTENT_LENGTH = 200;

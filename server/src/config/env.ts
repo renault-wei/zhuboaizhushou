@@ -125,6 +125,10 @@ export const env = {
   douyinSign: {
     endpointUrl: optionalEnv('DOUYIN_SIGN_ENDPOINT_URL') ?? 'https://api.aiobs.cn/Douyin/Douyin/SignWss',
     apiKey: optionalEnv('DOUYIN_SIGN_API_KEY'),
+    // UserUniqueId = **采集端的自身身份**（SignWss 必填），语义是「我是谁」，与分享链接无关。
+    // 竞品反编译实证：它把这一个数字**写死**在客户端，不是从链接里取。
+    // 我们此前误用分享者的 share_user_id —— 换一条链接身份就变，是语义错误。
+    // 必须是一个**稳定的**数字串；正式运营后应换成运营账号的真实抖音 user id。
     userUniqueId: optionalEnv('DOUYIN_SIGN_USER_UNIQUE_ID'),
   },
 

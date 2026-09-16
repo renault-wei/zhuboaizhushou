@@ -127,6 +127,20 @@ describe('D2.1 guardEvent 统一事件守卫', () => {
 });
 
 describe('D2.1 eventToIngestInput 转 G3 网关入参', () => {
+  it('R15：follow 是合法统一事件类型（守卫放行）', () => {
+    const guarded = guardEvent({
+      platform: 'douyin',
+      roomRef: '1',
+      msgKey: 'douyin:follow-1',
+      msgType: 'follow',
+      senderNickname: '新粉丝',
+    });
+    expect(guarded.ok).toBe(true);
+    if (guarded.ok) {
+      expect(guarded.event.msgType).toBe('follow');
+    }
+  });
+
   function okEvent(): EventGuardResult {
     return guardEvent({
       platform: 'douyin',

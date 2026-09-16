@@ -14,6 +14,7 @@ import {
   decodeDouyinMember,
   decodeDouyinPushFrame,
   decodeDouyinResponse,
+  decodeDouyinSocial,
   type DouyinMessage,
 } from './douyinWire';
 import type { AdapterHooks, AdapterSession, CollectorAdapter, UnifiedDanmakuEvent, WatchTarget } from './types';
@@ -209,8 +210,19 @@ export function createDouyinLiveAdapter(deps: DouyinLiveAdapterDeps = {}): Colle
         event.senderNickname = nickname;
         return event;
       }
+      case 'WebcastSocialMessage': {
+        // R15：关注事件。此前只取昵称、上层直接丢弃 —— 而我们有 follow 氛围语却没有数据源。
+        const followed = decodeDouyinSocial(payload);
+        const followerNickname = followed.nickName.trim();
+        if (!followerNickname) {
+          return null;
+        }
+        const event: UnifiedDanmakuEvent = { ...base, msgType: 'follow' };
+        event.senderNickname = followerNickname;
+        return event;
+      }
       default:
-        // 关注 / 在线人数等未建模类型：忽略但不视为错误
+        // 在线人数 / 榜单等未建模类型：忽略但不视为错误
         return null;
     }
   }

@@ -229,6 +229,19 @@ describe('D2.3 消息推流与归一化', () => {
     await handle.session.close();
   });
 
+  it('R15：WebcastSocialMessage 归一化为 follow 事件（带昵称）', async () => {
+    const handle = await openHarness({});
+    handle.socket.emitOpen();
+    const messages = [
+      buildMessageBytes({ method: 'WebcastSocialMessage', payload: buildSocialBytes({ nickName: '新粉丝' }), msgId: 9n }),
+    ];
+    handle.socket.emitMessage(buildPushFrameBytes({ logId: 1n, response: buildResponseBytes({ messages }) }));
+    expect(handle.events).toHaveLength(1);
+    expect(handle.events[0]?.msgType).toBe('follow');
+    expect(handle.events[0]?.senderNickname).toBe('新粉丝');
+    await handle.session.close();
+  });
+
   it('同一帧里 chat/like/enter/gift 分别归一化，like 与 gift 的文案含数量', async () => {
     const handle = await openHarness({});
     handle.socket.emitOpen();
@@ -285,7 +298,7 @@ describe('D2.3 消息推流与归一化', () => {
     await handle.session.close();
   });
 
-  it('脏事件被丢弃但不崩会话：空正文 chat / 无昵称 like / 无昵称 enter / 无礼物名 gift / 未建模方法', async () => {
+  it('脏事件被丢弃但不崩会话：空正文 chat / 无昵称 like / 无昵称 enter / 无礼物名 gift / 无昵称 follow / 未建模方法', async () => {
     const handle = await openHarness({});
     handle.socket.emitOpen();
     const messages = [
@@ -293,7 +306,10 @@ describe('D2.3 消息推流与归一化', () => {
       buildMessageBytes({ method: 'WebcastLikeMessage', payload: buildLikeBytes({ count: 1n }), msgId: 2n }),
       buildMessageBytes({ method: 'WebcastMemberMessage', payload: buildMemberBytes({ memberCount: 1n }), msgId: 3n }),
       buildMessageBytes({ method: 'WebcastGiftMessage', payload: buildGiftBytes({ nickName: 'X', giftName: '' }), msgId: 4n }),
-      buildMessageBytes({ method: 'WebcastSocialMessage', payload: buildSocialBytes({ nickName: '关注者' }), msgId: 5n }),
+      // R15 起 WebcastSocialMessage **已建模**为 follow，不再是「未建模方法」；
+      // 无昵称的关注仍属脏事件、应被丢弃。
+      buildMessageBytes({ method: 'WebcastSocialMessage', payload: buildSocialBytes({}), msgId: 5n }),
+      buildMessageBytes({ method: 'WebcastRoomStatsMessage', payload: new Uint8Array(), msgId: 6n }),
     ];
     handle.socket.emitMessage(buildPushFrameBytes({ logId: 1n, response: buildResponseBytes({ messages }) }));
     expect(handle.events).toHaveLength(0);
