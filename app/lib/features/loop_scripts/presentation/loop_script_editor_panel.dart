@@ -1,15 +1,19 @@
 /// 循环台本编辑器（新建/编辑/生成草稿预览共用）：标题 + 有序条目编辑。
-/// 每条台词支持：多行文本、播后间隔秒（0-60，空 = 用全局默认 2 秒）、
+/// 每条台词支持：多行文本、播后间隔秒（0-60，空 = 用全局默认 0 秒）、
 /// 上移 / 下移 / 删除 / 添加一句。保存前只做本地必填校验，命中敏感词由
 /// 服务端拦截（SENSITIVE_BLOCKED），页面透出命中词提示。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:starvoice_app/core/models/loop_script.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/core/theme/app_colors.dart';
 import 'package:starvoice_app/core/theme/theme_tokens.dart';
+import 'package:starvoice_app/providers.dart';
 
 const Map<String, String> _loopKindLabels = <String, String>{
   'opening': '开场',
@@ -35,6 +39,7 @@ class _EditableLoopItem {
     this.kind,
     required this.text,
     this.gapAfterSeconds,
+    this.ttsSegmentCount,
   });
 
   factory _EditableLoopItem.fromModel(int uid, LoopScriptItem item) {
@@ -44,6 +49,7 @@ class _EditableLoopItem {
       kind: item.kind,
       text: item.text,
       gapAfterSeconds: item.gapAfterSeconds,
+      ttsSegmentCount: item.ttsSegmentCount,
     );
   }
 
@@ -52,10 +58,13 @@ class _EditableLoopItem {
   final String? kind;
   String text;
   int? gapAfterSeconds;
+
+  /// 服务端回带的合成分段份数（R19）；草稿/本地新增条目为 null，由编辑器实时预览
+  int? ttsSegmentCount;
 }
 
 /// 单条台词编辑行：文本多行输入 + 间隔秒输入 + 上移/下移/删除。
-class _LoopItemRow extends StatefulWidget {
+class _LoopItemRow extends ConsumerStatefulWidget {
   const _LoopItemRow({
     required this.item,
     required this.index,
@@ -75,12 +84,16 @@ class _LoopItemRow extends StatefulWidget {
   final VoidCallback onDelete;
 
   @override
-  State<_LoopItemRow> createState() => _LoopItemRowState();
+  ConsumerState<_LoopItemRow> createState() => _LoopItemRowState();
 }
 
-class _LoopItemRowState extends State<_LoopItemRow> {
+class _LoopItemRowState extends ConsumerState<_LoopItemRow> {
   late final TextEditingController _textController;
   late final TextEditingController _gapController;
+  Timer? _previewDebounce;
+
+  /// 实时预览到的分段份数（服务端口径）；null = 尚未取到
+  int? _liveSegmentCount;
 
   @override
   void initState() {
@@ -89,14 +102,50 @@ class _LoopItemRowState extends State<_LoopItemRow> {
     _gapController = TextEditingController(
       text: widget.item.gapAfterSeconds?.toString() ?? '',
     );
+    // 服务端已在详情里回带份数就直接用；草稿/新增条目没有，才去问一次
+    if (widget.item.ttsSegmentCount == null) {
+      _schedulePreview(immediate: true);
+    }
   }
 
   @override
   void dispose() {
+    _previewDebounce?.cancel();
     _textController.dispose();
     _gapController.dispose();
     super.dispose();
   }
+
+  /// 防抖预览分段份数：打字时不打断输入，停手 400ms 才问服务端一次。
+  /// 份数一律以服务端为准（复用合成链路的分段实现），客户端不另写一份。
+  void _schedulePreview({bool immediate = false}) {
+    _previewDebounce?.cancel();
+    if (widget.item.text.trim().isEmpty) {
+      if (_liveSegmentCount != null) {
+        setState(() => _liveSegmentCount = null);
+      }
+      return;
+    }
+    _previewDebounce = Timer(
+      immediate ? Duration.zero : const Duration(milliseconds: 400),
+      () async {
+        try {
+          final preview = await ref
+              .read(apiClientProvider)
+              .previewTtsSegments(widget.item.text.trim());
+          if (!mounted) {
+            return;
+          }
+          setState(() => _liveSegmentCount = preview.segmentCount);
+        } on ApiException {
+          // 份数只是提示：预览失败不该打断编辑
+        }
+      },
+    );
+  }
+
+  /// 展示用份数：实时预览优先，其次服务端回带的
+  int? get _segmentCount => _liveSegmentCount ?? widget.item.ttsSegmentCount;
 
   @override
   Widget build(BuildContext context) {
@@ -180,7 +229,9 @@ class _LoopItemRowState extends State<_LoopItemRow> {
             controller: _textController,
             minLines: 1,
             maxLines: 3,
-            maxLength: 200,
+            // 与服务端的宽松安全上限一致（2026-09-17 由 200 放开到 2000）：
+            // 业务上不限制话术字数，这里只是拦异常输入
+            maxLength: 2000,
             decoration: const InputDecoration(
               hintText: '输入一句口播台词',
               border: OutlineInputBorder(),
@@ -189,6 +240,7 @@ class _LoopItemRowState extends State<_LoopItemRow> {
             onChanged: (value) {
               widget.item.text = value;
               widget.onChanged(value);
+              _schedulePreview();
             },
           ),
           const SizedBox(height: 4),
@@ -231,7 +283,10 @@ class _LoopItemRowState extends State<_LoopItemRow> {
           ),
           const SizedBox(height: 6),
           Text(
-            '台词 ${widget.item.text.trim().length} 字',
+            _segmentCount == null
+                ? '台词 ${widget.item.text.trim().length} 字'
+                : '台词 ${widget.item.text.trim().length} 字 · 合成 $_segmentCount 段',
+            key: const Key('loopItemSegmentHint'),
             style: textTheme.bodySmall?.copyWith(color: context.tokenTextHint),
           ),
         ],
@@ -339,8 +394,9 @@ class _LoopScriptEditorPanelState extends State<LoopScriptEditorPanel> {
         _showSnack('第 ${index + 1} 句台词不能为空');
         return;
       }
-      if (_items[index].text.trim().length > 200) {
-        _showSnack('第 ${index + 1} 句台词不能超过 200 字');
+      // 与服务端一致：2000 是宽松安全上限（拦异常），不是业务字数限制
+      if (_items[index].text.trim().length > 2000) {
+        _showSnack('第 ${index + 1} 句台词超过安全上限（2000 字）');
         return;
       }
     }
@@ -462,7 +518,7 @@ class _LoopScriptEditorPanelState extends State<LoopScriptEditorPanel> {
         ),
         const SizedBox(height: 10),
         Text(
-          '循环节奏：整本按顺序循环播放，每条播完后停顿其「间隔秒」（空则默认 2 秒）。',
+          '循环节奏：整本按顺序循环播放，每条播完后停顿其「间隔秒」（空则默认 0 秒，连读不停）。',
           style: TextStyle(fontSize: 12, color: context.tokenTextBody),
         ),
         const SizedBox(height: 16),

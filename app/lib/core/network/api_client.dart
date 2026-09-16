@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:starvoice_app/core/models/coupon.dart';
 import 'package:starvoice_app/core/models/app_config.dart';
 import 'package:starvoice_app/core/models/danmaku_source.dart';
+import 'package:starvoice_app/core/models/tts_segments.dart';
 import 'package:starvoice_app/core/models/danmaku_watch.dart';
 import 'package:starvoice_app/core/models/douyin_bind_status.dart';
 import 'package:starvoice_app/core/models/live.dart';
@@ -977,6 +978,20 @@ class ApiClient {
         '/api/danmaku-watch/$watchId',
       );
       return response.data?['stopped'] == true;
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 预览一段文本会被切成几段合成（R19）。
+  /// 服务端复用合成链路自己的分段实现，客户端不另写一份。
+  Future<TtsSegmentPreview> previewTtsSegments(String text) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/tts/segment-preview',
+        data: <String, dynamic>{'text': text},
+      );
+      return TtsSegmentPreview.fromJson(response.data ?? <String, dynamic>{});
     } on DioException catch (error) {
       throw _toApiException(error);
     }

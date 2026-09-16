@@ -14,6 +14,7 @@ class LoopScriptItem {
     this.kind,
     required this.text,
     this.gapAfterSeconds,
+    this.ttsSegmentCount,
   });
 
   factory LoopScriptItem.fromJson(Map<String, dynamic> json) {
@@ -23,6 +24,7 @@ class LoopScriptItem {
       kind: _nullableString(json['kind']),
       text: json['text']?.toString() ?? '',
       gapAfterSeconds: (json['gapAfterSeconds'] as num?)?.toInt(),
+      ttsSegmentCount: (json['ttsSegmentCount'] as num?)?.toInt(),
     );
   }
 
@@ -36,14 +38,18 @@ class LoopScriptItem {
   /// 未知类型服务端归一为 null（客户端宽松接受字符串，不阻塞展示）。
   final String? kind;
 
-  /// 台词正文（trim 后 1-200 字）
+  /// 台词正文（trim 后非空；上限是**宽松安全上限** 2000 字，不是业务字数限制）
   final String text;
 
-  /// 本条播完后的间隔秒（0-60）；null = 用全局默认 2 秒
+  /// 本条播完后的间隔秒（0-60）；null = 用全局默认 **0 秒**（2026-09-17 由 2s 改为 0s）
   final int? gapAfterSeconds;
 
+  /// 这条台词在合成层会被切成几段（R19，服务端回带）。
+  /// 草稿条目与本地新增条目为 null —— 那种情况下由编辑器实时调预览接口取。
+  final int? ttsSegmentCount;
+
   /// 提交给新建 / 整体替换接口的条目载荷：
-  /// kind / gapAfterSeconds 缺省时不下发，服务端按 null（默认 2 秒间隔）处理。
+  /// kind / gapAfterSeconds 缺省时不下发，服务端按 null（默认 **0 秒**间隔）处理。
   Map<String, dynamic> toPayload() {
     final kind = this.kind;
     final gap = gapAfterSeconds;

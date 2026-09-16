@@ -464,6 +464,10 @@ class FakeBackend implements HttpClientAdapter {
     if (options.method == 'POST' && path.endsWith('/api/voices')) {
       return _createVoice(options);
     }
+    // R19 TTS 分段预览
+    if (options.method == 'POST' && path.endsWith('/api/tts/segment-preview')) {
+      return _ttsSegmentPreview(options);
+    }
     final voiceItem = RegExp(r'^/api/voices/([^/]+)$').firstMatch(path);
     if (voiceItem != null && options.method == 'GET') {
       return _getVoice(voiceItem.group(1)!);
@@ -1258,6 +1262,27 @@ class FakeBackend implements HttpClientAdapter {
     return _jsonResponse({'danmaku': record}, 201);
   }
 
+
+  /// TTS 分段预览（R19）：**简化替身** —— 按「每 200 字一段」粗算段数。
+  /// 真服务端的断点会找标点，这里不复刻（切段算法本身由服务端单测覆盖）；
+  /// 本替身只用来断言「客户端确实把服务端回的份数展示出来了」。
+  ResponseBody _ttsSegmentPreview(RequestOptions options) {
+    final body = _readBody(options);
+    final text = body['text']?.toString().trim() ?? '';
+    if (text.isEmpty) {
+      return _jsonResponse({
+        'error': 'TEXT_REQUIRED',
+        'message': '请输入要预览的文本',
+      }, 400);
+    }
+    final count = (text.length / 200).ceil();
+    return _jsonResponse({
+      'maxCharsPerRequest': 200,
+      'charCount': text.length,
+      'segmentCount': count,
+      'segments': <Map<String, dynamic>>[],
+    });
+  }
 
   /// 起独立监控（R16b）：POST /api/danmaku-watch
   ResponseBody _startDanmakuWatch(RequestOptions options) {
