@@ -73,15 +73,28 @@ export interface CandidateUrl {
   short: boolean;
 }
 
+/**
+ * URL 允许出现的字符：**RFC 3986 白名单**（unreserved + 常见保留符）。
+ *
+ * 2026-09-17 修 bug：此前用「排除空白与中文标点」的黑名单，**汉字不在排除集里** ——
+ * 于是「URL 后紧跟中文」（很多平台分享模板就是这样，如 `.../AbC123/复制此链接`）
+ * 会把汉字一起吞进 URL，解析必然失败。表现为「粘贴链接**有时候**会失效」：
+ * 取决于那条分享文案的排版（URL 后有没有空格）。短链码只含 [A-Za-z0-9_-]，白名单足够。
+ */
+const URL_BODY_PATTERN = "[A-Za-z0-9\\-._~:/?#\\[\\]@!$&'()*+,;=%]";
+
+/** 需要从 URL 末尾剥掉的标点：中英文都要。此前只剥了中文标点，漏了 ASCII 的 `.` `,` `)` 等 */
+const TRAILING_PUNCTUATION = /[.,;:!?'"()\[\]{}<>，。！？；、“”‘’（）【】]+$/;
+
 /** 从一段文本中抽取候选链接：优先 http(s) 完整 URL；无协议时兜底识别裸域名口令 */
 export function extractCandidateUrls(text: string): CandidateUrl[] {
   if (typeof text !== 'string' || text.trim().length === 0) {
     return [];
   }
   const tokens = new Set<string>();
-  const httpPattern = /https?:\/\/[^\s，。！？；、""''（）()【】[\]<>]+/gi;
+  const httpPattern = new RegExp(`https?://${URL_BODY_PATTERN}+`, 'gi');
   for (const match of text.matchAll(httpPattern)) {
-    const token = match[0].replace(/[，。！？；、""''（）()]+$/, '');
+    const token = match[0].replace(TRAILING_PUNCTUATION, '');
     if (token.length > 0) {
       tokens.add(token);
     }

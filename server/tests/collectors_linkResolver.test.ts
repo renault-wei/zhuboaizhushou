@@ -26,6 +26,35 @@ describe('D1.1 extractCandidateUrls URL 抽取', () => {
   it('无链接文本返回空数组', () => {
     expect(extractCandidateUrls('就随便聊聊天')).toEqual([]);
   });
+
+  // 回归（2026-09-17）：用户报「粘贴链接有时候会失效」。
+  // 根因 = 抽取用的是「排除空白与中文标点」黑名单，**汉字不在排除集里**：
+  // URL 后紧贴中文时（很多分享模板就是这样）汉字会被吞进 URL，解析必然失败。
+  it('回归：URL 后紧跟中文时不能把汉字吞进 URL', () => {
+    const candidates = extractCandidateUrls('看看直播 https://v.douyin.com/AbC123/复制此链接打开抖音');
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.url).toBe('https://v.douyin.com/AbC123/');
+    expect(candidates[0]).toMatchObject({ platform: 'douyin', short: true });
+  });
+
+  it('回归：URL 末尾的英文标点也要剥（此前只剥了中文标点）', () => {
+    expect(extractCandidateUrls('https://v.douyin.com/AbC123/.')[0]?.url).toBe(
+      'https://v.douyin.com/AbC123/',
+    );
+    expect(extractCandidateUrls('(https://v.douyin.com/AbC123/)')[0]?.url).toBe(
+      'https://v.douyin.com/AbC123/',
+    );
+    expect(extractCandidateUrls('https://v.douyin.com/AbC123/,')[0]?.url).toBe(
+      'https://v.douyin.com/AbC123/',
+    );
+  });
+
+  it('回归：带查询串的真实落点地址不被截断（白名单须含 ? & = % - _ .）', () => {
+    const url =
+      'https://webcast.amemv.com/douyin/webcast/reflow/7686117195721837352?u_code=27705a1dk723&did=MS4wLjABAAAA-x_y&sec_user_id=MS4wLjABAAAA_MND';
+    const candidates = extractCandidateUrls('直播 ' + url);
+    expect(candidates[0]?.url).toBe(url);
+  });
 });
 
 describe('D1.2/D1.3 静态解析完整直播链接', () => {
