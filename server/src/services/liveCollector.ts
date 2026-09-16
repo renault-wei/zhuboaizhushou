@@ -14,6 +14,7 @@ import {
   createCollectorManager,
   watchKeyOf,
   type CollectorManager,
+  type CollectorManagerDeps,
   type CollectorWatchSummary,
 } from '../collectors/collectorManager';
 import { createDouyinHttpSigner, createDouyinLiveAdapter } from '../collectors/douyinLiveAdapter';
@@ -113,6 +114,13 @@ export interface LiveCollectorDeps {
   resolveShareText?: (text: string) => Promise<ResolveShareResult>;
   /** 按房间号现取 ttwid（完整链接 / 纯房间号场景）；缺省真网络，测试可注入 */
   fetchTtwid?: (roomRef: string) => Promise<string | null>;
+  /** 透传给 collectorManager 的参数（重连策略 / 心跳间隔等）；测试可调，生产按部署调 */
+  managerOptions?: Partial<Omit<CollectorManagerDeps, 'adapters' | 'onEvent'>>;
+  /**
+   * 保活看门狗间隔（ms）：定期检查「武装中」的绑定，会话掉出 connected/starting/reconnecting 就自动拉起。
+   * 对齐竞品 startCSystemTimer(30, …)。**0 = 关闭**（测试用）。默认 30s。
+   */
+  watchdogIntervalMs?: number;
   now?: () => Date;
   warn?: (message: string) => void;
 }
@@ -151,9 +159,15 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
   const fetchTtwid = deps.fetchTtwid ?? createDouyinTtwidFetcher();
   const warn = deps.warn ?? ((message: string) => console.warn(`[liveCollector] ${message}`));
   const now = deps.now ?? (() => new Date());
+  const watchdogIntervalMs = deps.watchdogIntervalMs ?? 30_000;
 
   /** liveId → 绑定：采集事件只带 liveId，靠它反查 userId */
   const bindings = new Map<string, LiveCollectorBinding>();
+  /**
+   * 「武装中」的场次：这些绑定的会话**应当**在跑，看门狗负责拉起。
+   * suspend（直播结束）会把它移出 —— 否则看门狗会把已结束的场次又拉起来，白烧连接。
+   */
+  const armed = new Set<string>();
 
   /**
    * 采集事件 → 既有弹幕网关。
@@ -180,6 +194,7 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
   }
 
   const manager: CollectorManager = createCollectorManager({
+    ...deps.managerOptions,
     adapters,
     onEvent: handleEvent,
   });
@@ -243,6 +258,43 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
     return fetched ? { platform, roomRef, connectHeaders: { Cookie: fetched } } : { platform, roomRef };
   }
 
+  /**
+   * 保活看门狗（R13）：对齐竞品 startCSystemTimer(30, …)。
+   * 只扫「武装中」的绑定：会话若已掉出 connected/starting/reconnecting（例如重连耗尽判 error），
+   * 就自动重新拉起，避免「一场直播跑几小时、中途断几次就永久停摆」。
+   */
+  async function runWatchdog(): Promise<void> {
+    for (const liveId of [...armed]) {
+      const binding = bindings.get(liveId);
+      if (!binding) {
+        armed.delete(liveId);
+        continue;
+      }
+      const watch = manager.status().active.find((item) => item.key === binding.watchKey);
+      const healthy =
+        watch !== undefined &&
+        (watch.status === 'connected' || watch.status === 'starting' || watch.status === 'reconnecting');
+      if (healthy) {
+        continue;
+      }
+      warn(`看门狗：会话未在监听（live=${liveId}，当前 ${watch?.status ?? '已终止'}），自动拉起`);
+      try {
+        await startWatch(binding);
+      } catch (err) {
+        warn(`看门狗拉起失败（live=${liveId}）：${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  // unref：看门狗常驻不应阻止进程退出
+  const watchdog =
+    watchdogIntervalMs > 0
+      ? setInterval(() => {
+          void runWatchdog();
+        }, watchdogIntervalMs)
+      : null;
+  watchdog?.unref?.();
+
   return {
     enabled,
 
@@ -275,6 +327,7 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
 
     async start(input: StartCollectorInput): Promise<LiveCollectorBinding> {
       const binding = await this.bind(input);
+      armed.add(binding.liveId);
       await startWatch(binding);
       return binding;
     },
@@ -284,6 +337,7 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
       if (!binding) {
         return null;
       }
+      armed.add(liveId);
       await startWatch(binding);
       return binding;
     },
@@ -293,6 +347,8 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
       if (!binding) {
         return false;
       }
+      // 先解除武装，看门狗才动不到它：直播已结束，不该被保活逻辑拉起来
+      armed.delete(liveId);
       await manager.stopWatching(binding.watchKey);
       return true;
     },
@@ -302,6 +358,7 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
       if (!binding) {
         return false;
       }
+      armed.delete(liveId);
       bindings.delete(liveId);
       await manager.stopWatching(binding.watchKey);
       return true;
@@ -316,6 +373,10 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
     },
 
     async dispose(): Promise<void> {
+      if (watchdog !== null) {
+        clearInterval(watchdog);
+      }
+      armed.clear();
       bindings.clear();
       await manager.dispose();
     },

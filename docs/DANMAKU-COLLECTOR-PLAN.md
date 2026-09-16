@@ -308,6 +308,32 @@ interface UnifiedDanmakuEvent {
 
 > 这套方法证明：「我不能操控手机」是个错误判断。真正做不到的只有一件 —— 我无法成为用户抖音直播间里的观众去发那条弹幕。
 
+## 13. 采集保活与架构解耦批次（2026-09-16 · R13~R17）
+
+> 来源：对照反编译竞品（`source/beautified/app-service.js`）后的架构讨论；用户拍板「按推荐来」，并点名「**保活是我们需要的**」。
+> 更正一处我自己的误判：我原以为竞品的保活只是「手机端省电保活」，我们跑服务端就白赚了 —— **错**。
+> 竞品 `onclose` 是 **10s 无限重连** + `startCSystemTimer(30, …)` **30s 看门狗**；而我们的 `collectorManager`
+> `openAttempts` **累计计数且连接成功后不复位**，超过 3 次即 `finalize(error)` —— **长会话中途断 3 次就永久停摆**。
+
+| ID | 任务 | 改动面 | 前置阻塞 | 验收口径 | 状态 |
+|---|---|---|---|---|---|
+| **R13** | **采集保活**（用户点名） | ① `collectors/collectorManager.ts`：`openAttempts` 由「累计」改为「**连续失败**」，连接**稳定 ≥30s 后清零**（`stableAfterMs` 可配）；② `services/liveCollector.ts`：加 **30s 看门狗**，绑定存在但会话不在 connected/starting 时自动 `resume()`（对齐竞品 `startCSystemTimer(30)`） | 无 | 长会话第 N 次断线仍能重连（单测）；一直连不上仍会被有界终止；`error` 态会话会被看门狗拉起 | ✅ 已完成（`danmaku_source.test.ts` 4 例：稳定可无限重连 / 不稳定仍被有界终止 / error 后被拉起 / 挂起的不被拉起） |
+| **R14** | `UserUniqueId` 固定为自身身份 | `liveCollector.resolveRoom` 不再使用分享者的 `share_user_id`；`.env` 填固定值（`config/env.ts` 的 `douyinSign.userUniqueId` 已是配置项） | 无 | 换任意分享链接，签名用的 `UserUniqueId` **恒定不变**（对齐竞品写死一个数字的语义：那是「客户端是谁」，与链接无关） | ⬜ |
+| **R15** | 补 `WebcastSocialMessage`（关注）解码 | `collectors/douyinWire.ts` 增加 social 解码 + `types.ts` 的 `DanmakuMessageType` 加 `follow` + 适配器 `toEvent` 分支 | 无 | 关注事件能进统一事件；**我们已有的 `follow` 氛围语终于有数据源**（当前空转） | ⬜ |
+| **R16** | **监听源与场次解耦**（D1 · 大票） | 拆出独立「监听源」资源：可只监听、不落库、不绑直播；落库时才决定归属。涉及 `services/liveCollector.ts`、`routes/danmakuSource.ts`、App 工作台采集卡 | R13 | **不依赖开播也能贴链接监听并看弹幕流水**（用户本次的实际诉求）；开播路径行为不变 | ⬜ |
+| **R17** | 绑定表脱离内存（D4 · 债） | `liveCollector` 的 `bindings` 由进程内 Map 改为可持久；或启动时按「已开播场次」自动恢复 | R16 | 服务重启后正在直播的场次采集能自动恢复 | ⬜ |
+
+### 13.1 本轮不做（讨论已定，明确记账）
+
+- **D5 `helperAdapter`（外挂弹幕助手转发）先不接线**：需要一台电脑，与「无电脑商家」冲突；价值在**合规姿态更干净**（读弹幕的是第三方工具、我们不持签名 Key）——留作对外商业化时的备选出口，不是替代。
+- **不做客户端采集**：竞品把 `ApiKey` **硬编码在客户端**，解包即得（我们正是这样拿到它那把 Key 的）。服务端持 Key 是正确做法，不因分散算力而放弃。
+
+### 13.2 从反编译学到的三条（已并入上面票）
+
+1. **`UserUniqueId` 是「客户端身份」，与分享链接无关** —— 竞品写死一个数字；我们借用分享者的 `share_user_id` 是语义错误（→ R14）。
+2. **它解了 `WebcastSocialMessage`** —— 我们有 `follow` 氛围语却没有数据源（→ R15）。
+3. **保活必须做** —— 无限重连 + 看门狗（→ R13）。
+
 ### 12.2 对照实验：唯一能把「没人说话」与「订阅坏了」分开的手段
 
 2026-09-16 深夜实测：用户自己直播间连续监听 15 分钟，**181 帧全部只是心跳 ack、零内容事件**，

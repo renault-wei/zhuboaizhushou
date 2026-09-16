@@ -50,8 +50,14 @@ export interface CollectorManagerDeps {
   heartbeatIntervalMs?: number;
   /** 断线后的重连等待（ms） */
   reconnectDelayMs?: number;
-  /** 单会话累计 open 上限（含首次与重连，超出判定 error 终止并释放占位） */
+  /**
+   * **连续** open 失败上限（R13 起语义变更）：连续失败达到该值才判 error 终止并释放占位。
+   * 连接**稳定超过 stableAfterMs** 即视为成功、把连续失败计数清零 —— 因此长会话可无限重连。
+   * 旧语义是「累计尝试次数」，会导致「跑几小时断 3 次就永久停摆」。
+   */
   maxOpenAttempts?: number;
+  /** 连接存活多久算「这一次成功」（超过即清零连续失败计数）；默认 30s（对齐竞品 30s 看门狗） */
+  stableAfterMs?: number;
   sleep?(ms: number): Promise<void>;
   now?(): Date;
 }
@@ -69,6 +75,8 @@ const DEFAULT_MAX_CONCURRENT = 4;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5000;
 const DEFAULT_RECONNECT_DELAY_MS = 2000;
 const DEFAULT_MAX_OPEN_ATTEMPTS = 3;
+/** 连接稳定阈值：存活超过它即视为「成功过一次」，连续失败计数清零（R13 保活） */
+const DEFAULT_STABLE_AFTER_MS = 30_000;
 const HISTORY_LIMIT = 20;
 
 function sleepReal(ms: number): Promise<void> {
@@ -96,6 +104,7 @@ export function createCollectorManager(deps: CollectorManagerDeps): CollectorMan
   const heartbeatIntervalMs = deps.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
   const reconnectDelayMs = deps.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
   const maxOpenAttempts = deps.maxOpenAttempts ?? DEFAULT_MAX_OPEN_ATTEMPTS;
+  const stableAfterMs = deps.stableAfterMs ?? DEFAULT_STABLE_AFTER_MS;
   const sleep = deps.sleep ?? sleepReal;
   const now = deps.now ?? (() => new Date());
   const onEvent = deps.onEvent;
@@ -186,12 +195,19 @@ export function createCollectorManager(deps: CollectorManagerDeps): CollectorMan
 
   async function runWatch(worker: WatchWorker): Promise<void> {
     try {
-      let openAttempts = 0;
+      let openAttempts = 0; // 累计（仅用于状态展示，不再作为终止依据）
+      // R13 保活：终止依据是「**连续**失败」，不是「累计尝试」——
+      // 否则一场直播跑几小时、中途断 3 次就永久停摆（2026-09-16 对照竞品发现）。
+      let consecutiveFailures = 0;
       while (!worker.closed) {
         openAttempts += 1;
         worker.summary.openAttempts = openAttempts;
-        if (openAttempts > maxOpenAttempts) {
-          worker.summary.lastError = `重连 ${maxOpenAttempts} 次均失败，终止监听`;
+        if (consecutiveFailures >= maxOpenAttempts) {
+          // 保留根因：只报「连续 N 次失败」会丢掉真正原因，排障时最需要的恰恰是它
+          const rootCause = worker.summary.lastError;
+          worker.summary.lastError = rootCause
+            ? `连续 ${maxOpenAttempts} 次重连失败，终止监听（最后错误：${rootCause}）`
+            : `连续 ${maxOpenAttempts} 次重连失败，终止监听`;
           finalize(worker, 'error');
           return;
         }
@@ -203,6 +219,7 @@ export function createCollectorManager(deps: CollectorManagerDeps): CollectorMan
             return;
           }
           worker.session = session;
+          const connectedAtMs = now().getTime();
           worker.summary.connectedAt = now().toISOString();
           worker.summary.status = 'connected';
           worker.summary.lastError = null;
@@ -211,17 +228,20 @@ export function createCollectorManager(deps: CollectorManagerDeps): CollectorMan
           if (result === 'closed') {
             return;
           }
-          // dead：回到循环头重连（attempt 已在循环头累计）
+          // 本次连接算不算「成功」：稳定超过阈值就清零连续失败（长会话可无限重连）；
+          // 秒断抖振仍计入失败，避免「连上就掉」被无限重试打满。
+          if (now().getTime() - connectedAtMs >= stableAfterMs) {
+            consecutiveFailures = 0;
+          } else {
+            consecutiveFailures += 1;
+          }
         } catch (error) {
           worker.summary.lastError = error instanceof Error ? error.message : String(error);
           console.warn(`[collectorManager] 会话打开失败（${worker.key}）：${worker.summary.lastError}`);
           if (worker.closed) {
             return;
           }
-          if (openAttempts >= maxOpenAttempts) {
-            finalize(worker, 'error');
-            return;
-          }
+          consecutiveFailures += 1;
           worker.summary.status = 'reconnecting';
           await sleep(reconnectDelayMs);
         }

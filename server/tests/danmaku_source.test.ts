@@ -108,7 +108,11 @@ interface FakeAdapter {
   closed(): boolean;
 }
 
-function createFakeAdapter(source: CollectorAdapter['source'] = 'douyin'): FakeAdapter {
+function createFakeAdapter(
+  source: CollectorAdapter['source'] = 'douyin',
+  /** 心跳存活判定：默认恒活；返回 false 即模拟会话判死（保活 / 看门狗用例用） */
+  heartbeatAlive: (sessionSeq: number, beatNo: number) => boolean = () => true,
+): FakeAdapter {
   let hooks: AdapterHooks | null = null;
   let openedCount = 0;
   let closedFlag = false;
@@ -116,11 +120,14 @@ function createFakeAdapter(source: CollectorAdapter['source'] = 'douyin'): FakeA
     source,
     async open(_target: WatchTarget, h: AdapterHooks) {
       openedCount += 1;
+      const sessionSeq = openedCount;
+      let beatNo = 0;
       hooks = h;
       h.onStateChange('connected');
       return {
         async heartbeat() {
-          return true;
+          beatNo += 1;
+          return heartbeatAlive(sessionSeq, beatNo);
         },
         async close() {
           closedFlag = true;
@@ -472,5 +479,81 @@ dbIt('结束联动：/end 调 suspend 停掉本场采集', async () => {
   expect(res.statusCode).toBe(200);
   expect(suspendSpy).toHaveBeenCalledWith(liveId);
 });
+
+// ---------- R13 采集保活：稳定连接可无限重连 + 看门狗自动拉起 ----------
+
+it('保活：每次连接都算稳定时，多次断线仍能重连（不再被累计次数掐死）', async () => {
+  // 心跳第 1 拍就判死 → 每个会话都极短命；但 stableAfterMs=0 → 每次都算「成功过一次」
+  const fake = createFakeAdapter('douyin', (_seq, beatNo) => beatNo < 1);
+  const collector = createLiveCollector({
+    adapters: [fake.adapter],
+    watchdogIntervalMs: 0,
+    managerOptions: { reconnectDelayMs: 1, maxOpenAttempts: 3, stableAfterMs: 0, heartbeatIntervalMs: 5 },
+  });
+  try {
+    await collector.start({ userId: 'u', liveId: 'l', roomRef: '7123456789012345678' });
+    await waitFor(() => fake.opened() >= 5, 4000);
+    // 旧语义下第 4 次尝试就会被判 error；新语义下连接稳定过即清零，可持续重连
+    expect(fake.opened()).toBeGreaterThanOrEqual(5);
+    expect(collector.statusOf('l').watch?.status).not.toBe('error');
+  } finally {
+    await collector.dispose();
+  }
+});
+
+it('保活对照：连接始终不稳定时，仍会被有界终止（不会无限重试打满）', async () => {
+  const fake = createFakeAdapter('douyin', (_seq, beatNo) => beatNo < 1);
+  const collector = createLiveCollector({
+    adapters: [fake.adapter],
+    watchdogIntervalMs: 0,
+    managerOptions: { reconnectDelayMs: 1, maxOpenAttempts: 3, stableAfterMs: 60_000, heartbeatIntervalMs: 5 },
+  });
+  try {
+    await collector.start({ userId: 'u', liveId: 'l', roomRef: '7123456789012345678' });
+    // 连续 3 次都「没稳定过」→ 终止；终止后会话从 active 移除
+    await waitFor(() => collector.statusOf('l').watch === null, 4000);
+    expect(fake.opened()).toBe(3);
+  } finally {
+    await collector.dispose();
+  }
+});
+
+it('看门狗：会话被判 error 后会被自动拉起（对齐竞品 30s 看门狗）', async () => {
+  const fake = createFakeAdapter('douyin', (_seq, beatNo) => beatNo < 1);
+  const collector = createLiveCollector({
+    adapters: [fake.adapter],
+    watchdogIntervalMs: 25,
+    managerOptions: { reconnectDelayMs: 1, maxOpenAttempts: 2, stableAfterMs: 60_000, heartbeatIntervalMs: 5 },
+  });
+  try {
+    await collector.start({ userId: 'u', liveId: 'l', roomRef: '7123456789012345678' });
+    // 首个会话连续 2 次失败即 error；没有看门狗时 open 只会有 2 次
+    await waitFor(() => fake.opened() >= 5, 6000);
+    expect(fake.opened()).toBeGreaterThanOrEqual(5);
+  } finally {
+    await collector.dispose();
+  }
+});
+
+it('看门狗：已挂起（直播结束）的场次不会被拉起', async () => {
+  const fake = createFakeAdapter('douyin', (_seq, beatNo) => beatNo < 1);
+  const collector = createLiveCollector({
+    adapters: [fake.adapter],
+    watchdogIntervalMs: 20,
+    managerOptions: { reconnectDelayMs: 1, maxOpenAttempts: 1, stableAfterMs: 60_000, heartbeatIntervalMs: 5 },
+  });
+  try {
+    await collector.start({ userId: 'u', liveId: 'l', roomRef: '7123456789012345678' });
+    await waitFor(() => fake.opened() >= 1, 2000);
+    await collector.suspend('l');
+    const before = fake.opened();
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    // 看门狗跑了几轮都不该动它：挂起 = 直播已结束
+    expect(fake.opened()).toBe(before);
+  } finally {
+    await collector.dispose();
+  }
+});
+
 
 
