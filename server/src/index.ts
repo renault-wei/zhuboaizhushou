@@ -5,6 +5,7 @@ import { autoEndScheduler } from './services/autoEnd';
 import { interactionEngine } from './services/interactionEngine';
 import { liveCollector } from './services/liveCollector';
 import { disposeStats } from './services/interactionStats';
+import { disposePendingReplies } from './services/pendingReplies';
 import { disposeReplyLedger } from './services/replyLedger';
 
 const app = buildApp();
@@ -31,6 +32,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         autoEndScheduler.dispose();
         disposeReplyLedger();
         disposeStats();
+        disposePendingReplies();
         await liveCollector.dispose();
         await pool.end();
         process.exit(0);

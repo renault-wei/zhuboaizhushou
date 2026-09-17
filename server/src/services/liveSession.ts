@@ -4,6 +4,7 @@ import { liveDanmaku as liveDanmakuTable, lives as livesTable } from '../db/sche
 import { LiveError, toLive } from './live';
 import { loopCaster } from './loopCaster';
 import { statsOf, type LiveInteractionStats } from './interactionStats';
+import { pendingReplyCount } from './pendingReplies';
 import { listLiveReplies, type LiveReplyRecord } from './replyLedger';
 import type { Live, LiveRow, LiveStatus } from './live';
 
@@ -47,6 +48,8 @@ export interface LiveMonitor {
   recentReplies: LiveReplyRecord[];
   /** R45：互动统计（收到 / 有效 / 回复 / 因频次漏掉）—— 商家据此判断频次是不是设太紧 */
   interactionStats: LiveInteractionStats;
+  /** R42：还有几条回复在队列里等着放（台本每个空档放一条，积压不该无限涨） */
+  pendingReplies: number;
 }
 
 // ---------- 内部工具 ----------
@@ -164,6 +167,8 @@ export async function getLiveMonitor(userId: string, id: string): Promise<LiveMo
     recentReplies: listLiveReplies(id),
     // R45：内存态互动统计（同上）
     interactionStats: statsOf(id),
+    // R42：待播回复积压条数
+    pendingReplies: pendingReplyCount(id),
   };
 }
 

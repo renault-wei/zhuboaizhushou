@@ -26,6 +26,7 @@ import { atmosphereScheduler } from '../services/atmosphereScheduler';
 import { autoEndScheduler } from '../services/autoEnd';
 import { interactionEngine } from '../services/interactionEngine';
 import { clearStats } from '../services/interactionStats';
+import { clearPendingReplies } from '../services/pendingReplies';
 import { clearLiveReplies } from '../services/replyLedger';
 import { AUTO_END_MAX_MINUTES, AUTO_END_MIN_MINUTES } from '../services/liveSettings';
 import { captureLiveSpeech, clampLiveSpeechRate, forgetLiveSpeech } from '../services/liveVoice';
@@ -560,6 +561,8 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       clearLiveReplies(live.id);
       // R45：互动统计同样从零开始
       clearStats(live.id);
+      // R42：待播回复队列也要清 —— 上一场积压的回复不该在本场播出来
+      clearPendingReplies(live.id);
       // R26：登记定时关播（未设 → 不登记）。到点走与手动 /end **完全同一条收尾路径**。
       const autoEndMinutes = live.autoEndMinutes;
       if (autoEndMinutes !== null) {
@@ -618,6 +621,8 @@ async function finishLive(
   autoEndScheduler.cancel(live.id);
   // R29：清掉本场的频控记账 —— 否则进程内 Map 会随场次数无界增长
   interactionEngine.forgetLive(live.id);
+  // R42：台本已停，队列里没放出去的回复不会再有机会播 —— 清掉，避免内存滞留
+  clearPendingReplies(live.id);
   let billing: Awaited<ReturnType<typeof settleLiveSession>> | null = null;
   try {
     billing = await settleLiveSession({

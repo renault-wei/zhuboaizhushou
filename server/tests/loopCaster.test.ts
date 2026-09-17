@@ -124,6 +124,64 @@ describe('M4 loopCaster 循环台本播出引擎（§8.2/§8.3）', () => {
     expect(order).toEqual(['台本句A。', '【弹幕回复】', '台本句A。']);
   });
 
+  // R42（2026-09-17 · 用户定调「节奏一定要好」）：回复走**空档插播**，一个空档最多一条。
+  it('R42：一个空档最多放一条回复 —— 积压再多也挤不停台本', async () => {
+    const order: string[] = [];
+    const backlog = ['回复1', '回复2', '回复3', '回复4'];
+    const caster = createLoopCaster({
+      itemGapSeconds: 0,
+      loopRestSeconds: 1,
+      idlePollMs: 1,
+      loadItems: async () => [{ text: '台本句A。', gapAfterSeconds: null }],
+      isBusy: () => false,
+      pickPendingReply: async () => backlog.shift() ?? null,
+      speak: async (text) => {
+        order.push(text);
+        if (order.filter((entry) => entry === '台本句A。').length >= 3) {
+          caster.stop(LIVE_ID);
+        }
+        return { spoken: true, reason: 'spoken' };
+      },
+      sleep: async () => undefined,
+    });
+
+    caster.start(LIVE_ID);
+    await waitRunnerGone(caster, LIVE_ID);
+
+    // 关键：每两句台本之间**只有一条**回复 —— 有 4 条积压也一样
+    expect(order).toEqual(['台本句A。', '回复1', '台本句A。', '回复2', '台本句A。']);
+  });
+
+  it('R42：回复优先于氛围语 —— 一个空档只给一次插播机会', async () => {
+    const order: string[] = [];
+    let replies = 1;
+    const caster = createLoopCaster({
+      itemGapSeconds: 0,
+      loopRestSeconds: 1,
+      idlePollMs: 1,
+      loadItems: async () => [{ text: '台本句A。', gapAfterSeconds: null }],
+      isBusy: () => false,
+      pickPendingReply: async () => (replies > 0 ? `回复${replies--}` : null),
+      pickAtmosphere: async () => ({ category: 'welcome', text: '欢迎语' }),
+      speak: async (text) => {
+        order.push(text);
+        // 收工条件要等**第 4 次出声**（台本→回复→台本→氛围语）之后，
+        // 否则 stop 会发生在氛围语插播之前，测不到「氛围语让位」这件事
+        if (order.length >= 4) {
+          caster.stop(LIVE_ID);
+        }
+        return { spoken: true, reason: 'spoken' };
+      },
+      sleep: async () => undefined,
+    });
+
+    caster.start(LIVE_ID);
+    await waitRunnerGone(caster, LIVE_ID);
+
+    // 第 1 个空档放了回复 → **氛围语让位**；第 2 个空档没回复了 → 氛围语才上
+    expect(order).toEqual(['台本句A。', '回复1', '台本句A。', '欢迎语']);
+  });
+
   // R20（2026-09-17）：用户拍板「循环话本播放期间间隔默认 0s」——连读更顺、静默几乎归零。
   it('R20：条间默认间隔为 0s', () => {
     expect(DEFAULT_ITEM_GAP_SECONDS).toBe(0);

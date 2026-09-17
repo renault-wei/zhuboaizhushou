@@ -7,6 +7,8 @@ import type { LiveStatus } from './live';
 import { replyProvider, type GenerateReplyInput } from './reply';
 import { classifyDanmaku, isWorthReplying } from './danmakuQuality';
 import { buildBuiltinFaq, matchFaq } from './faq';
+import { loopCaster } from './loopCaster';
+import { enqueuePendingReply } from './pendingReplies';
 import { recordDanmakuReceived, recordReply, recordThrottled } from './interactionStats';
 import { loadUserLiveSettings, matchBannedWords, parseBannedWords } from './liveSettings';
 import { recordLiveReply } from './replyLedger';
@@ -480,6 +482,18 @@ export const interactionEngine = createInteractionEngine({
       source: reply.source,
       createdAt: reply.createdAt,
     });
+    // R42：台本在跑 → 回复**入队**，由台本在句间空档逐条放出。
+    // 这是「节奏」的硬保障：一个空档最多放一条，台本不会被无限让位挤停
+    // （旧机制是「直接抢播 + 台本无超时让位」，回复音频长于回复间隔时会把台本饿死）。
+    if (loopCaster.status(reply.liveId)?.running === true) {
+      enqueuePendingReply({
+        liveId: reply.liveId,
+        text: reply.text,
+        createdAt: reply.createdAt,
+      });
+      return;
+    }
+    // 台本没在跑（未绑台本 / 未开播）→ 直接出声，与从前一致，避免把回复憋在队列里
     const snapshot = await getLiveSpeech(reply.liveId);
     const overrides =
       snapshot ?? presetSpeechOverrides(reply.volcPresetId, reply.speechRate);

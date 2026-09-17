@@ -9,6 +9,7 @@ import {
 import { getLiveSpeech } from './liveVoice';
 import type { AtmosphereCategory, AtmosphereInsertion } from './atmosphere';
 import { atmosphereScheduler } from './atmosphereScheduler';
+import { takePendingReply } from './pendingReplies';
 
 // 循环台本播出引擎（M4，P-循环台本 & P-播出里程碑 §8）：
 // 开播（ready→live）后按台本顺序循环口播产品/团购券；与弹幕回复共用 liveSpeaker 全局出声链路，
@@ -62,6 +63,11 @@ export interface LoopCasterOptions {
   sleep?(ms: number): Promise<void>;
   /** 出声链路忙闲判定：忙 = 本场有排队未播的音频（只看自己场次，避免多场互相拖节奏） */
   isBusy?(liveId: string): boolean;
+  /**
+   * R42：空档取一条**待播弹幕回复**的文案，无则 null。
+   * 优先级高于氛围语 —— 观众的真问题比暖场词重要。
+   */
+  pickPendingReply?(liveId: string): Promise<string | null>;
   /** 空档插播取词（M10-A3）：返回一条到期的氛围台词，无则 null；生产接 atmosphereScheduler */
   pickAtmosphere?(liveId: string, nowMs: number): Promise<AtmosphereInsertion | null>;
   /** 插播实际出声后的记账（按类别刷新频控计时） */
@@ -82,7 +88,8 @@ type ResolvedLoopDeps = Required<
     | 'loadVoice'
     | 'sleep'
     | 'isBusy'
-    | 'pickAtmosphere'
+    | 'pickPendingReply'
+  | 'pickAtmosphere'
     | 'markAtmosphereSpoken'
     | 'now'
   >
@@ -187,6 +194,39 @@ async function speakSafely(
  * 回复由 liveSpeaker 队列天然优先 —— 链路忙（回复排队/远程积压）时本轮机会直接让位，不排队抢播。
  * 只有真正出声成功才记账（该类别间隔从实际插入时点重新起算，与弹幕回复口径一致）。
  */
+/**
+ * R42：空档插播**弹幕回复**。
+ *
+ * 优先级最高（回复 > 氛围语 > 台本句 —— 见 tryInsertAtmosphere 的注释），
+ * 但**一个空档只放一条**：这就是「节奏」的硬保障 ——
+ * 无论弹幕多少，台本都能按轮推进，不会被无限让位挤停。
+ */
+async function tryInsertReply(
+  liveId: string,
+  options: ResolvedLoopDeps,
+  overrides: SpeechOverrides | null,
+): Promise<boolean> {
+  if (options.isBusy(liveId)) {
+    return false;
+  }
+  let text: string | null;
+  try {
+    text = await options.pickPendingReply(liveId);
+  } catch (err) {
+    console.warn(
+      `[loopCaster] 场次 ${liveId} 取待播回复失败，跳过本次插播：${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return false;
+  }
+  if (!text) {
+    return false;
+  }
+  // 取出来就播；出声失败即丢弃（队列有上界，不会因此堆积）
+  return await speakSafely(options.speak, liveId, text, overrides);
+}
+
 async function tryInsertAtmosphere(
   liveId: string,
   options: ResolvedLoopDeps,
@@ -313,8 +353,13 @@ async function runLoop(
         if (state.cancelled) {
           break;
         }
-        // 空档插播：本句播完的间隔就是氛围语的机会窗口（忙/未到期 → 本次不插，等下一个空档）
-        await tryInsertAtmosphere(liveId, options, voice);
+        // 空档插播（R42）：**回复优先**，一个空档只放一条。
+        // 回复放出去了就不再插氛围语 —— 一个空档只给一次插播机会，节奏才稳。
+        const insertedReply = await tryInsertReply(liveId, options, voice);
+        if (!insertedReply) {
+          // 本句播完的间隔也是氛围语的机会窗口（忙/未到期 → 本次不插，等下一个空档）
+          await tryInsertAtmosphere(liveId, options, voice);
+        }
         if (state.cancelled) {
           break;
         }
@@ -341,6 +386,8 @@ export function createLoopCaster(options: LoopCasterOptions = {}): LoopCaster {
   const sleep = options.sleep ?? defaultSleep;
   const isBusy = options.isBusy ?? defaultIsBusy;
   // 空档插播默认关闭（引擎核心不依赖氛围语模块）；生产由全局单例注入真实调度器
+  // 空档插播默认关闭（引擎核心不依赖回复队列）；生产由全局单例注入
+  const pickPendingReply = options.pickPendingReply ?? (async () => null);
   const pickAtmosphere = options.pickAtmosphere ?? (async () => null);
   const markAtmosphereSpoken = options.markAtmosphereSpoken ?? (() => undefined);
   const now = options.now ?? (() => Date.now());
@@ -360,7 +407,17 @@ export function createLoopCaster(options: LoopCasterOptions = {}): LoopCaster {
     void runLoop(
       liveId,
       state,
-      { speak, loadItems, loadVoice, sleep, isBusy, pickAtmosphere, markAtmosphereSpoken, now },
+      {
+        speak,
+        loadItems,
+        loadVoice,
+        sleep,
+        isBusy,
+        pickPendingReply,
+        pickAtmosphere,
+        markAtmosphereSpoken,
+        now,
+      },
       itemGapSeconds,
       loopRestSeconds,
       idlePollMs,
@@ -404,6 +461,8 @@ export function createLoopCaster(options: LoopCasterOptions = {}): LoopCaster {
  */
 export const loopCaster = createLoopCaster({
   loadVoice: getLiveSpeech,
+  // R42：空档先取待播弹幕回复（回复 > 氛围语 > 台本句）
+  pickPendingReply: async (liveId) => takePendingReply(liveId)?.text ?? null,
   pickAtmosphere: async (liveId, nowMs) => atmosphereScheduler.pickDue(liveId, nowMs),
   markAtmosphereSpoken: (liveId, category, atMs) =>
     atmosphereScheduler.markSpoken(liveId, category, atMs),
