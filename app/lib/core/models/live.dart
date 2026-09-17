@@ -175,6 +175,60 @@ class LiveStreamStatus {
   final bool aiBadgeShown;
 }
 
+/// 互动统计（R45）：让商家看见「本场收到多少 / 有效多少 / 回了多少 / 因为频次漏了多少」。
+///
+/// 为什么产品上必须：商家**完全不知道**自己漏了多少问题，
+/// 也就无法判断「回复频次是不是设得太紧」。这是判断 R41（前置过滤）效果的唯一依据。
+/// 服务端口径：只留计数、不留内容（用户 2026-09-17 拍板）。
+class InteractionStats {
+  const InteractionStats({
+    required this.received,
+    required this.replied,
+    required this.throttled,
+    required this.byQuality,
+  });
+
+  factory InteractionStats.fromJson(Map<String, dynamic> json) {
+    final raw = json['byQuality'];
+    final quality = <String, int>{};
+    if (raw is Map) {
+      for (final entry in raw.entries) {
+        quality[entry.key.toString()] = (entry.value as num?)?.toInt() ?? 0;
+      }
+    }
+    return InteractionStats(
+      received: (json['received'] as num?)?.toInt() ?? 0,
+      replied: (json['replied'] as num?)?.toInt() ?? 0,
+      throttled: (json['throttled'] as num?)?.toInt() ?? 0,
+      byQuality: quality,
+    );
+  }
+
+  /// 本场收到的弹幕总数
+  final int received;
+  /// 实际产出回复的条数
+  final int replied;
+  /// **有效但被频次挡下**的条数 —— 这才是「因为设置太紧漏掉的」
+  final int throttled;
+  /// 按质量分类的计数：question / need / greeting / smalltalk / spam
+  final Map<String, int> byQuality;
+
+  int _count(String key) => byQuality[key] ?? 0;
+
+  /// 有效 = 提问 + 需求表达（用户定调：只有这两类值得回）
+  int get valid => _count('question') + _count('need');
+
+  /// 被前置过滤挡掉的（灌水 / 闲聊 / 问候）
+  int get filtered => received - valid;
+
+  int get spam => _count('spam');
+  int get smalltalk => _count('smalltalk');
+  int get greeting => _count('greeting');
+
+  /// 频次可能偏紧：**漏掉的有效问题比回出去的还多**（样本太少时不提示，避免噪音）
+  bool get throttledHeavy => throttled >= 5 && throttled > replied;
+}
+
 /// 一条 AI 回复（R24）：服务端内存台账回带，**最新的在前**。
 ///
 /// 存在的意义：回复此前完全没留痕，商家看不到 AI 到底说了什么。
@@ -230,6 +284,8 @@ class LiveMonitor {
     required this.loopCurrentSeq,
     required this.loopMissing,
     required this.recentReplies,
+    required this.interactionStats,
+    required this.pendingReplies,
   });
 
   factory LiveMonitor.fromJson(Map<String, dynamic> json) {
@@ -252,6 +308,17 @@ class LiveMonitor {
                 .map((item) => LiveReply.fromJson(Map<String, dynamic>.from(item)))
                 .toList()
           : const <LiveReply>[],
+      interactionStats: json['interactionStats'] is Map
+          ? InteractionStats.fromJson(
+              Map<String, dynamic>.from(json['interactionStats'] as Map),
+            )
+          : const InteractionStats(
+              received: 0,
+              replied: 0,
+              throttled: 0,
+              byQuality: <String, int>{},
+            ),
+      pendingReplies: (json['pendingReplies'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -284,6 +351,12 @@ class LiveMonitor {
 
   /// R24：最近若干条 AI 回复（最新的在前；服务端内存态，进程重启即丢）
   final List<LiveReply> recentReplies;
+
+  /// R45：互动统计（收到 / 有效 / 已回 / 因频次漏掉）
+  final InteractionStats interactionStats;
+
+  /// R42：还有几条回复在队列里等着放（台本每个空档放一条）
+  final int pendingReplies;
 
   /// 当前轮到第几条（1 起；空闲 / 结束为 0）
   final int loopCurrentSeq;

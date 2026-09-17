@@ -542,6 +542,8 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
           const SizedBox(height: 12),
           _buildComplianceBadge(monitor),
           const SizedBox(height: 16),
+          _buildInteractionStatsSection(monitor),
+          const SizedBox(height: 16),
           _buildRepliesSection(monitor),
           const SizedBox(height: 16),
           _buildDanmakuSection(),
@@ -1620,6 +1622,119 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   /// 弹幕日志区：只读滚动展示；空态显示「暂无弹幕」。
   /// R24：AI 回复区 —— 让商家看得见「AI 到底回了什么」。
   /// 服务端是内存台账（开播清空、结束保留、重启即丢），这里只做展示。
+  /// R45：互动概况 —— 让商家看见「收到多少 / 有效多少 / 回了多少 / 因为频次漏了多少」。
+  ///
+  /// 这是**唯一**能让商家判断「回复频次是不是设得太紧」的地方：
+  /// 没有它，商家只会觉得「今天 AI 怎么不搭理人」，却不知道是自己的设置挡的。
+  Widget _buildInteractionStatsSection(LiveMonitor monitor) {
+    final stats = monitor.interactionStats;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text(
+              '互动概况',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: AppColors.nightText,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '收到 ${stats.received} 条',
+              style: const TextStyle(fontSize: 11, color: AppColors.nightTextFaint),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Container(
+          key: const Key('liveMonitorStatsCard'),
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.nightCard,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.nightStroke),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _statCell('有效提问', stats.valid, AppColors.nightText),
+                  _statCell('已回复', stats.replied, AppColors.live),
+                  _statCell(
+                    '因频次漏掉',
+                    stats.throttled,
+                    stats.throttled > 0 ? AppColors.warning : AppColors.nightTextDim,
+                  ),
+                ],
+              ),
+              const Divider(height: 20, color: AppColors.nightStroke),
+              Text(
+                '挡掉无效弹幕 ${stats.filtered} 条（灌水 ${stats.spam} · 闲聊 ${stats.smalltalk} · 问候 ${stats.greeting}）',
+                style: const TextStyle(fontSize: 11, color: AppColors.nightTextFaint),
+              ),
+              if (monitor.pendingReplies > 0) ...[
+                const SizedBox(height: 4),
+                Text(
+                  '排队中 ${monitor.pendingReplies} 条（台本每句之间放一条）',
+                  key: const Key('liveMonitorStatsPending'),
+                  style: const TextStyle(fontSize: 11, color: AppColors.nightTextFaint),
+                ),
+              ],
+              // 可执行的那一句：把数字翻译成「你该做什么」
+              if (stats.throttledHeavy) ...[
+                const SizedBox(height: 10),
+                Container(
+                  key: const Key('liveMonitorStatsHint'),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppColors.warning.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.info_outline, size: 15, color: AppColors.warning),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '有 ${stats.throttled} 条有效提问因为频次被挡下，比回出去的还多 —— 可以去「我的 → 智能回复与话术」把回复频次放宽。',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            height: 1.5,
+                            color: AppColors.nightText,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _statCell(String label, int value, Color color) {
+    return Column(
+      children: [
+        Text(
+          '$value',
+          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: color),
+        ),
+        const SizedBox(height: 2),
+        Text(label, style: const TextStyle(fontSize: 11, color: AppColors.nightTextFaint)),
+      ],
+    );
+  }
+
   Widget _buildRepliesSection(LiveMonitor monitor) {
     final replies = monitor.recentReplies;
     return Column(

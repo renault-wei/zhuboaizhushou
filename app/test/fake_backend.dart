@@ -238,6 +238,21 @@ class FakeBackend implements HttpClientAdapter {
   /// 采集通道是否启用（模拟服务端未配签名 Key 的部署 → false）。
   bool danmakuSourceEnabled = true;
 
+  // ---------- R45 互动统计 / R42 待播积压（内存态） ----------
+  Map<String, dynamic> interactionStats = <String, dynamic>{
+    'received': 0,
+    'replied': 0,
+    'throttled': 0,
+    'byQuality': <String, dynamic>{
+      'question': 0,
+      'need': 0,
+      'greeting': 0,
+      'smalltalk': 0,
+      'spam': 0,
+    },
+  };
+  int pendingReplies = 0;
+
   // ---------- R24 AI 回复台账（内存态，最新在前） ----------
   final Map<String, List<Map<String, dynamic>>> liveReplies =
       <String, List<Map<String, dynamic>>>{};
@@ -1256,6 +1271,10 @@ class FakeBackend implements HttpClientAdapter {
       'loopMissing': live['loopMissing'] == true,
       // R24：AI 回复台账（内存态，最新在前）—— 测试可直接往里塞
       'recentReplies': liveReplies[id] ?? <Map<String, dynamic>>[],
+      // R45：互动统计（内存态）—— 测试可直接改这几个字段
+      'interactionStats': interactionStats,
+      // R42：待播回复积压
+      'pendingReplies': pendingReplies,
     });
   }
 
