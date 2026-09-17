@@ -182,6 +182,43 @@ describe('M4 loopCaster 循环台本播出引擎（§8.2/§8.3）', () => {
     expect(order).toEqual(['台本句A。', '回复1', '台本句A。', '欢迎语']);
   });
 
+  // 🔴 R42 回归复现（2026-09-17 用户提问「AI 回复会进入语音队列吗」时查出来的）：
+  // 手机线用的是 remoteSpeechSink —— 它的 play 是「**入队即返回**」（不等播放）。
+  // 于是 speak 返回后链路里必然还有那条台本句 → isBusy 恒为真 →
+  // 若 tryInsertReply 以 isBusy 为门槛，回复就**永远不会被放出去**。
+  it('R42 回归：出声链路是「入队即返回」时（手机线），回复也必须被放出去', async () => {
+    const order: string[] = [];
+    let pending = 0; // 模拟远程队列积压
+    let replies = 2;
+    const caster = createLoopCaster({
+      itemGapSeconds: 0,
+      loopRestSeconds: 1,
+      idlePollMs: 1,
+      loadItems: async () => [{ text: '台本句A。', gapAfterSeconds: null }],
+      // 远程 sink 语义：入队即返回 → 刚说完就「忙」
+      isBusy: () => pending > 0,
+      pickPendingReply: async () => (replies > 0 ? `回复${replies--}` : null),
+      speak: async (text) => {
+        order.push(text);
+        pending += 1;
+        if (order.length >= 5) {
+          caster.stop(LIVE_ID);
+        }
+        return { spoken: true, reason: 'spoken' };
+      },
+      // 模拟助播机在台本等待期间把队列里的音频播掉
+      sleep: async () => {
+        pending = 0;
+      },
+    });
+
+    caster.start(LIVE_ID);
+    await waitRunnerGone(caster, LIVE_ID);
+
+    // 修复前：order 里只有台本句，一条回复都没有（回复全卡在队列里）
+    expect(order.filter((entry) => entry.startsWith('回复'))).toHaveLength(2);
+  });
+
   // R20（2026-09-17）：用户拍板「循环话本播放期间间隔默认 0s」——连读更顺、静默几乎归零。
   it('R20：条间默认间隔为 0s', () => {
     expect(DEFAULT_ITEM_GAP_SECONDS).toBe(0);
@@ -521,9 +558,14 @@ describe('M10-A3 loopCaster 空档插播氛围语', () => {
     expect(marks).toEqual(['welcome', 'welcome']);
   });
 
-  it('出声链路忙时让位：忙窗口不插播、空闲窗口才插播', async () => {
+  // 意图不变（**有回复要插时，氛围语让位**），但**机制换了** ——
+  // 原来用 isBusy 假装「有回复」，而手机线的 remoteSpeechSink 是「入队即返回」，
+  // isBusy 恒为真 → 氛围语在真机上**从来没插播过**。R42 起改成直接看
+  // 「这个空档有没有插进一条回复」—— 表达更直接，也不再依赖 sink 的实现细节。
+  it('出声链路忙时让位：有回复要插时氛围语让位，没有回复才插播', async () => {
     const events: string[] = [];
-    let busy = false;
+    let pending = 0;
+    let replies = 1;
     let stopRequested = false;
     const caster = createLoopCaster({
       itemGapSeconds: 1,
@@ -532,22 +574,21 @@ describe('M10-A3 loopCaster 空档插播氛围语', () => {
         { text: '台本句一', gapAfterSeconds: 1 },
         { text: '台本句二', gapAfterSeconds: 1 },
       ],
-      // 第一句台本播完立即“忙”（模拟弹幕回复插进来），由 sleep 清空
-      isBusy: () => busy,
+      // 手机线语义：speak 是「入队即返回」→ 刚说完 isBusy 就为真；
+      // 由 sleep 模拟助播机把队列播掉（注意：若助播机**不轮询**，isBusy 恒真，
+      // 台本会卡在空档避让里 —— 这是手机线一个已知风险，另记）。
+      isBusy: () => pending > 0,
+      // 第 1 个空档有一条待播回复 → 回复占用这次机会，氛围语让位
+      pickPendingReply: async () => (replies > 0 ? `回复${replies--}` : null),
       speak: async (text) => {
         events.push(text);
-        if (text === '台本句一') {
-          busy = true;
-        }
+        pending += 1;
         return { spoken: true, reason: 'spoken' };
       },
       pickAtmosphere: async () => ({ category: 'welcome' as const, text: '欢迎语一句' }),
       markAtmosphereSpoken: () => undefined,
       sleep: async () => {
-        if (busy) {
-          busy = false;
-          return;
-        }
+        pending = 0;
         if (!stopRequested && events.includes('台本句二')) {
           stopRequested = true;
           caster.stop(LIVE_ID);
@@ -557,8 +598,8 @@ describe('M10-A3 loopCaster 空档插播氛围语', () => {
 
     caster.start(LIVE_ID);
     await waitRunnerGone(caster, LIVE_ID);
-    // 台本句一后的忙窗口未插播；台本句二后的空闲窗口才插播
-    expect(events).toEqual(['台本句一', '台本句二', '欢迎语一句']);
+    // 第 1 个空档放了回复（氛围语让位）；第 2 个空档没回复了 → 氛围语上
+    expect(events).toEqual(['台本句一', '回复1', '台本句二', '欢迎语一句']);
   });
 
   it('插播出声失败（disabled/skipped）不记账，节奏照走', async () => {

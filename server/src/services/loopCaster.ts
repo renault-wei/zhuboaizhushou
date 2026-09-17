@@ -206,9 +206,14 @@ async function tryInsertReply(
   options: ResolvedLoopDeps,
   overrides: SpeechOverrides | null,
 ): Promise<boolean> {
-  if (options.isBusy(liveId)) {
-    return false;
-  }
+  // ⚠️ 这里**不能**用 isBusy 当门槛（2026-09-17 修）：
+  // 手机线用的是 remoteSpeechSink，它的 play 是「**入队即返回**」（不等播放）——
+  // 于是 speak 返回后链路里必然还有刚说的那句台本，isBusy 恒为真，
+  // 回复就**永远不会被放出去**（真机上表现为「AI 不回话」）。
+  //
+  // 语义上也不需要它：本函数就是要在**当前台本句之后**放一条回复，
+  // 而出声链路是 FIFO —— 直接 push 进去，播出来正好夹在两句台本之间。
+  // 节奏由「一个空档只调用一次本函数」保证，不靠 isBusy。
   let text: string | null;
   try {
     text = await options.pickPendingReply(liveId);
@@ -232,9 +237,9 @@ async function tryInsertAtmosphere(
   options: ResolvedLoopDeps,
   overrides: SpeechOverrides | null,
 ): Promise<void> {
-  if (options.isBusy(liveId)) {
-    return;
-  }
+  // 同样的坑（2026-09-17 一并修）：远程 sink「入队即返回」→ isBusy 恒为真 →
+  // 氛围语在手机线上**从来没被插播过**。频次由 atmosphereScheduler.pickDue 自己控，
+  // 不靠 isBusy —— 该到期就到期，没到期 pickDue 返回 null，不会插多。
   let insertion: AtmosphereInsertion | null;
   try {
     insertion = await options.pickAtmosphere(liveId, options.now());
