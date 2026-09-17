@@ -25,6 +25,11 @@ export interface GenerateReplyInput {
     /** 账号级「补充知识」（R22）：商家自己补的说明。**不覆盖绑定话术**，只作更正补充（用户拍板 D3） */
     extraKnowledge?: string | null;
     productSnapshot: Record<string, string> | null;
+    /**
+     * 第 1 层固定回复的口径（R33）。只在**未命中固定回复**时才交给模型，
+     * 目的是让两条路径口径一致 —— 否则会出现「固定回复说 99、AI 说 99 起」。
+     */
+    faqHints?: readonly string[];
   };
 }
 
@@ -87,6 +92,7 @@ export class DeepSeekReplyProvider implements ReplyProvider {
       scriptContent: input.knowledge.scriptContent,
       extraKnowledge: input.knowledge.extraKnowledge ?? null,
       productSnapshot: input.knowledge.productSnapshot,
+      faqHints: input.knowledge.faqHints ?? [],
     });
 
     let response: Response;

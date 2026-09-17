@@ -37,7 +37,9 @@ function makeMessage(overrides: Partial<LiveDanmakuRecord> = {}): LiveDanmakuRec
   return {
     id: randomUUID(),
     liveId: FIXED_LIVE_ID,
-    content: '老板，这个双人套餐多少钱？',
+    // 注意：默认弹幕**刻意不命中第 1 层固定回复**（不说「多少钱/怎么卖」这类词），
+    // 好让既有用例继续测它们本来要测的 AI 路径。固定回复有专门用例覆盖。
+    content: '你们几点开始营业呀？',
     senderNickname: '吃货小王',
     sentAt: new Date().toISOString(),
     ...overrides,
@@ -115,7 +117,8 @@ it('直播中弹幕 → DeepSeek 生成回复并交出口（source=generated）'
     senderIntervalMs: 0,
   });
 
-  const message = makeMessage({ content: '双人餐怎么卖？' });
+  // 刻意避开「怎么卖」等固定回复问法：本用例测的是 **AI 生成路径**
+  const message = makeMessage({ content: '你们店里能坐多少人？' });
   const outcome = await engine.handle(message);
   expect(outcome.action).toBe('reply');
   if (outcome.action !== 'reply') {
@@ -293,6 +296,82 @@ it('R27：命中商家自定义违禁词 → 整条丢弃（BANNED_WORD），不
   expect(outcome).toEqual({ action: 'skip', reason: 'BANNED_WORD' });
   // 关键区别（用户拍板 D4）：不是改念兜底话术，而是**整条不播** —— 出口一次都不该被调用
   expect(onReply).not.toHaveBeenCalled();
+});
+
+// ---------- R32/R33：第 1 层固定回复（零 AI）----------
+
+it('R33：命中固定回复 → source=faq，且**一次 DeepSeek 都不调**', async () => {
+  const generateReply = vi.fn(async () => '这条不该被用上');
+  const engine = createInteractionEngine({
+    loadContext: async () => makeContext(),
+    generateReply,
+    onReply: () => undefined,
+  });
+  // makeContext 的快照是 { name: '双人火锅套餐', price: '99 元' }
+  const outcome = await engine.handle(makeMessage({ content: '多少钱？' }));
+  expect(outcome.action).toBe('reply');
+  if (outcome.action !== 'reply') {
+    return;
+  }
+  expect(outcome.reply.source).toBe('faq');
+  expect(outcome.reply.text).toBe('咱家双人火锅套餐是99 元');
+  // 省钱的证据：AI 一次都没调
+  expect(generateReply).not.toHaveBeenCalled();
+});
+
+it('R33：未命中固定回复 → 回落 AI，并把固定回复口径一并交给它', async () => {
+  const generateReply = vi.fn(async () => '咱家的毛肚是招牌～');
+  const engine = createInteractionEngine({
+    loadContext: async () => makeContext(),
+    generateReply,
+    onReply: () => undefined,
+  });
+  const outcome = await engine.handle(makeMessage({ content: '你们店里能坐多少人？' }));
+  expect(outcome.action).toBe('reply');
+  if (outcome.action !== 'reply') {
+    return;
+  }
+  expect(outcome.reply.source).toBe('generated');
+  expect(generateReply).toHaveBeenCalledTimes(1);
+  // 口径一致性（用户拍板 D3 的配套）：未命中时把固定答案作为提示交给模型，
+  // 避免「固定回复说 99、AI 说 99 起」
+  const input = generateReply.mock.calls[0]?.[0] as {
+    knowledge: { faqHints?: readonly string[] };
+  };
+  expect(input.knowledge.faqHints).toContain('咱家双人火锅套餐是99 元');
+});
+
+it('R33：固定答案自身命中商家违禁词 → 当作未命中，回落 AI（不把那个词照念出来）', async () => {
+  const generateReply = vi.fn(async () => '咱们这个套餐很划算～');
+  const engine = createInteractionEngine({
+    // 商家把「99」设成违禁词，而它正好出现在自己的价格字段里
+    loadContext: async () => makeContext({ bannedWords: ['99'] }),
+    generateReply,
+    onReply: () => undefined,
+  });
+  const outcome = await engine.handle(makeMessage({ content: '多少钱？' }));
+  expect(outcome.action).toBe('reply');
+  if (outcome.action !== 'reply') {
+    return;
+  }
+  expect(outcome.reply.source).toBe('generated');
+  expect(outcome.reply.text).not.toContain('99');
+});
+
+it('R32：没有商品快照 → 固定回复为空，正常走 AI（不会凭空编答案）', async () => {
+  const generateReply = vi.fn(async () => '好的呢～');
+  const engine = createInteractionEngine({
+    loadContext: async () => makeContext({ productSnapshot: null }),
+    generateReply,
+    onReply: () => undefined,
+  });
+  const outcome = await engine.handle(makeMessage({ content: '多少钱？' }));
+  expect(outcome.action).toBe('reply');
+  if (outcome.action !== 'reply') {
+    return;
+  }
+  expect(outcome.reply.source).toBe('generated');
+  expect(generateReply).toHaveBeenCalledTimes(1);
 });
 
 // ---------- G4 联调：G3 写入 → 广播 → 引擎回复 ----------

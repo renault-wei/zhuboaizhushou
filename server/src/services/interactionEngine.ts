@@ -5,6 +5,7 @@ import { lives as livesTable, scripts as scriptsTable } from '../db/schema';
 import { onDanmaku, type LiveDanmakuRecord } from './danmaku';
 import type { LiveStatus } from './live';
 import { replyProvider, type GenerateReplyInput } from './reply';
+import { buildBuiltinFaq, matchFaq } from './faq';
 import { loadUserLiveSettings, matchBannedWords, parseBannedWords } from './liveSettings';
 import { recordLiveReply } from './replyLedger';
 import { scanSensitive } from './sensitive';
@@ -64,8 +65,8 @@ export interface InteractionReply {
   senderNickname: string | null;
   /** 待口播文案 */
   text: string;
-  /** generated = DeepSeek 正常回复；fallback = 命中敏感词改兜底话术 */
-  source: 'generated' | 'fallback';
+  /** generated = DeepSeek 正常回复；fallback = 命中敏感词改兜底话术；faq = 第 1 层固定回复（零 AI） */
+  source: 'generated' | 'fallback' | 'faq';
   /** 生成完成时间（ISO8601） */
   createdAt: string;
   /** 本场音色（火山预设 id）：出口合成时透传，null = 默认音色 */
@@ -234,37 +235,56 @@ class InteractionEngineImpl implements InteractionEngine {
       }
     }
 
-    let generatedText: string | null;
-    try {
-      generatedText = await this.options.generateReply({
-        content,
-        senderNickname: message.senderNickname,
-        knowledge: {
-          liveTitle: context.liveTitle,
-          scriptContent: context.scriptContent,
-          extraKnowledge: context.replyExtraKnowledge ?? null,
-          productSnapshot: context.productSnapshot,
-        },
-      });
-    } catch {
-      // 单条生成失败直接跳过，不让上游弹幕链路感知（日志/统计排后续任务）
-      return { action: 'skip', reason: 'GENERATION_FAILED' };
-    }
-    if (!generatedText) {
-      return { action: 'skip', reason: 'NO_REPLY_NEEDED' };
+    // R33 第 1 层（docs/FIXED-REPLY-PLAN.md §4，用户拍板 D1「可自动生效」）：
+    // 先试**固定回复** —— 零 AI 调用、零延迟、零幻觉。
+    // 答案来自商家自己填的 productSnapshot 字段，不是模型猜的。
+    const faqEntries = buildBuiltinFaq(context.productSnapshot);
+    const faqHit = matchFaq(content, faqEntries);
+
+    let replyText: string;
+    let replySource: InteractionReply['source'];
+
+    if (faqHit !== null && this.isUsableFaqAnswer(faqHit.entry.answer, context)) {
+      replyText = faqHit.entry.answer;
+      replySource = 'faq';
+    } else {
+      let generatedText: string | null;
+      try {
+        generatedText = await this.options.generateReply({
+          content,
+          senderNickname: message.senderNickname,
+          knowledge: {
+            liveTitle: context.liveTitle,
+            scriptContent: context.scriptContent,
+            extraKnowledge: context.replyExtraKnowledge ?? null,
+            productSnapshot: context.productSnapshot,
+            // 用户拍板 D3：命中固定回复就不走 AI；未命中时才把固定回复的**口径**一并给它，
+            // 避免出现「固定回复说 99、AI 说 99 起」的自相矛盾。
+            faqHints: faqEntries.map((entry) => entry.answer),
+          },
+        });
+      } catch {
+        // 单条生成失败直接跳过，不让上游弹幕链路感知（日志/统计排后续任务）
+        return { action: 'skip', reason: 'GENERATION_FAILED' };
+      }
+      if (!generatedText) {
+        return { action: 'skip', reason: 'NO_REPLY_NEEDED' };
+      }
+
+      // R27（D4）：命中**商家自定义违禁词** → 整条丢弃，**不走兜底话术**。
+      // 与内置词库的处置分开：商家写进词表的本意是「这句不要出现」，换个说法播反而是违背。
+      const banned = matchBannedWords(generatedText, context.bannedWords ?? []);
+      if (banned.length > 0) {
+        return { action: 'skip', reason: 'BANNED_WORD' };
+      }
+
+      // 合规兜底：命中拦截级敏感词不直接播，改念安全兜底话术
+      const scanned = scanSensitive(generatedText);
+      const useFallback = scanned.status === 'blocked';
+      replyText = useFallback ? this.pickFallbackText() : generatedText;
+      replySource = useFallback ? 'fallback' : 'generated';
     }
 
-    // R27（D4）：命中**商家自定义违禁词** → 整条丢弃，**不走兜底话术**。
-    // 与内置词库的处置分开：商家写进词表的本意是「这句不要出现」，换个说法播反而是违背。
-    const banned = matchBannedWords(generatedText, context.bannedWords ?? []);
-    if (banned.length > 0) {
-      return { action: 'skip', reason: 'BANNED_WORD' };
-    }
-
-    // 合规兜底：命中拦截级敏感词不直接播，改念安全兜底话术
-    const scanned = scanSensitive(generatedText);
-    const useFallback = scanned.status === 'blocked';
-    const replyText = useFallback ? this.pickFallbackText() : generatedText;
     const repliedAt = this.options.now();
     const reply: InteractionReply = {
       id: randomUUID(),
@@ -273,7 +293,7 @@ class InteractionEngineImpl implements InteractionEngine {
       danmakuId: message.id,
       senderNickname: message.senderNickname,
       text: replyText,
-      source: useFallback ? 'fallback' : 'generated',
+      source: replySource,
       createdAt: new Date(repliedAt).toISOString(),
       volcPresetId: context.volcPresetId,
       speechRate: context.speechRate,
@@ -296,6 +316,17 @@ class InteractionEngineImpl implements InteractionEngine {
     return onDanmaku((message) => {
       void this.handle(message).catch(() => undefined);
     });
+  }
+
+  /**
+   * 固定回复同样要过合规两道闸：商家自己填的字段也可能含敏感词 / 他自己的违禁词。
+   * 命中就**当作未命中**回落 AI —— 让模型换一种说法，而不是把商家那个词照念出来。
+   */
+  private isUsableFaqAnswer(answer: string, context: LiveInteractionContext): boolean {
+    if (matchBannedWords(answer, context.bannedWords ?? []).length > 0) {
+      return false;
+    }
+    return scanSensitive(answer).status !== 'blocked';
   }
 
   /** 轮换取兜底话术：降低连续回复同一句的机械感 */

@@ -12,8 +12,8 @@ export interface LiveReplyRecord {
   senderNickname: string | null;
   /** 实际口播的文案（命中内置敏感词时是兜底话术） */
   text: string;
-  /** generated = AI 正常生成；fallback = 命中内置敏感词改念兜底话术 */
-  source: 'generated' | 'fallback';
+  /** generated = AI 正常生成；fallback = 命中内置敏感词改念兜底话术；faq = 第 1 层固定回复（零 AI） */
+  source: 'generated' | 'fallback' | 'faq';
   createdAt: string;
 }
 
