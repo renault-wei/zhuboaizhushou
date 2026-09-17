@@ -6,6 +6,7 @@ import { onDanmaku, type LiveDanmakuRecord } from './danmaku';
 import type { LiveStatus } from './live';
 import { replyProvider, type GenerateReplyInput } from './reply';
 import { loadUserLiveSettings, matchBannedWords, parseBannedWords } from './liveSettings';
+import { recordLiveReply } from './replyLedger';
 import { scanSensitive } from './sensitive';
 import { liveSpeaker } from './liveSpeaker';
 import { getLiveSpeech, presetSpeechOverrides } from './liveVoice';
@@ -329,6 +330,13 @@ export function createInteractionEngine(
 // 音色口径：优先用本场开播快照（与循环台本句同源），快照缺失（进程重启后补入）回落快照读取，再不济用本条上下文
 export const interactionEngine = createInteractionEngine({
   onReply: async (reply) => {
+    // R24：先记账再出声 —— 商家要在工作台看见「AI 到底回了什么」
+    recordLiveReply(reply.liveId, {
+      senderNickname: reply.senderNickname,
+      text: reply.text,
+      source: reply.source,
+      createdAt: reply.createdAt,
+    });
     const snapshot = await getLiveSpeech(reply.liveId);
     const overrides =
       snapshot ?? presetSpeechOverrides(reply.volcPresetId, reply.speechRate);

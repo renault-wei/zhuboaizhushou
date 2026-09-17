@@ -24,6 +24,7 @@ import { loopCaster } from '../services/loopCaster';
 import { liveCollector } from '../services/liveCollector';
 import { atmosphereScheduler } from '../services/atmosphereScheduler';
 import { autoEndScheduler } from '../services/autoEnd';
+import { clearLiveReplies } from '../services/replyLedger';
 import { AUTO_END_MAX_MINUTES, AUTO_END_MIN_MINUTES } from '../services/liveSettings';
 import { captureLiveSpeech, clampLiveSpeechRate, forgetLiveSpeech } from '../services/liveVoice';
 
@@ -553,6 +554,8 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       } catch (err) {
         request.log.warn({ err }, '开播联动启动弹幕采集失败（不阻断开播）');
       }
+      // R24：开播即清空上一场的回复台账 —— 工作台只看本场 AI 回了什么
+      clearLiveReplies(live.id);
       // R26：登记定时关播（未设 → 不登记）。到点走与手动 /end **完全同一条收尾路径**。
       const autoEndMinutes = live.autoEndMinutes;
       if (autoEndMinutes !== null) {
