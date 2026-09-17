@@ -5,7 +5,9 @@ import { lives as livesTable, scripts as scriptsTable } from '../db/schema';
 import { onDanmaku, type LiveDanmakuRecord } from './danmaku';
 import type { LiveStatus } from './live';
 import { replyProvider, type GenerateReplyInput } from './reply';
+import { classifyDanmaku, isWorthReplying } from './danmakuQuality';
 import { buildBuiltinFaq, matchFaq } from './faq';
+import { recordDanmakuReceived, recordReply, recordThrottled } from './interactionStats';
 import { loadUserLiveSettings, matchBannedWords, parseBannedWords } from './liveSettings';
 import { recordLiveReply } from './replyLedger';
 import { scanSensitive } from './sensitive';
@@ -106,7 +108,12 @@ export type InteractionSkipReason =
   | 'NO_REPLY_NEEDED'
   | 'GENERATION_FAILED'
   /** R27：生成结果命中**商家自定义违禁词** —— 按用户拍板 D4「整条丢弃不播」（区别于内置词库的兜底话术） */
-  | 'BANNED_WORD';
+  | 'BANNED_WORD'
+  /**
+   * R41：被判为**无效弹幕**（灌水 / 广告 / 闲聊 / 问候）—— 前置挡掉，
+   * **不占互动名额、也不花一分钱**。分类见 services/danmakuQuality.ts。
+   */
+  | 'INVALID_DANMAKU';
 
 export type InteractionOutcome =
   | { action: 'reply'; reply: InteractionReply }
@@ -268,6 +275,16 @@ class InteractionEngineImpl implements InteractionEngine {
       return { action: 'skip', reason: 'DANMAKU_EMPTY' };
     }
 
+    // R41：**无效弹幕前置过滤**，放在最前面（用户 2026-09-17 定调）。
+    // 位置很关键：现在的顺序曾是「时间窗限流 → LLM 判断」，于是灌水会
+    //   ① 抢走名额把真问题挤掉；② 照样触发一次 DeepSeek 调用（花钱买「不说话」）。
+    // 挡在这里，两件事一起解决 —— 不占名额、不花钱。
+    const quality = classifyDanmaku(content);
+    recordDanmakuReceived(message.liveId, quality);
+    if (!isWorthReplying(quality)) {
+      return { action: 'skip', reason: 'INVALID_DANMAKU' };
+    }
+
     const context = await this.options.loadContext(message.liveId);
     if (!context) {
       return { action: 'skip', reason: 'LIVE_NOT_FOUND' };
@@ -293,6 +310,8 @@ class InteractionEngineImpl implements InteractionEngine {
     const now = this.options.now();
     const lastGlobalReplyAt = this.lastReplyAtByLive.get(context.liveId);
     if (lastGlobalReplyAt !== undefined && now - lastGlobalReplyAt < globalIntervalMs) {
+      // R45：有效弹幕却被频控挡下 —— 这部分才是「因为频次设太紧漏掉的」，商家要看得到
+      recordThrottled(context.liveId);
       return { action: 'skip', reason: 'GLOBAL_THROTTLED' };
     }
     // 用户级频控：同一昵称刷屏只回一次（匿名为空昵称时不做单用户限制）
@@ -378,6 +397,7 @@ class InteractionEngineImpl implements InteractionEngine {
     if (senderKey) {
       rememberThrottle(this.lastReplyAtBySender, senderKey, repliedAt);
     }
+    recordReply(context.liveId);
     try {
       await this.options.onReply(reply);
     } catch {

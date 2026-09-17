@@ -148,7 +148,9 @@ it('生成器返回 NONE/空 → skip NO_REPLY_NEEDED，不触发出口', async 
     senderIntervalMs: 0,
   });
 
-  const outcome = await engine.handle(makeMessage({ content: '哈哈哈' }));
+  // 注意：不能再用「哈哈哈」—— R41 起那类灌水会在**最前面**被判 INVALID_DANMAKU，
+  // 根本到不了生成器。本用例要测的是「生成器返回 NONE」这条路径，所以喂一条有效弹幕。
+  const outcome = await engine.handle(makeMessage({ content: '你们能坐多少人？' }));
   expect(outcome).toEqual({ action: 'skip', reason: 'NO_REPLY_NEEDED' });
   expect(onReply).not.toHaveBeenCalled();
 });
@@ -448,6 +450,61 @@ it('R29：forgetLive 清掉本场记账后，立刻能再回一条（场次结�
   // 场次结束 → 回收该场记账 → 下一场同 id 立刻可回
   engine.forgetLive(FIXED_LIVE_ID);
   expect((await engine.handle(makeMessage({ content: '你们能坐多少人？' }))).action).toBe('reply');
+});
+
+// ---------- R41/R45：无效弹幕前置过滤 + 互动统计 ----------
+
+it('R41：灌水/闲聊在**最前面**就被挡掉 —— 一次 DeepSeek 都不调、不占名额', async () => {
+  const generateReply = vi.fn(async () => '不该被调用');
+  const engine = createInteractionEngine({
+    loadContext: async () => makeContext(),
+    generateReply,
+    onReply: () => undefined,
+    globalIntervalMs: 0,
+    senderIntervalMs: 0,
+  });
+
+  // 灌水、闲聊、问候 —— 用户拍板「闲聊算无效」
+  for (const content of ['66666666', '哈哈哈哈哈', '今天天气不错', '我来了', '加微信 abc12345']) {
+    const outcome = await engine.handle(makeMessage({ content }));
+    expect(outcome).toEqual({ action: 'skip', reason: 'INVALID_DANMAKU' });
+  }
+  // 省钱的证据：一条都没进生成器
+  expect(generateReply).not.toHaveBeenCalled();
+});
+
+it('R41：提问与需求表达能穿过过滤（有效的要放行）', async () => {
+  const generateReply = vi.fn(async () => '咱家套餐 99 元～');
+  const engine = createInteractionEngine({
+    loadContext: async () => makeContext({ productSnapshot: null }),
+    generateReply,
+    onReply: () => undefined,
+    globalIntervalMs: 0,
+    senderIntervalMs: 0,
+  });
+
+  for (const content of ['你们几点营业', '我想要这个套餐', '能便宜点吗']) {
+    expect((await engine.handle(makeMessage({ content }))).action).toBe('reply');
+  }
+  expect(generateReply).toHaveBeenCalledTimes(3);
+});
+
+it('R41：无效弹幕**不占用频控名额** —— 挡掉之后真问题照样能回', async () => {
+  const generateReply = vi.fn(async () => '咱家套餐 99 元～');
+  const engine = createInteractionEngine({
+    loadContext: async () => makeContext({ productSnapshot: null }),
+    generateReply,
+    onReply: () => undefined,
+    senderIntervalMs: 0,
+    now: () => 0,
+  });
+  // 先来 5 条灌水（修复前它们会把时间窗名额抢光）
+  for (let index = 0; index < 5; index += 1) {
+    expect((await engine.handle(makeMessage({ content: '66666666' }))).action).toBe('skip');
+  }
+  // 真问题紧接着来：仍然回得出去
+  expect((await engine.handle(makeMessage({ content: '你们能坐多少人？' }))).action).toBe('reply');
+  expect(generateReply).toHaveBeenCalledTimes(1);
 });
 
 // ---------- G4 联调：G3 写入 → 广播 → 引擎回复 ----------

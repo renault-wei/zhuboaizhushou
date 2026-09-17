@@ -3,6 +3,7 @@ import { db } from '../db/client';
 import { liveDanmaku as liveDanmakuTable, lives as livesTable } from '../db/schema';
 import { LiveError, toLive } from './live';
 import { loopCaster } from './loopCaster';
+import { statsOf, type LiveInteractionStats } from './interactionStats';
 import { listLiveReplies, type LiveReplyRecord } from './replyLedger';
 import type { Live, LiveRow, LiveStatus } from './live';
 
@@ -44,6 +45,8 @@ export interface LiveMonitor {
   loopMissing: boolean;
   /** R24：最近若干条 AI 回复（最新的在前）—— 让商家看得见 AI 到底说了什么 */
   recentReplies: LiveReplyRecord[];
+  /** R45：互动统计（收到 / 有效 / 回复 / 因频次漏掉）—— 商家据此判断频次是不是设太紧 */
+  interactionStats: LiveInteractionStats;
 }
 
 // ---------- 内部工具 ----------
@@ -159,6 +162,8 @@ export async function getLiveMonitor(userId: string, id: string): Promise<LiveMo
     loopMissing: row.status === 'live' && !row.loopScriptId,
     // R24：内存态回复台账（开播清空、结束保留；进程重启即丢属已知限制）
     recentReplies: listLiveReplies(id),
+    // R45：内存态互动统计（同上）
+    interactionStats: statsOf(id),
   };
 }
 

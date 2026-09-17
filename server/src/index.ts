@@ -4,6 +4,7 @@ import { pool } from './db/client';
 import { autoEndScheduler } from './services/autoEnd';
 import { interactionEngine } from './services/interactionEngine';
 import { liveCollector } from './services/liveCollector';
+import { disposeStats } from './services/interactionStats';
 import { disposeReplyLedger } from './services/replyLedger';
 
 const app = buildApp();
@@ -29,6 +30,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         // 先停掉全部弹幕采集会话（含 wss 连接与重连定时器）与定时关播定时器，再关数据库连接池
         autoEndScheduler.dispose();
         disposeReplyLedger();
+        disposeStats();
         await liveCollector.dispose();
         await pool.end();
         process.exit(0);
