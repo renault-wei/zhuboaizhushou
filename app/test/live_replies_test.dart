@@ -53,15 +53,24 @@ void main() {
         'source': 'fallback',
         'createdAt': '2026-09-17T10:00:01.000Z',
       },
+      <String, dynamic>{
+        'senderNickname': '路人乙',
+        'text': '咱家双人火锅套餐是99 元',
+        'source': 'faq',
+        'createdAt': '2026-09-17T10:00:00.000Z',
+      },
     ];
     await _pump(tester, backend);
 
     expect(find.byKey(const Key('liveMonitorRepliesEmpty')), findsNothing);
-    expect(find.text('共 2 条'), findsWidgets);
+    expect(find.text('共 3 条'), findsWidgets);
     expect(find.text('咱家双人套餐 99 元，锅底现炒～'), findsOneWidget);
     expect(find.text('回给 吃货小王'), findsOneWidget);
     // 命中内置敏感词的兜底话术要有醒目标记 —— 商家得知道那句不是 AI 想的
     expect(find.text('兜底话术'), findsOneWidget);
+    // R32 固定回复也要标出来 —— 商家能看出「这条没花 AI 的钱」
+    expect(find.byKey(const Key('liveMonitorReplyFaqBadge')), findsOneWidget);
+    expect(find.text('固定回复'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 }

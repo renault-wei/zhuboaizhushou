@@ -208,6 +208,10 @@ class LiveReply {
 
   /// 兜底话术：工作台用不同颜色标出来，便于商家一眼看出「这句不是 AI 想的」
   bool get isFallback => source == 'fallback';
+
+  /// R32 第 1 层固定回复：由商品快照直答，**没有调用 AI**。
+  /// 标出来是为了让商家看得出「哪几条省了钱」，也便于判断问答配置有没有生效。
+  bool get isFaq => source == 'faq';
 }
 
 /// 直播中监控快照：对应 GET /api/lives/:id/monitor 的返回形状，

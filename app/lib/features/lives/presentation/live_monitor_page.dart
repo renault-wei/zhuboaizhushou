@@ -1728,6 +1728,20 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                     style: TextStyle(fontSize: 10, color: AppColors.warning),
                   ),
                 ),
+              // R32：固定回复标出来 —— 商家能看出「这条没花 AI 的钱」
+              if (item.isFaq)
+                Container(
+                  key: const Key('liveMonitorReplyFaqBadge'),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: AppColors.live.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text(
+                    '固定回复',
+                    style: TextStyle(fontSize: 10, color: AppColors.live),
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 6),
