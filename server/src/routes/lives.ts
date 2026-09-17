@@ -49,6 +49,8 @@ function readCreateBody(body: unknown): {
   loopScriptId: string | null;
   couponId: string | null;
   videoSourceUrl?: string;
+  /** R48：弹幕采集原始分享链接（可空）；填了就默认启用采集 */
+  danmakuSourceUrl?: string | null;
 } {
   if (typeof body !== 'object' || body === null) {
     return {
@@ -60,6 +62,7 @@ function readCreateBody(body: unknown): {
       scriptId: null,
       loopScriptId: null,
       couponId: null,
+      danmakuSourceUrl: null,
     };
   }
   const record = body as Record<string, unknown>;
@@ -85,6 +88,7 @@ function readCreateBody(body: unknown): {
     loopScriptId,
     couponId,
     videoSourceUrl,
+    danmakuSourceUrl: readOptionalText(record.danmakuSourceUrl),
   };
 }
 
@@ -99,6 +103,8 @@ function readUpdateBody(body: unknown): {
   loopScriptId: string | null | undefined;
   couponId: string | null | undefined;
   videoSourceUrl: string | undefined;
+  /** R48：弹幕采集原始分享链接；**缺省 = 保留原值**（避免只改标题时误开已暂停的采集） */
+  danmakuSourceUrl: string | null | undefined;
 } {
   if (typeof body !== 'object' || body === null) {
     return {
@@ -111,6 +117,7 @@ function readUpdateBody(body: unknown): {
       loopScriptId: undefined,
       couponId: undefined,
       videoSourceUrl: undefined,
+      danmakuSourceUrl: undefined,
     };
   }
   const record = body as Record<string, unknown>;
@@ -150,6 +157,10 @@ function readUpdateBody(body: unknown): {
   if (Object.prototype.hasOwnProperty.call(record, 'videoSourceUrl')) {
     videoSourceUrl = typeof record.videoSourceUrl === 'string' ? record.videoSourceUrl : '';
   }
+  let danmakuSourceUrl: string | null | undefined;
+  if (Object.prototype.hasOwnProperty.call(record, 'danmakuSourceUrl')) {
+    danmakuSourceUrl = readOptionalText(record.danmakuSourceUrl);
+  }
   return {
     title,
     volcPresetId,
@@ -160,6 +171,7 @@ function readUpdateBody(body: unknown): {
     loopScriptId,
     couponId,
     videoSourceUrl,
+    danmakuSourceUrl,
   };
 }
 

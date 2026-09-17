@@ -21,6 +21,7 @@ class LiveFormState {
     this.loading = false,
     this.loadError,
     this.saving = false,
+    this.prefillDanmakuSourceUrl = '',
   });
 
   /// 编辑模式下的初始配置（新建模式为 null）
@@ -40,6 +41,9 @@ class LiveFormState {
 
   /// 可选话术（仅 status=ready 的可选，blocked/draft 禁用展示）
   final List<Script> scripts;
+
+  /// R48：新建模式预填的弹幕采集链接（取自「最近一场用过的那条」；空串 = 无可预填）
+  final String prefillDanmakuSourceUrl;
 
   /// 引用数据 / 初始配置加载中
   final bool loading;
@@ -106,11 +110,30 @@ class LiveFormController extends StateNotifier<LiveFormState> {
       if (isEditMode) {
         initial = await _apiClient.getLive(liveId);
       }
+      // R48：新建模式预填「上次用过的弹幕采集链接」——
+      // 商家通常一直播同一个直播间，不该每次重新粘一遍（用户拍板 D3）。
+      // **尽力而为**：拿不到就不预填，绝不阻塞表单（预填只是便利，不是必需）。
+      var prefillDanmaku = '';
+      if (!isEditMode) {
+        try {
+          final lives = await _apiClient.listLives();
+          for (final live in lives) {
+            final source = live.danmakuSourceUrl;
+            if (source != null && source.trim().isNotEmpty) {
+              prefillDanmaku = source;
+              break;
+            }
+          }
+        } on ApiException {
+          prefillDanmaku = '';
+        }
+      }
       if (!mounted) {
         return;
       }
       state = LiveFormState(
         initial: initial,
+        prefillDanmakuSourceUrl: prefillDanmaku,
         voices: voices,
         presets: catalog.presets,
         presetGroups: catalog.groups,
@@ -134,6 +157,7 @@ class LiveFormController extends StateNotifier<LiveFormState> {
     String? voiceId,
     String? scriptId,
     String? loopScriptId,
+    String? danmakuSourceUrl,
   }) async {
     state = state.copyWith(saving: true, clearError: true);
     try {
@@ -146,6 +170,7 @@ class LiveFormController extends StateNotifier<LiveFormState> {
           voiceId: voiceId,
           scriptId: scriptId,
           loopScriptId: loopScriptId,
+          danmakuSourceUrl: danmakuSourceUrl,
         );
       }
       return await _apiClient.createLive(
@@ -155,6 +180,7 @@ class LiveFormController extends StateNotifier<LiveFormState> {
         voiceId: voiceId,
         scriptId: scriptId,
         loopScriptId: loopScriptId,
+        danmakuSourceUrl: danmakuSourceUrl,
       );
     } on ApiException {
       if (mounted) {

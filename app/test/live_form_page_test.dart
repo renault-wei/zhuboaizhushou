@@ -56,6 +56,7 @@ Map<String, dynamic> _liveJson({
   String? volcPresetId,
   int? speechRate,
   String? scriptId,
+  String? danmakuSourceUrl,
 }) {
   final now = DateTime.now().toUtc();
   return <String, dynamic>{
@@ -69,6 +70,10 @@ Map<String, dynamic> _liveJson({
     'scriptId': scriptId,
     'status': status,
     'aiBadgeShown': true,
+    // R48：弹幕采集源（场次级持久化）
+    'danmakuSourceUrl': danmakuSourceUrl,
+    'danmakuRoomRef': null,
+    'danmakuCollectEnabled': danmakuSourceUrl != null,
     'startedAt': null,
     'endedAt': null,
     'createdAt': now.toIso8601String(),
@@ -612,5 +617,74 @@ void main() {
     final sliderFinder = find.byKey(const Key('liveSpeechRateSlider'));
     await _scrollTo(tester, sliderFinder);
     expect(tester.widget<Slider>(sliderFinder).value, 45);
+  });
+
+  testWidgets('R48：弹幕采集链接随场次保存（编辑回填 + 保存提交）', (WidgetTester tester) async {
+    // ⚠️ scripts 必须给：保存时客户端会提交 scriptId，替身对不认识的 scriptId 会回 400 早退，
+    // 于是「保存成功但值没变」—— 排查时我在这一处绕了几圈，记下来免得下次再踩。
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(
+          id: 'live-001',
+          title: '午市循环直播',
+          scriptId: 'script-001',
+          danmakuSourceUrl: 'https://v.douyin.com/AbCdEf/',
+        ),
+      ],
+      scripts: <Map<String, dynamic>>[
+        _scriptJson(id: 'script-001', title: '午市话术', status: 'ready'),
+      ],
+    );
+    // 本用例会走「保存成功后 context.pop()」，所以**必须套路由** ——
+    // _pumpFormPage 的注释就写明了它只用于「不触发保存后 pop」的用例（否则报 No GoRouter found）。
+    final router = GoRouter(
+      initialLocation: '/lives',
+      routes: <RouteBase>[
+        GoRoute(path: '/lives', builder: (context, state) => const LiveListPage()),
+        GoRoute(
+          path: '/lives/:id',
+          builder: (context, state) =>
+              LiveFormPage(liveId: state.pathParameters['id'] ?? ''),
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [dioProvider.overrideWithValue(buildMockDio(backend))],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 先 push 再断言：让表单**压在列表之上**，保存后的 pop 才有东西可弹
+    router.push('/lives/live-001');
+    await tester.pumpAndSettle();
+
+    // 编辑模式：回填本场已存的采集链接（这正是「开播设置保存」的意义 —— 下次不用重粘）
+    final fieldFinder = find.byKey(const Key('liveDanmakuSourceField'));
+    await _scrollTo(tester, fieldFinder);
+    expect(
+      tester.widget<TextField>(fieldFinder).controller?.text,
+      'https://v.douyin.com/AbCdEf/',
+    );
+
+    // 换链接：直接驱动 controller（沿用本文件对滑块的手法 —— 见语速用例注释
+    // 「直接触发 onChanged，避免像素级交互不稳定」）。这里要验的是
+    // 「字段 → controller → 保存请求体 → 服务端」这条链，
+    // TextField 的 enterText 输入路径已由标题字段的用例覆盖，不重复验。
+    tester.widget<TextField>(fieldFinder).controller!.text =
+        'https://v.douyin.com/NEW123/';
+    await tester.pumpAndSettle();
+
+    final saveButton = find.byKey(const Key('liveSaveButton'));
+    await _scrollTo(tester, saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(backend.lives, hasLength(1));
+    expect(backend.lives.single['danmakuSourceUrl'], 'https://v.douyin.com/NEW123/');
+
+    // 等待 SnackBar 自动消失，避免遗留计时器
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
   });
 }

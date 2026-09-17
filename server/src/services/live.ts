@@ -72,6 +72,12 @@ export interface CreateLiveInput {
   couponId: string | null;
   /** 实景视频源：T10 默认 ''，T11 上传视频后回填 */
   videoSourceUrl?: string;
+  /**
+   * R48：弹幕采集的原始分享链接（可空）。
+   * 「开播设置」语义 —— 填了就默认启用采集、开播自动拉起；清空则关闭。
+   * 只存原文；解析出的房间号由采集端绑定成功后写回（见 saveLiveDanmakuSource）。
+   */
+  danmakuSourceUrl?: string | null;
 }
 
 /** 更新入参：字段缺省表示保留原值 */
@@ -87,6 +93,7 @@ export type UpdateLiveInput = Partial<
     | 'loopScriptId'
     | 'couponId'
     | 'videoSourceUrl'
+    | 'danmakuSourceUrl'
   >
 >;
 
@@ -264,6 +271,10 @@ export async function createLive(userId: string, input: CreateLiveInput): Promis
   }
   await assertOwnedReferences(userId, { ...input, voiceId });
 
+  // R48：弹幕采集源随场次一起存（用户需求「开播设置保存要包含弹幕采集的 URL」）。
+  // 填了链接即视为「本场要采集」—— 省掉一个额外开关，符合「开播设置」的直觉。
+  const danmakuSourceUrl = input.danmakuSourceUrl?.trim() ?? null;
+
   const inserted = await db
     .insert(livesTable)
     .values({
@@ -278,6 +289,8 @@ export async function createLive(userId: string, input: CreateLiveInput): Promis
       voiceId,
       scriptId: input.scriptId,
       loopScriptId: input.loopScriptId,
+      danmakuSourceUrl: danmakuSourceUrl && danmakuSourceUrl.length > 0 ? danmakuSourceUrl : null,
+      danmakuCollectEnabled: Boolean(danmakuSourceUrl && danmakuSourceUrl.length > 0),
       status: 'idle',
       // 合规红线：'AI 智能直播'角标强制叠加、不可关闭；即使请求传 false 也被忽略
       aiBadgeShown: true,
@@ -312,6 +325,8 @@ export async function updateLive(
     voiceId?: string | null;
     scriptId?: string | null;
     loopScriptId?: string | null;
+    danmakuSourceUrl?: string | null;
+    danmakuCollectEnabled?: boolean;
   } = {};
   if (patch.title !== undefined) {
     changes.title = assertValidTitle(patch.title);
@@ -327,6 +342,13 @@ export async function updateLive(
   }
   if (patch.autoEndMinutes !== undefined) {
     changes.autoEndMinutes = patch.autoEndMinutes;
+  }
+  // R48：只有请求**显式带了**这个字段才动它 —— 否则「只改标题」会把
+  // 商家在工作台手动暂停过的采集又打开（enabled 与 url 是两个独立状态）。
+  if (patch.danmakuSourceUrl !== undefined) {
+    const nextUrl = patch.danmakuSourceUrl?.trim() ?? null;
+    changes.danmakuSourceUrl = nextUrl && nextUrl.length > 0 ? nextUrl : null;
+    changes.danmakuCollectEnabled = Boolean(nextUrl && nextUrl.length > 0);
   }
 
   // 音色选择：基于现值叠加本次 patch，再做互斥归一化，保证 voiceId 与 volcPresetId 不同时非空

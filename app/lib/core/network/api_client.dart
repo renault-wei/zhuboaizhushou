@@ -644,6 +644,8 @@ class ApiClient {
     String? scriptId,
     String? loopScriptId,
     String? videoSourceUrl,
+    /// R48：弹幕采集原始分享链接（填了就默认启用采集）
+    String? danmakuSourceUrl,
   }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
@@ -656,6 +658,8 @@ class ApiClient {
           'scriptId': scriptId,
           'loopScriptId': loopScriptId,
           'videoSourceUrl': ?videoSourceUrl,
+          // R48：弹幕采集源随场次一起存（填了就默认启用采集）
+          'danmakuSourceUrl': danmakuSourceUrl,
         },
       );
       return _parseLive(response.data);
@@ -675,6 +679,8 @@ class ApiClient {
     String? scriptId,
     String? loopScriptId,
     String? videoSourceUrl,
+    /// R48：弹幕采集原始分享链接（null = 清空并关闭采集）
+    String? danmakuSourceUrl,
   }) async {
     try {
       final response = await _dio.patch<Map<String, dynamic>>(
@@ -689,6 +695,8 @@ class ApiClient {
           'scriptId': scriptId,
           'loopScriptId': loopScriptId,
           'videoSourceUrl': ?videoSourceUrl,
+          // R48：显式带 null —— 编辑页整体提交，null 表示清空采集源并关闭采集
+          'danmakuSourceUrl': danmakuSourceUrl,
         },
       );
       return _parseLive(response.data);

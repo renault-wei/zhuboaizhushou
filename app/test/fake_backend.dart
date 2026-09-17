@@ -849,6 +849,13 @@ class FakeBackend implements HttpClientAdapter {
       updated['videoSourceUrl'] =
           body['videoSourceUrl']?.toString().trim() ?? '';
     }
+    // R48：弹幕采集源 —— **与真服务端同语义**：填了链接即默认启用采集，清空则关闭。
+    // 替身漏掉这段时，R48 的表单用例会「保存成功但值没变」，看起来像功能坏了。
+    if (body.containsKey('danmakuSourceUrl')) {
+      final danmakuSourceUrl = _liveNullable(body['danmakuSourceUrl']);
+      updated['danmakuSourceUrl'] = danmakuSourceUrl;
+      updated['danmakuCollectEnabled'] = danmakuSourceUrl != null;
+    }
     updated['updatedAt'] = DateTime.now().toUtc().toIso8601String();
     lives[index] = updated;
     return _jsonResponse({'live': updated});

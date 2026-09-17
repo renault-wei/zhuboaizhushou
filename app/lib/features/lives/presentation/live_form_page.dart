@@ -37,6 +37,12 @@ class LiveFormPage extends ConsumerStatefulWidget {
 class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   late final TextEditingController _titleController;
 
+  /// R48：弹幕采集的原始分享链接（开播设置的一项，随场次保存）
+  late final TextEditingController _danmakuController;
+
+  /// 新建模式是否已尝试预填「上次用过的采集链接」（只调度一次，不覆盖用户输入）
+  bool _danmakuPrefillApplied = false;
+
   /// 已选择的绑定项：null 表示未绑定（提交时置空对应字段）。
   String? _voiceId;
   String? _volcPresetId;
@@ -74,6 +80,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   void initState() {
     super.initState();
     _titleController = TextEditingController()..addListener(_onTitleChanged);
+    _danmakuController = TextEditingController();
     // 首帧后再加载可选项与初值，避免在 build 阶段发起网络请求
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(liveFormControllerProvider(widget.liveId).notifier).load();
@@ -83,6 +90,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   @override
   void dispose() {
     _titleController.dispose();
+    _danmakuController.dispose();
     super.dispose();
   }
 
@@ -120,6 +128,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
       _speechRate = initial.speechRate ?? _defaultSpeechRate;
       _scriptId = initial.scriptId;
       _loopScriptId = initial.loopScriptId;
+      // R48：编辑模式直接回填本场已存的采集链接
+      _danmakuController.text = initial.danmakuSourceUrl ?? '';
     });
     if (initial.loopScriptId != null) {
       _refreshLoopSummary();
@@ -240,6 +250,7 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
             voiceId: _voiceId,
             scriptId: _scriptId,
             loopScriptId: _loopScriptId,
+            danmakuSourceUrl: _danmakuSourceUrlOrNull(),
           );
       if (!mounted) {
         return;
@@ -332,6 +343,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   Widget _buildForm(LiveFormState state) {
     // 新建模式：目录到达后回填默认音色（只调度一次）
     _maybeApplyDefaultPreset(state);
+    // R48：新建模式预填「上次用过的弹幕采集链接」（只调度一次、不覆盖用户输入）
+    _maybeApplyDanmakuPrefill(state);
     final canSave = !state.saving && _titleController.text.trim().isNotEmpty;
     final voice = _selectedVoice(state);
     final script = _selectedScript(state);
@@ -362,6 +375,8 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
         _buildScriptPicker(state, script),
         const SizedBox(height: 12),
         _buildLoopScriptSection(state.saving),
+        const SizedBox(height: 12),
+        _buildDanmakuSourceSection(state.saving),
         const SizedBox(height: 12),
         _buildComplianceNote(),
         const SizedBox(height: 20),
@@ -590,6 +605,59 @@ class _LiveFormPageState extends ConsumerState<LiveFormPage> {
   }
 
   /// 合规提示：角标由服务端强制叠加，不可关闭、客户端无开关入口。
+  /// R48：新建模式预填「上次用过的采集链接」（只调度一次；用户已输入则不覆盖）。
+  ///
+  /// 为什么不覆盖：预填是**便利**，不是事实来源 —— 商家一旦开始输入，以他为准。
+  void _maybeApplyDanmakuPrefill(LiveFormState state) {
+    if (_danmakuPrefillApplied || _isEdit) {
+      return;
+    }
+    final prefill = state.prefillDanmakuSourceUrl;
+    if (prefill.isEmpty) {
+      return;
+    }
+    _danmakuPrefillApplied = true;
+    if (_danmakuController.text.trim().isEmpty) {
+      _danmakuController.text = prefill;
+    }
+  }
+
+  /// 采集链接：trim 后为空视为「未填」→ 提交 null（服务端据此清空并关闭采集）。
+  String? _danmakuSourceUrlOrNull() {
+    final value = _danmakuController.text.trim();
+    return value.isEmpty ? null : value;
+  }
+
+  /// R48：弹幕采集 —— 把商家在抖音里复制的直播间分享链接粘到这里，**随场次保存**。
+  ///
+  /// 以前这个链接只存在于服务端内存，进程一重启就丢、每次开播都要重粘（R17）；
+  /// 现在它跟着场次走，开播时服务端按这条链接重新解析并自动拉起采集。
+  Widget _buildDanmakuSourceSection(bool saving) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '弹幕采集',
+          style: TextStyle(fontWeight: FontWeight.w600, color: context.tokenTextBody),
+        ),
+        const SizedBox(height: 6),
+        TextField(
+          key: const Key('liveDanmakuSourceField'),
+          controller: _danmakuController,
+          enabled: !saving,
+          maxLines: 2,
+          minLines: 1,
+          decoration: const InputDecoration(
+            hintText: '粘贴抖音直播间分享链接，例如 https://v.douyin.com/xxxx/',
+            helperText: '开播时按这条链接自动接入弹幕；留空则不采集。换链接后重新保存即可。',
+            helperMaxLines: 2,
+            border: OutlineInputBorder(),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildComplianceNote() {
     return Container(
       width: double.infinity,

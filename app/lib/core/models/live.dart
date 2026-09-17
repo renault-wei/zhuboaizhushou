@@ -42,6 +42,9 @@ class Live {
     required this.voiceId,
     required this.scriptId,
     this.loopScriptId,
+    this.danmakuSourceUrl,
+    this.danmakuRoomRef,
+    this.danmakuCollectEnabled = false,
     required this.status,
     required this.aiBadgeShown,
     required this.startedAt,
@@ -62,6 +65,10 @@ class Live {
       voiceId: _nullableString(json['voiceId']),
       scriptId: _nullableString(json['scriptId']),
       loopScriptId: _nullableString(json['loopScriptId']),
+      // R48：弹幕采集源（场次级持久化；服务端填了链接即默认启用采集）
+      danmakuSourceUrl: _nullableString(json['danmakuSourceUrl']),
+      danmakuRoomRef: _nullableString(json['danmakuRoomRef']),
+      danmakuCollectEnabled: json['danmakuCollectEnabled'] == true,
       status: LiveStatus.fromWire(json['status']?.toString()),
       // 合规：服务端写死 true；字段缺失按 true 处理，避免误把角标当作可关闭项
       aiBadgeShown: json['aiBadgeShown'] != false,
@@ -102,6 +109,15 @@ class Live {
 
   /// 绑定的循环台本 id（循环口播用；null = 仅弹幕回复模式）
   final String? loopScriptId;
+
+  /// R48：弹幕采集的原始分享链接（商家填的原文；开播以它重新解析为准）
+  final String? danmakuSourceUrl;
+
+  /// R48：采集端解析出的房间号（解析失败的兜底 / 展示用）
+  final String? danmakuRoomRef;
+
+  /// R48：本场是否启用弹幕采集
+  final bool danmakuCollectEnabled;
 
   /// 直播状态：idle / processing / ready / live / ended / failed
   final LiveStatus status;
