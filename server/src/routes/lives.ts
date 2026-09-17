@@ -550,10 +550,24 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       loopCaster.start(live.id);
       // M10：开播即读一次氛围语快照（空档插播取词用；无氛围语 → 空快照，不影响循环）
       atmosphereScheduler.start(live.id);
-      // R4：开播联动拉起本场已登记的弹幕采集（未登记 → null，静默跳过）。
+      // R4 + R47：开播联动拉起本场登记的弹幕采集。
+      // R47 起采集源**持久化在场次上**，所以优先按库里存的源起会话 —— 这样
+      // **服务重启后也能自动恢复**（原先绑定只在内存，重启即丢，正是 R17）。
+      // 恢复顺序遵循用户拍板 D4：**以原始链接重新解析为准**，房间号只在没有链接时兜底。
       // 采集起不来绝不能阻断开播（可能是第三方签名服务不可用），失败只告警。
       try {
-        await liveCollector.resume(live.id);
+        const sourceUrl = live.danmakuCollectEnabled ? live.danmakuSourceUrl : null;
+        const roomRef = live.danmakuCollectEnabled ? live.danmakuRoomRef : null;
+        if (sourceUrl || roomRef) {
+          await liveCollector.start({
+            userId: request.user.userId,
+            liveId: live.id,
+            ...(sourceUrl ? { shareText: sourceUrl } : { roomRef: roomRef as string }),
+          });
+        } else {
+          // 库里没存源 → 回落到内存绑定（兼容本轮之前登记的场次）
+          await liveCollector.resume(live.id);
+        }
       } catch (err) {
         request.log.warn({ err }, '开播联动启动弹幕采集失败（不阻断开播）');
       }

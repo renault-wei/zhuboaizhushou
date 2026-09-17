@@ -346,6 +346,83 @@ dbIt('直播中起采集返回 201，未启用通道时返回 503（打桩，不
   expect(status.statusCode).toBe(200);
   expect(status.json()).toMatchObject({ enabled: true });
 });
+// ---------- R47：采集源持久化（原先只在内存，进程重启即丢 —— 合并 R17） ----------
+
+dbIt('R47：绑定采集源后**落库**（原文与解析结果都存，enabled 置真）', async () => {
+  const token = await registerAndGetToken(PHONE_SRC);
+  await resetUserData(PHONE_SRC);
+  const liveId = await createLiveDraft(token);
+
+  // 真实流程：商家只粘一条分享链接，房间号由采集端解析出来
+  vi.spyOn(liveCollector, 'bind').mockResolvedValue({
+    liveId,
+    userId: await userIdOf(PHONE_SRC),
+    platform: 'douyin',
+    roomRef: '7123456789012345678',
+    watchKey: 'douyin:douyin:7123456789012345678',
+    startedAt: new Date().toISOString(),
+  });
+  const res = await app.inject({
+    method: 'POST',
+    url: `/api/lives/${liveId}/danmaku-source`,
+    headers: bearer(token),
+    payload: { shareText: 'https://v.douyin.com/AbCdEf/' },
+  });
+  expect(res.statusCode).toBe(201);
+
+  const row = await pool.query<{
+    danmaku_source_url: string | null;
+    danmaku_room_ref: string | null;
+    danmaku_collect_enabled: boolean;
+  }>('SELECT danmaku_source_url, danmaku_room_ref, danmaku_collect_enabled FROM lives WHERE id = $1', [
+    liveId,
+  ]);
+  const saved = row.rows[0];
+  // 这是本需求的全部意义：**这些值必须进了库**，否则服务一重启就全没了
+  expect(saved?.danmaku_source_url).toBe('https://v.douyin.com/AbCdEf/');
+  expect(saved?.danmaku_room_ref).toBe('7123456789012345678');
+  expect(saved?.danmaku_collect_enabled).toBe(true);
+  vi.restoreAllMocks();
+});
+
+dbIt('R47：停采集只关「启用」，**保留链接**（下次开播还能预填）', async () => {
+  const token = await registerAndGetToken(PHONE_SRC);
+  await resetUserData(PHONE_SRC);
+  const liveId = await createLiveDraft(token);
+  const userId = await userIdOf(PHONE_SRC);
+
+  vi.spyOn(liveCollector, 'bind').mockResolvedValue({
+    liveId,
+    userId,
+    platform: 'douyin',
+    roomRef: '7123456789012345678',
+    watchKey: 'douyin:douyin:7123456789012345678',
+    startedAt: new Date().toISOString(),
+  });
+  await app.inject({
+    method: 'POST',
+    url: `/api/lives/${liveId}/danmaku-source`,
+    headers: bearer(token),
+    payload: { shareText: 'https://v.douyin.com/AbCdEf/' },
+  });
+  vi.spyOn(liveCollector, 'stop').mockResolvedValue(true);
+  const stopped = await app.inject({
+    method: 'DELETE',
+    url: `/api/lives/${liveId}/danmaku-source`,
+    headers: bearer(token),
+  });
+  expect(stopped.statusCode).toBe(200);
+
+  const row = await pool.query<{
+    danmaku_source_url: string | null;
+    danmaku_collect_enabled: boolean;
+  }>('SELECT danmaku_source_url, danmaku_collect_enabled FROM lives WHERE id = $1', [liveId]);
+  // 用户拍板 D3：停采集不该把链接也抹掉 —— 它是「下次开播预填」的来源
+  expect(row.rows[0]?.danmaku_collect_enabled).toBe(false);
+  expect(row.rows[0]?.danmaku_source_url).toBe('https://v.douyin.com/AbCdEf/');
+  vi.restoreAllMocks();
+});
+
 // ---------- R3 端到端：采集事件 → 真实落库 → 互动引擎回复 ----------
 
 dbIt('采集事件走真实弹幕网关：落 live_danmaku（含幂等键）并触发引擎回复', async () => {

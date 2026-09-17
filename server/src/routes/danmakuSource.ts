@@ -5,10 +5,12 @@
 //   * 只有「直播中」的场次才允许起采集 —— 与 danmakuGateway.ingest 的 LIVE_NOT_LIVE 口径一致，
 //     否则采集会在入库处被反复拒绝、只留下一堆噪声告警；
 //   * 未配置签名 Key 时返回 503（采集通道在本部署未启用），与 voices 试听「未配 key 503」口径一致；
-//   * 采集绑定是**内存态**：进程重启后需重新绑定（自用自测口径，不落库，见 PLAN §11.3）。
+//   * 采集源自 R47 起**持久化到场次**（原先只在内存，进程重启即丢 —— 那条老注释已被本需求反转）：
+//     绑定成功写 lives.danmaku_source_url / danmaku_room_ref / danmaku_collect_enabled，
+//     开播时由 routes/lives.ts 的 /start 按库里存的源自动恢复采集。
 
 import type { FastifyPluginAsync } from 'fastify';
-import { getLiveById } from '../services/live';
+import { getLiveById, saveLiveDanmakuSource } from '../services/live';
 import { CollectorSourceError, liveCollector, type CollectorSourceErrorCode } from '../services/liveCollector';
 
 interface LiveIdParams {
@@ -68,6 +70,19 @@ export const danmakuSourceRoutes: FastifyPluginAsync = async (app) => {
       // 直播中 → 登记并立刻起采集；未开播 → 只登记，由 /start 联动拉起（见 routes/lives.ts）
       const running = live.status === 'live';
       const binding = running ? await liveCollector.start(input) : await liveCollector.bind(input);
+      // R47：绑定成功即**落库**（原先只在内存，进程重启即丢、每次开播都要重粘链接）。
+      // 原文（shareText）与解析结果（roomRef）都存：前者是开播重新解析的依据，
+      // 后者是解析失败时的兜底与展示（用户拍板 D4）。落库失败不阻断响应 ——
+      // 采集已经真的起来了，不该因为写库失败让商家以为没配上。
+      try {
+        await saveLiveDanmakuSource(request.user.userId, id, {
+          sourceUrl: body.shareText ?? null,
+          roomRef: binding.roomRef ?? null,
+          enabled: true,
+        });
+      } catch (err) {
+        request.log.warn({ err }, 'R47 弹幕采集源落库失败（采集已启动，仅开播自动恢复受影响）');
+      }
       return reply.code(201).send({ source: binding, running });
     } catch (err) {
       if (err instanceof CollectorSourceError) {
@@ -85,6 +100,12 @@ export const danmakuSourceRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
     }
     const stopped = await liveCollector.stop(id);
+    // R47：停采集只把「启用」置回 false，**保留链接** —— 下次开播还能预填（用户拍板 D3）
+    try {
+      await saveLiveDanmakuSource(request.user.userId, id, { enabled: false });
+    } catch (err) {
+      request.log.warn({ err }, 'R47 停采集后落库失败（会话已停）');
+    }
     return { stopped };
   });
 

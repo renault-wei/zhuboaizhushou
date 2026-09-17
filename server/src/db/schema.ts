@@ -206,6 +206,13 @@ export const lives = pgTable(
     scriptId: uuid('script_id').references(() => scripts.id, { onDelete: 'set null' }),
     // 绑定的循环台本（M1 起）：开播时读取一次快照驻内存，中途改台本库不影响进行中场次
     loopScriptId: uuid('loop_script_id').references(() => loopScripts.id, { onDelete: 'set null' }),
+    // R47：弹幕采集源（原先只在内存，进程重启即丢 —— 见 drizzle/20260917_v14）
+    // 原始分享链接：商家可编辑，开播时**以它重新解析为准**
+    danmakuSourceUrl: text('danmaku_source_url'),
+    // 解析出的房间号：解析失败时的兜底，也用于展示（省一次出网）
+    danmakuRoomRef: varchar('danmaku_room_ref', { length: 128 }),
+    // 本场是否启用采集：开播联动拉起采集的依据
+    danmakuCollectEnabled: boolean('danmaku_collect_enabled').notNull().default(false),
     status: liveStatusEnum('status').notNull().default('idle'),
     // “AI 智能直播”角标已叠加记录（合规要求：强制叠加，不提供关闭入口，逻辑层禁止篡改）
     aiBadgeShown: boolean('ai_badge_shown').notNull().default(true),

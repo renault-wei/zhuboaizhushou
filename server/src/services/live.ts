@@ -37,6 +37,12 @@ export interface Live {
   voiceId: string | null;
   scriptId: string | null;
   loopScriptId: string | null;
+  /** R47：弹幕采集的原始分享链接（商家可编辑；开播以它重新解析为准） */
+  danmakuSourceUrl: string | null;
+  /** R47：解析出的房间号（解析失败时的兜底 / 展示用） */
+  danmakuRoomRef: string | null;
+  /** R47：本场是否启用弹幕采集（开播联动拉起的依据） */
+  danmakuCollectEnabled: boolean;
   status: LiveStatus;
   /** 合规角标：一律 true，禁止篡改（AI 智能直播角标强制叠加，不提供关闭入口） */
   aiBadgeShown: boolean;
@@ -129,6 +135,9 @@ export function toLive(row: LiveRow): Live {
     voiceId: row.voiceId,
     scriptId: row.scriptId,
     loopScriptId: row.loopScriptId,
+    danmakuSourceUrl: row.danmakuSourceUrl,
+    danmakuRoomRef: row.danmakuRoomRef,
+    danmakuCollectEnabled: row.danmakuCollectEnabled,
     status: row.status,
     aiBadgeShown: row.aiBadgeShown,
     startedAt: row.startedAt ? row.startedAt.toISOString() : null,
@@ -517,6 +526,44 @@ export async function getLiveComposeContext(
     voice = rows[0] ?? null;
   }
   return { live: toLive(row), script, voice };
+}
+
+/**
+ * R47：保存本场的弹幕采集源（绑定成功后调用）。
+ *
+ * 为什么单独一个函数而不是走 updateLive：这个更新**不经用户表单**，
+ * 是采集绑定成功的副产物，语义上属于内部状态流转（同 updateLiveInternal）。
+ * 归属隔离照样校验：非本人 / 不存在返回 null。
+ */
+export async function saveLiveDanmakuSource(
+  userId: string,
+  id: string,
+  patch: { sourceUrl?: string | null; roomRef?: string | null; enabled?: boolean },
+): Promise<Live | null> {
+  const changes: Partial<{
+    danmakuSourceUrl: string | null;
+    danmakuRoomRef: string | null;
+    danmakuCollectEnabled: boolean;
+  }> = {};
+  if (patch.sourceUrl !== undefined) {
+    changes.danmakuSourceUrl = patch.sourceUrl;
+  }
+  if (patch.roomRef !== undefined) {
+    changes.danmakuRoomRef = patch.roomRef;
+  }
+  if (patch.enabled !== undefined) {
+    changes.danmakuCollectEnabled = patch.enabled;
+  }
+  if (Object.keys(changes).length === 0) {
+    return getLiveById(userId, id);
+  }
+  const updated = await db
+    .update(livesTable)
+    .set(changes)
+    .where(and(eq(livesTable.id, id), eq(livesTable.userId, userId)))
+    .returning();
+  const row = updated[0];
+  return row ? toLive(row) : null;
 }
 
 /**
