@@ -581,9 +581,13 @@ void main() {
     await tester.pump(const Duration(milliseconds: 350));
     await tester.pump(const Duration(milliseconds: 350));
 
-    // 绑定后：输入框收起、出现停止按钮；状态行报「监听中 · 已收到 N 条」
-    expect(find.byKey(const Key('liveMonitorSourceInput')), findsNothing);
+    // 绑定后（R49 起）：**输入框仍在**（贴新链接即可换直播间，服务端会先断旧会话），
+    // 同时出现停止按钮与「换链接」按钮；状态行报「监听中 · 已收到 N 条」。
+    // 改这条断言是**有意的** —— 原先「绑定后输入框收起」导致换直播间只能先停止再粘，
+    // 既绕又容易停在半路，用户 2026-09-17 要求改成可直接换。
+    expect(find.byKey(const Key('liveMonitorSourceInput')), findsOneWidget);
     expect(find.byKey(const Key('liveMonitorSourceStop')), findsOneWidget);
+    expect(find.text('换链接'), findsOneWidget);
     final stateText = tester.widget<Text>(
       find.byKey(const Key('liveMonitorSourceState')),
     );

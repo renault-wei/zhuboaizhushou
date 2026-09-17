@@ -414,6 +414,16 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
         startedAt: now().toISOString(),
         ...(room.connectHeaders ? { connectHeaders: room.connectHeaders } : {}),
       };
+      // ★换直播间时必须**先停掉旧会话**（2026-09-17）。
+      // 原先只是 bindings.set 覆盖内存绑定，旧会话仍然连着**上一个直播间** ——
+      // 结果是两个会话并行，把别的直播间的弹幕灌进本场（重复 + 串台）。
+      // 这正是「改链接自动重连」要成立的前提：不先断旧，重连就是加倍泄漏。
+      const previous = bindings.get(input.liveId);
+      if (previous && previous.watchKey !== watchKey) {
+        // 先解除武装，避免看门狗把旧会话又拉起来
+        armed.delete(input.liveId);
+        await manager.stopWatching(previous.watchKey);
+      }
       bindings.set(input.liveId, binding);
       return binding;
     },

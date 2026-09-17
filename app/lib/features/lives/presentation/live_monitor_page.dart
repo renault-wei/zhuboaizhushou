@@ -1343,8 +1343,11 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     }
     final state = source?.watch?.label ?? '未在监听';
     final err = source?.watch?.lastError;
+    // R49：把「可以换」写出来 —— 之前这段只说在监听哪个房间，
+    // 商家想换直播间时会以为必须先停止。
     return '${binding.platformLabel} · 房间 ${binding.roomRef} · $state'
-        '${err == null || err.isEmpty ? '' : '（$err）'}';
+        '${err == null || err.isEmpty ? '' : '（$err）'}'
+        '　换直播间：贴新链接点「换链接」即可';
   }
 
   /// 弹幕采集卡（R2 · D4.1）：现场工作台里「真实弹幕」的入口。
@@ -1411,7 +1414,10 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
               height: 1.4,
             ),
           ),
-          if (enabled && binding == null) ...[
+          // ★R49：绑定了也**照样显示输入行** —— 原先 `binding == null` 才渲染，
+          // 于是想换直播间只能「先停止、再粘新的」，既绕又容易停在半路。
+          // 现在贴着新链接点一次即可换（服务端会先断旧会话再连新的）。
+          if (enabled && live) ...[
             const SizedBox(height: 12),
             Row(
               crossAxisAlignment: CrossAxisAlignment.center,
@@ -1426,7 +1432,9 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                     onSubmitted: canBind ? (_) => _bindDanmakuSource() : null,
                     style: const TextStyle(color: AppColors.nightText),
                     decoration: InputDecoration(
-                      hintText: '粘贴抖音分享链接 / 文本',
+                      hintText: binding == null
+                          ? '粘贴抖音分享链接 / 文本'
+                          : '粘贴新链接可换直播间（自动重连）',
                       isDense: true,
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -1452,7 +1460,8 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                             height: 16,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Text('开始采集'),
+                        // R49：已绑定时按钮语义是「换链接」而不是「开始采集」
+                        : Text(binding == null ? '开始采集' : '换链接'),
                   ),
                 ),
               ],

@@ -208,6 +208,36 @@ it('采集事件经接线层落到弹幕网关：带对 userId/liveId 且透传�
   }
 });
 
+it('R49：换直播间时先停掉旧会话（否则旧房间的弹幕会继续灌进本场）', async () => {
+  const fake = createFakeAdapter();
+  const collector = createLiveCollector({
+    adapters: [fake.adapter],
+    ingest: async () => ({}),
+  });
+  try {
+    await collector.start({
+      userId: 'u-1',
+      liveId: 'live-swap',
+      roomRef: '7123456789012345678',
+    });
+    expect(fake.opened()).toBe(1);
+    expect(fake.closed()).toBe(false);
+
+    // 换到另一个房间：**必须先断旧会话**再连新的。
+    // 修复前 bind 只是覆盖内存绑定，旧会话仍连着上一个直播间 ——
+    // 两个会话并行，会把别的直播间的弹幕灌进本场（重复 + 串台）。
+    await collector.start({
+      userId: 'u-1',
+      liveId: 'live-swap',
+      roomRef: '7999999999999999999',
+    });
+    expect(fake.opened()).toBe(2);
+    expect(fake.closed()).toBe(true);
+  } finally {
+    await collector.dispose();
+  }
+});
+
 it('非 chat 事件不入库；解绑后到达的在途事件也不再入库', async () => {
   const fake = createFakeAdapter();
   let calls = 0;
