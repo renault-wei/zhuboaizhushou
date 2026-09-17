@@ -1126,6 +1126,15 @@ class ApiClient {
     }
   }
 
+  /// 删除一条氛围台词（服务端返回 {ok:true}）。
+  Future<void> deleteAtmosphereTemplate(String id) async {
+    try {
+      await _dio.delete<Map<String, dynamic>>('/api/atmosphere-templates/$id');
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
   /// 改某类的插播间隔（0 = 不插播）。
   /// 注意：服务端 PUT **不回带 rule**（只回 category / intervalSeconds / isCustom），
   /// 所以调用方要保留自己那份 rule —— 页面里就是这么做的。

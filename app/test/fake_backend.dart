@@ -501,6 +501,10 @@ class FakeBackend implements HttpClientAdapter {
     if (atmoTemplateItem != null && options.method == 'PUT') {
       return _updateAtmosphereTemplate(atmoTemplateItem.group(1)!, options);
     }
+    if (atmoTemplateItem != null && options.method == 'DELETE') {
+      atmosphereTemplates.removeWhere((t) => t['id'] == atmoTemplateItem.group(1));
+      return _jsonResponse(<String, dynamic>{'ok': true});
+    }
     if (options.method == 'POST' && path.endsWith('/api/atmosphere-templates')) {
       return _createAtmosphereTemplate(options);
     }
