@@ -137,6 +137,7 @@ class _AtmospherePageState extends ConsumerState<AtmospherePage> {
           ? await client.createAtmosphereTemplate(category: category, text: text)
           : await client.updateAtmosphereTemplate(
               existing.id,
+              category: category,
               text: text,
               enabled: _enabled[category] ?? true,
             );
@@ -240,7 +241,16 @@ class _AtmospherePageState extends ConsumerState<AtmospherePage> {
           .read(apiClientProvider)
           .updateAtmosphereInterval(category, picked);
       if (mounted) {
-        setState(() => _settings[category] = saved);
+        setState(() {
+          // 服务端 PUT 只回 category / intervalSeconds / isCustom，**不回带 rule** ——
+          // 所以这里保留本地那份 rule，否则档位区间会退回客户端默认值。
+          _settings[category] = AtmosphereSetting(
+            category: saved.category,
+            intervalSeconds: saved.intervalSeconds,
+            isCustom: saved.isCustom,
+            rule: setting.rule,
+          );
+        });
       }
     } on ApiException catch (error) {
       if (mounted) {

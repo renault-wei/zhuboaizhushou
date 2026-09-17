@@ -493,7 +493,9 @@ class FakeBackend implements HttpClientAdapter {
     }
     // R25 氛围语（模板 + 频次）
     if (options.method == 'GET' && path.endsWith('/api/atmosphere-templates')) {
-      return _jsonResponse(<String, dynamic>{'templates': atmosphereTemplates});
+      // 真服务端返回**裸数组** —— 替身必须如实镜像，否则单测会掩盖真机的形状错误
+      // （2026-09-17 就是这么栽的：替身按错误假设包了一层，单测全绿、真机必挂）
+      return _jsonArrayResponse(atmosphereTemplates);
     }
     final atmoTemplateItem = RegExp(r'^/api/atmosphere-templates/([^/]+)$').firstMatch(path);
     if (atmoTemplateItem != null && options.method == 'PUT') {
@@ -1366,7 +1368,8 @@ class FakeBackend implements HttpClientAdapter {
       'enabled': true,
     };
     atmosphereTemplates.add(template);
-    return _jsonResponse(<String, dynamic>{'template': template}, 201);
+    // 真服务端返回**裸对象**（toApi(row)）
+    return _jsonResponse(template, 201);
   }
 
   ResponseBody _updateAtmosphereTemplate(String id, RequestOptions options) {
@@ -1379,7 +1382,8 @@ class FakeBackend implements HttpClientAdapter {
         if (body.containsKey('enabled')) {
           template['enabled'] = body['enabled'];
         }
-        return _jsonResponse(<String, dynamic>{'template': template});
+        // 真服务端返回**裸对象**
+        return _jsonResponse(template);
       }
     }
     return _jsonResponse(<String, dynamic>{
@@ -1414,6 +1418,17 @@ class FakeBackend implements HttpClientAdapter {
       created.add(template);
     }
     return _jsonResponse(<String, dynamic>{'created': created}, 201);
+  }
+
+  /// 返回**裸数组**（真服务端有些列表接口就是直接 send(array)，不包一层）
+  ResponseBody _jsonArrayResponse(List<Map<String, dynamic>> items) {
+    return ResponseBody.fromString(
+      jsonEncode(items),
+      200,
+      headers: <String, List<String>>{
+        Headers.contentTypeHeader: <String>[Headers.jsonContentType],
+      },
+    );
   }
 
   /// 账号级直播设置（R21）：PATCH 只覆盖传了的字段，其余保持原值（与真服务端同语义）

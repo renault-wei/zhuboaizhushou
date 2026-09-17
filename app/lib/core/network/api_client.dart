@@ -1047,14 +1047,14 @@ class ApiClient {
   /// 拉取全部氛围语模板（一条记录可含多行候选句）。
   Future<List<AtmosphereTemplate>> fetchAtmosphereTemplates() async {
     try {
-      final response = await _dio.get<Map<String, dynamic>>('/api/atmosphere-templates');
-      final raw = response.data?['templates'];
-      return raw is List
-          ? raw
-                .whereType<Map>()
-                .map((item) => AtmosphereTemplate.fromJson(Map<String, dynamic>.from(item)))
-                .toList()
-          : <AtmosphereTemplate>[];
+      // ⚠️ 服务端返回的是**裸数组**（不是 {templates: [...]}）——
+      // 这条是 2026-09-17 真机测试抓出来的：我当初凭想象写了包一层，单测全绿但真机必挂。
+      final response = await _dio.get<List<dynamic>>('/api/atmosphere-templates');
+      final raw = response.data ?? const <dynamic>[];
+      return raw
+          .whereType<Map>()
+          .map((item) => AtmosphereTemplate.fromJson(Map<String, dynamic>.from(item)))
+          .toList();
     } on DioException catch (error) {
       throw _toApiException(error);
     }
@@ -1095,40 +1095,40 @@ class ApiClient {
     required String text,
   }) async {
     try {
+      // 服务端返回**裸对象**（toApi(row)），不是 {template: {...}}
       final response = await _dio.post<Map<String, dynamic>>(
         '/api/atmosphere-templates',
         data: <String, dynamic>{'category': category, 'text': text},
       );
-      final raw = response.data?['template'];
-      return AtmosphereTemplate.fromJson(
-        raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{},
-      );
+      return AtmosphereTemplate.fromJson(response.data ?? <String, dynamic>{});
     } on DioException catch (error) {
       throw _toApiException(error);
     }
   }
 
   /// 改一条模板的文本 / 开关。
+  /// 服务端 PUT 是**整体替换**口径：body 必须带 category，否则会被判非法输入。
   Future<AtmosphereTemplate> updateAtmosphereTemplate(
     String id, {
+    required String category,
     required String text,
     required bool enabled,
   }) async {
     try {
+      // 服务端返回**裸对象**
       final response = await _dio.put<Map<String, dynamic>>(
         '/api/atmosphere-templates/$id',
-        data: <String, dynamic>{'text': text, 'enabled': enabled},
+        data: <String, dynamic>{'category': category, 'text': text, 'enabled': enabled},
       );
-      final raw = response.data?['template'];
-      return AtmosphereTemplate.fromJson(
-        raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{},
-      );
+      return AtmosphereTemplate.fromJson(response.data ?? <String, dynamic>{});
     } on DioException catch (error) {
       throw _toApiException(error);
     }
   }
 
   /// 改某类的插播间隔（0 = 不插播）。
+  /// 注意：服务端 PUT **不回带 rule**（只回 category / intervalSeconds / isCustom），
+  /// 所以调用方要保留自己那份 rule —— 页面里就是这么做的。
   Future<AtmosphereSetting> updateAtmosphereInterval(
     String category,
     int intervalSeconds,
