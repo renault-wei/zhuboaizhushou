@@ -24,6 +24,7 @@ import { loopCaster } from '../services/loopCaster';
 import { liveCollector } from '../services/liveCollector';
 import { atmosphereScheduler } from '../services/atmosphereScheduler';
 import { autoEndScheduler } from '../services/autoEnd';
+import { interactionEngine } from '../services/interactionEngine';
 import { clearLiveReplies } from '../services/replyLedger';
 import { AUTO_END_MAX_MINUTES, AUTO_END_MIN_MINUTES } from '../services/liveSettings';
 import { captureLiveSpeech, clampLiveSpeechRate, forgetLiveSpeech } from '../services/liveVoice';
@@ -612,6 +613,8 @@ async function finishLive(
   forgetLiveSpeech(live.id);
   atmosphereScheduler.stop(live.id);
   autoEndScheduler.cancel(live.id);
+  // R29：清掉本场的频控记账 —— 否则进程内 Map 会随场次数无界增长
+  interactionEngine.forgetLive(live.id);
   let billing: Awaited<ReturnType<typeof settleLiveSession>> | null = null;
   try {
     billing = await settleLiveSession({

@@ -374,6 +374,82 @@ it('R32：没有商品快照 → 固定回复为空，正常走 AI（不会凭�
   expect(generateReply).toHaveBeenCalledTimes(1);
 });
 
+// ---------- R28/R29：并发正确性与状态回收 ----------
+
+it('R28：并发 10 条弹幕只产生 1 次 AI 调用与 1 条回复（频控竞态回归）', async () => {
+  const generateReply = vi.fn(async () => {
+    // 刻意留出生成耗时，把 check-then-act 的竞态窗口放大
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return '咱家套餐 99 元～';
+  });
+  const onReply = vi.fn();
+  const engine = createInteractionEngine({
+    loadContext: async () => makeContext({ replyIntervalSeconds: 5 }),
+    generateReply,
+    onReply,
+    senderIntervalMs: 5000,
+    // 时钟不前进：10 条全在同一瞬间，正是真实直播间刷屏的形态
+    now: () => 0,
+  });
+
+  await Promise.all(
+    Array.from({ length: 10 }, (_, index) =>
+      engine.handle(
+        makeMessage({
+          id: `race-${index}`,
+          content: '你们店里能坐多少人？',
+          senderNickname: `观众${index}`,
+        }),
+      ),
+    ),
+  );
+
+  // 修复前：10 次 AI 调用 + 10 条回复（频控被完全绕过，成本放大 10 倍）
+  // 修复后：每场次串行 → 第一条落账后其余全部被频控挡下
+  expect(generateReply).toHaveBeenCalledTimes(1);
+  expect(onReply).toHaveBeenCalledTimes(1);
+});
+
+it('R28：串行粒度是**场次** —— 两个场次各自并发，各回 1 条（互不拖累）', async () => {
+  const generateReply = vi.fn(async () => '咱家套餐 99 元～');
+  const engine = createInteractionEngine({
+    loadContext: async () => makeContext({ replyIntervalSeconds: 5 }),
+    generateReply,
+    onReply: () => undefined,
+    senderIntervalMs: 5000,
+    now: () => 0,
+  });
+
+  await Promise.all([
+    ...Array.from({ length: 5 }, (_, index) =>
+      engine.handle(makeMessage({ id: `a-${index}`, liveId: 'live-a', content: '你们能坐多少人？' })),
+    ),
+    ...Array.from({ length: 5 }, (_, index) =>
+      engine.handle(makeMessage({ id: `b-${index}`, liveId: 'live-b', content: '你们能坐多少人？' })),
+    ),
+  ]);
+
+  // 两个场次各 1 次 —— 证明串行链是按场次分的，不是全局串行
+  expect(generateReply).toHaveBeenCalledTimes(2);
+});
+
+it('R29：forgetLive 清掉本场记账后，立刻能再回一条（场次结束的回收路径）', async () => {
+  const engine = createInteractionEngine({
+    loadContext: async () => makeContext({ replyIntervalSeconds: 3600 }), // 间隔一小时
+    generateReply: async () => '咱家套餐 99 元～',
+    onReply: () => undefined,
+    senderIntervalMs: 5000,
+    now: () => 0,
+  });
+
+  expect((await engine.handle(makeMessage({ content: '你们能坐多少人？' }))).action).toBe('reply');
+  expect((await engine.handle(makeMessage({ content: '你们能坐多少人？' }))).action).toBe('skip');
+
+  // 场次结束 → 回收该场记账 → 下一场同 id 立刻可回
+  engine.forgetLive(FIXED_LIVE_ID);
+  expect((await engine.handle(makeMessage({ content: '你们能坐多少人？' }))).action).toBe('reply');
+});
+
 // ---------- G4 联调：G3 写入 → 广播 → 引擎回复 ----------
 
 // 固定手机号（与 danmaku / live_session 测试互不重叠）

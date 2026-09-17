@@ -23,6 +23,26 @@ export const DEFAULT_REPLY_INTERVAL_MS = 5000;
 /** 同一观众两条回复的最小间隔（ms）：防止单用户刷屏，默认与场次级一致 */
 export const DEFAULT_SENDER_INTERVAL_MS = 5000;
 
+/**
+ * R29：频控记账的条数上界。
+ * 正常路径由 forgetLive 在场次结束时清理；这个上界是**安全网** ——
+ * 异常路径（进程没走到收尾、场次没正常结束）下也不会无界增长。
+ */
+const MAX_THROTTLE_ENTRIES = 500;
+
+/** 记一条频控时间点，超出上界时按插入顺序淘汰最旧的 */
+function rememberThrottle(map: Map<string, number>, key: string, value: number): void {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > MAX_THROTTLE_ENTRIES) {
+    const oldest = map.keys().next();
+    if (oldest.done === true) {
+      break;
+    }
+    map.delete(oldest.value);
+  }
+}
+
 /** 命中敏感词后的兜底话术（轮换使用，避免连续重复同一句） */
 const DEFAULT_FALLBACK_REPLIES: readonly string[] = [
   '您问的这个问题我帮您记下了，稍等我确认好再为您解答～',
@@ -115,6 +135,11 @@ export interface InteractionEngine {
   handle(message: LiveDanmakuRecord): Promise<InteractionOutcome>;
   /** 订阅全局弹幕事件（G3 onDanmaku）；返回退订函数 */
   subscribe(): () => void;
+  /**
+   * R29：场次结束后清掉该场次的频控记账，避免进程内 Map 无界增长。
+   * 由结束直播的收尾路径调用（finishLive）。
+   */
+  forgetLive(liveId: string): void;
 }
 
 // ---------- 商家上下文加载（默认实现）----------
@@ -175,6 +200,45 @@ function readProductSnapshot(value: unknown): Record<string, string> | null {
 
 // ---------- 引擎实现 ----------
 
+/**
+ * 极简的「每 key 一条串行链」：同一 key 上的任务依次执行，不同 key 并行。
+ *
+ * 为什么需要它（R28 · docs/SMART-REPLY-AUDIT.md §1）：
+ *   频控原本是「读时间戳 → await 生成（数秒）→ 才写时间戳」的 check-then-act。
+ *   同一瞬间到达的 N 条弹幕会**全部通过检查** —— 实测 10 并发 = 10 次 DeepSeek 调用 +
+ *   10 条回复（而商家设的是 5 秒/次）。串行化后，第一条落账时后续才进入检查，竞态从根上消失；
+ *   顺带把「同一场次同时调 AI 的请求数」压到 1。
+ *
+ * 清理：任务结束时若自己仍是尾巴就删 key —— 否则 Map 会随场次数无界增长（审计 §2.1）。
+ */
+class SerialByKey {
+  private readonly tails = new Map<string, Promise<void>>();
+
+  async run<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.tails.get(key) ?? Promise.resolve();
+    // 前一个任务失败不能毒化整条链，所以先 catch 掉
+    const result = previous.then(task);
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.tails.set(key, tail);
+    try {
+      return await result;
+    } finally {
+      // 后面没人排队了才清 —— 有人排队时尾巴已经换成它的了
+      if (this.tails.get(key) === tail) {
+        this.tails.delete(key);
+      }
+    }
+  }
+
+  /** 当前仍有排队/在跑的场次数（排障与测试用） */
+  pendingKeys(): number {
+    return this.tails.size;
+  }
+}
+
 class InteractionEngineImpl implements InteractionEngine {
   private readonly options: InteractionEngineOptions;
   /** 场次维度：最近一次实际回复时间 */
@@ -183,12 +247,22 @@ class InteractionEngineImpl implements InteractionEngine {
   private readonly lastReplyAtBySender = new Map<string, number>();
   /** 兜底话术轮换游标 */
   private fallbackIndex = 0;
+  /** R28：每场次一条串行链，保证频控的 check-then-act 不成竞态 */
+  private readonly liveQueues = new SerialByKey();
 
   constructor(options: InteractionEngineOptions) {
     this.options = options;
   }
 
-  async handle(message: LiveDanmakuRecord): Promise<InteractionOutcome> {
+  /**
+   * 对外入口：**同一场次串行**执行（R28）。
+   * 不同场次互不阻塞 —— 串行粒度是场次，不是全局。
+   */
+  handle(message: LiveDanmakuRecord): Promise<InteractionOutcome> {
+    return this.liveQueues.run(message.liveId, () => this.handleSerial(message));
+  }
+
+  private async handleSerial(message: LiveDanmakuRecord): Promise<InteractionOutcome> {
     const content = message.content.trim();
     if (content.length === 0) {
       return { action: 'skip', reason: 'DANMAKU_EMPTY' };
@@ -300,9 +374,9 @@ class InteractionEngineImpl implements InteractionEngine {
     };
 
     // 记频控时间点（以实际产出回复为准，期间失败的生成不占额度）
-    this.lastReplyAtByLive.set(context.liveId, repliedAt);
+    rememberThrottle(this.lastReplyAtByLive, context.liveId, repliedAt);
     if (senderKey) {
-      this.lastReplyAtBySender.set(senderKey, repliedAt);
+      rememberThrottle(this.lastReplyAtBySender, senderKey, repliedAt);
     }
     try {
       await this.options.onReply(reply);
@@ -314,8 +388,26 @@ class InteractionEngineImpl implements InteractionEngine {
 
   subscribe(): () => void {
     return onDanmaku((message) => {
-      void this.handle(message).catch(() => undefined);
+      void this.handle(message).catch((err: unknown) => {
+        // R30：不再静默吞掉。引擎是 fire-and-forget 调的，不记日志就完全没有故障痕迹，
+        // 线上出问题时无从排障（审计 §2.3）。
+        console.error(
+          `[interactionEngine] 处理弹幕失败（live=${message.liveId}）：${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      });
     });
+  }
+
+  forgetLive(liveId: string): void {
+    this.lastReplyAtByLive.delete(liveId);
+    const prefix = `${liveId}:`;
+    for (const key of [...this.lastReplyAtBySender.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.lastReplyAtBySender.delete(key);
+      }
+    }
   }
 
   /**
