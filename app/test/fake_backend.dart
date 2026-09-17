@@ -238,6 +238,20 @@ class FakeBackend implements HttpClientAdapter {
   /// 采集通道是否启用（模拟服务端未配签名 Key 的部署 → false）。
   bool danmakuSourceEnabled = true;
 
+  // ---------- R25 氛围语（内存态） ----------
+  final List<Map<String, dynamic>> atmosphereTemplates = <Map<String, dynamic>>[];
+  final Map<String, int> atmosphereIntervals = <String, int>{};
+  int _atmoSeq = 0;
+
+  /// 与 server services/atmosphere.ts 的 ATMOSPHERE_FREQUENCY_RULES 同口径
+  static const Map<String, List<int>> _atmoRules = <String, List<int>>{
+    'welcome': <int>[60, 1, 300],
+    'follow': <int>[60, 1, 300],
+    'thumb': <int>[60, 1, 300],
+    'clock': <int>[180, 60, 3000],
+    'custom': <int>[300, 1, 3000],
+  };
+
   // ---------- R21 账号级直播设置（内存态，PATCH 合并语义与真服务端一致） ----------
   final Map<String, dynamic> liveSettings = <String, dynamic>{
     'replyEnabled': true,
@@ -472,6 +486,27 @@ class FakeBackend implements HttpClientAdapter {
     }
     if (options.method == 'POST' && path.endsWith('/api/voices')) {
       return _createVoice(options);
+    }
+    // R25 氛围语（模板 + 频次）
+    if (options.method == 'GET' && path.endsWith('/api/atmosphere-templates')) {
+      return _jsonResponse(<String, dynamic>{'templates': atmosphereTemplates});
+    }
+    final atmoTemplateItem = RegExp(r'^/api/atmosphere-templates/([^/]+)$').firstMatch(path);
+    if (atmoTemplateItem != null && options.method == 'PUT') {
+      return _updateAtmosphereTemplate(atmoTemplateItem.group(1)!, options);
+    }
+    if (options.method == 'POST' && path.endsWith('/api/atmosphere-templates')) {
+      return _createAtmosphereTemplate(options);
+    }
+    if (options.method == 'POST' && path.endsWith('/api/atmosphere-templates/defaults')) {
+      return _seedAtmosphereDefaults();
+    }
+    if (options.method == 'GET' && path.endsWith('/api/atmosphere-settings')) {
+      return _listAtmosphereSettings();
+    }
+    final atmoSettingItem = RegExp(r'^/api/atmosphere-settings/([^/]+)$').firstMatch(path);
+    if (atmoSettingItem != null && options.method == 'PUT') {
+      return _updateAtmosphereInterval(atmoSettingItem.group(1)!, options);
     }
     // R21 账号级直播设置（注意：limits 必须排在主路径之前判断）
     if (options.method == 'GET' && path.endsWith('/api/me/live-settings/limits')) {
@@ -1286,6 +1321,94 @@ class FakeBackend implements HttpClientAdapter {
     return _jsonResponse({'danmaku': record}, 201);
   }
 
+
+  Map<String, dynamic> _atmoSettingOf(String category) {
+    final rule = _atmoRules[category] ?? <int>[60, 1, 300];
+    final saved = atmosphereIntervals[category];
+    return <String, dynamic>{
+      'category': category,
+      'intervalSeconds': saved ?? rule[0],
+      'isCustom': saved != null,
+      'rule': <String, dynamic>{
+        'defaultSeconds': rule[0],
+        'minSeconds': rule[1],
+        'maxSeconds': rule[2],
+        'disabledSeconds': 0,
+      },
+    };
+  }
+
+  ResponseBody _listAtmosphereSettings() {
+    return _jsonResponse(<String, dynamic>{
+      'settings': _atmoRules.keys.map(_atmoSettingOf).toList(),
+    });
+  }
+
+  ResponseBody _updateAtmosphereInterval(String category, RequestOptions options) {
+    final body = _readBody(options);
+    atmosphereIntervals[category] = (body['intervalSeconds'] as num?)?.toInt() ?? 0;
+    return _jsonResponse(_atmoSettingOf(category));
+  }
+
+  ResponseBody _createAtmosphereTemplate(RequestOptions options) {
+    final body = _readBody(options);
+    _atmoSeq += 1;
+    final template = <String, dynamic>{
+      'id': 'atmo-$_atmoSeq',
+      'category': body['category']?.toString() ?? '',
+      'text': body['text']?.toString() ?? '',
+      'enabled': true,
+    };
+    atmosphereTemplates.add(template);
+    return _jsonResponse(<String, dynamic>{'template': template}, 201);
+  }
+
+  ResponseBody _updateAtmosphereTemplate(String id, RequestOptions options) {
+    final body = _readBody(options);
+    for (final template in atmosphereTemplates) {
+      if (template['id'] == id) {
+        if (body.containsKey('text')) {
+          template['text'] = body['text'];
+        }
+        if (body.containsKey('enabled')) {
+          template['enabled'] = body['enabled'];
+        }
+        return _jsonResponse(<String, dynamic>{'template': template});
+      }
+    }
+    return _jsonResponse(<String, dynamic>{
+      'error': 'TEMPLATE_NOT_FOUND',
+      'message': '模板不存在',
+    }, 404);
+  }
+
+  /// 与真服务端同语义：只补齐**缺失**的类别，已有类别原样保留
+  ResponseBody _seedAtmosphereDefaults() {
+    const defaults = <String, String>{
+      'welcome': '欢迎[昵称]来到直播间～',
+      'follow': '感谢[昵称]的关注，点点关注不迷路～',
+      'thumb': '谢谢[昵称]的点赞～',
+      'clock': '现在是[时间]，直播间还有限时优惠券可以领',
+      'custom': '有想要的产品可以打在公屏上～',
+    };
+    final owned = atmosphereTemplates.map((t) => t['category']).toSet();
+    final created = <Map<String, dynamic>>[];
+    for (final entry in defaults.entries) {
+      if (owned.contains(entry.key)) {
+        continue;
+      }
+      _atmoSeq += 1;
+      final template = <String, dynamic>{
+        'id': 'atmo-$_atmoSeq',
+        'category': entry.key,
+        'text': entry.value,
+        'enabled': true,
+      };
+      atmosphereTemplates.add(template);
+      created.add(template);
+    }
+    return _jsonResponse(<String, dynamic>{'created': created}, 201);
+  }
 
   /// 账号级直播设置（R21）：PATCH 只覆盖传了的字段，其余保持原值（与真服务端同语义）
   ResponseBody _patchLiveSettings(RequestOptions options) {

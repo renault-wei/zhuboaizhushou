@@ -1,5 +1,6 @@
 import 'package:go_router/go_router.dart';
 
+import 'package:starvoice_app/features/atmosphere/presentation/atmosphere_page.dart';
 import 'package:starvoice_app/features/auth/application/auth_controller.dart';
 import 'package:starvoice_app/features/auth/presentation/login_page.dart';
 import 'package:starvoice_app/features/agreement/presentation/voice_agreement_page.dart';
@@ -158,6 +159,11 @@ GoRouter createAppRouter(AuthController authController) {
       GoRoute(
         path: '/profile/live-settings',
         builder: (context, state) => const LiveSettingsPage(),
+      ),
+      // R25：氛围语（欢迎 / 关注 / 点赞 / 报时 / 自定义暖场）
+      GoRoute(
+        path: '/profile/atmosphere',
+        builder: (context, state) => const AtmospherePage(),
       ),
       GoRoute(
         path: '/profile/privacy',

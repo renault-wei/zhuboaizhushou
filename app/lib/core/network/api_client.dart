@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 
 import 'package:starvoice_app/core/models/coupon.dart';
 import 'package:starvoice_app/core/models/app_config.dart';
+import 'package:starvoice_app/core/models/atmosphere.dart';
 import 'package:starvoice_app/core/models/danmaku_source.dart';
 import 'package:starvoice_app/core/models/tts_segments.dart';
 import 'package:starvoice_app/core/models/danmaku_watch.dart';
@@ -1036,6 +1037,108 @@ class ApiClient {
         '/api/me/live-settings/limits',
       );
       return LiveSettingsLimits.fromJson(response.data ?? <String, dynamic>{});
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  // ---------- R25：氛围语（模板 + 频次） ----------
+
+  /// 拉取全部氛围语模板（一条记录可含多行候选句）。
+  Future<List<AtmosphereTemplate>> fetchAtmosphereTemplates() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/api/atmosphere-templates');
+      final raw = response.data?['templates'];
+      return raw is List
+          ? raw
+                .whereType<Map>()
+                .map((item) => AtmosphereTemplate.fromJson(Map<String, dynamic>.from(item)))
+                .toList()
+          : <AtmosphereTemplate>[];
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 拉取五类的插播频次（含服务端下发的上下限规则）。
+  Future<List<AtmosphereSetting>> fetchAtmosphereSettings() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/api/atmosphere-settings');
+      final raw = response.data?['settings'];
+      return raw is List
+          ? raw
+                .whereType<Map>()
+                .map((item) => AtmosphereSetting.fromJson(Map<String, dynamic>.from(item)))
+                .toList()
+          : <AtmosphereSetting>[];
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 一键补齐缺失类别的推荐模板（服务端幂等：已有类别原样保留）。
+  Future<int> seedAtmosphereDefaults() async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/atmosphere-templates/defaults',
+      );
+      final created = response.data?['created'];
+      return created is List ? created.length : 0;
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 新建一条模板。
+  Future<AtmosphereTemplate> createAtmosphereTemplate({
+    required String category,
+    required String text,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/atmosphere-templates',
+        data: <String, dynamic>{'category': category, 'text': text},
+      );
+      final raw = response.data?['template'];
+      return AtmosphereTemplate.fromJson(
+        raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{},
+      );
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 改一条模板的文本 / 开关。
+  Future<AtmosphereTemplate> updateAtmosphereTemplate(
+    String id, {
+    required String text,
+    required bool enabled,
+  }) async {
+    try {
+      final response = await _dio.put<Map<String, dynamic>>(
+        '/api/atmosphere-templates/$id',
+        data: <String, dynamic>{'text': text, 'enabled': enabled},
+      );
+      final raw = response.data?['template'];
+      return AtmosphereTemplate.fromJson(
+        raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{},
+      );
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
+  /// 改某类的插播间隔（0 = 不插播）。
+  Future<AtmosphereSetting> updateAtmosphereInterval(
+    String category,
+    int intervalSeconds,
+  ) async {
+    try {
+      final response = await _dio.put<Map<String, dynamic>>(
+        '/api/atmosphere-settings/$category',
+        data: <String, dynamic>{'intervalSeconds': intervalSeconds},
+      );
+      return AtmosphereSetting.fromJson(response.data ?? <String, dynamic>{});
     } on DioException catch (error) {
       throw _toApiException(error);
     }
