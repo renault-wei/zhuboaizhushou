@@ -607,4 +607,32 @@ void main() {
 
     await _unmount(tester);
   });
+
+  testWidgets('R50：场次被删后监控页给出出口，而不是永久卡死（实测踩到的现场）', (tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
+      ],
+    );
+    await _pumpMonitor(tester, backend);
+    // 正常进入：直播中底部有「结束直播」
+    expect(find.byKey(const Key('liveEndButton')), findsOneWidget);
+
+    // 模拟「场次在别处被删除」—— 2026-09-17 我验 R49 时就是这么删掉测试场次的：
+    // 页面**已经加载成功过**（_monitor 非空），之后每次轮询都 404。
+    backend.lives.clear();
+
+    // 推过 3s 轮询间隔，让下一次轮询拿到 404
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pump(const Duration(milliseconds: 400));
+
+    // 修复前：错误分支只在 _monitor == null 时置 error → 静默重试、永久卡在旧数据上
+    // （实测 10 分钟 283 次请求 / 215 次 404，用户只能杀掉 App）。
+    expect(find.byKey(const Key('liveMonitorGoneText')), findsOneWidget);
+    expect(find.byKey(const Key('liveMonitorGoneBack')), findsOneWidget);
+    // 关键：不再出现点了也没用的「结束直播」
+    expect(find.byKey(const Key('liveEndButton')), findsNothing);
+
+    await _unmount(tester);
+  });
 }

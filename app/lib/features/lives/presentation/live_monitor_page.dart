@@ -56,6 +56,14 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   Timer? _monitorTimer;
   Timer? _danmakuTimer;
 
+  /// ★场次已不存在（被删 / 换账号）：**终态**。置真后停止轮询并只显示出口。
+  ///
+  /// 为什么要单独一个状态：原先「场次曾加载成功、之后被删」时，每轮轮询都
+  /// 静默失败（错误分支只在 `_monitor == null` 时才置 error）、轮询永不停止、
+  /// 页面永久停在旧数据上 —— 实测 10 分钟 283 次请求 / 215 次 404，
+  /// 每个按钮都提示「开播配置不存在」，「结束直播」也失败，用户只能杀掉 App。
+  bool _liveGone = false;
+
   LiveMonitor? _monitor;
   List<LiveDanmaku> _danmaku = const <LiveDanmaku>[];
 
@@ -193,6 +201,17 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
       }
     } on ApiException catch (error) {
       if (!mounted) {
+        return;
+      }
+      // ★场次已不存在 = **终态**：停轮询、给出口。绝不能像普通轮询失败那样静默重试。
+      if (error.code == 'LIVE_NOT_FOUND' || error.statusCode == 404) {
+        _stopPolling();
+        ref.read(assistantSpeakerControllerProvider.notifier).stop();
+        setState(() {
+          _loading = false;
+          _liveGone = true;
+          _error = '这场直播已不存在（可能已被删除）';
+        });
         return;
       }
       setState(() {
@@ -419,7 +438,9 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   /// 「结束直播」；其余状态 / 加载中 / 加载失败不展示动作，避免误导按钮。
   Widget? _buildBottomBar() {
     final monitor = _monitor;
-    if (_loading || monitor == null) {
+    // 场次已不存在时不再渲染任何动作按钮 —— 它们点了也只会报「开播配置不存在」，
+    // 「结束直播」同样会失败，留着只会让人以为还有救。
+    if (_loading || monitor == null || _liveGone) {
       return null;
     }
     if (monitor.status == LiveStatus.ready) {
@@ -470,6 +491,44 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   }
 
   Widget _buildBody() {
+    // ★场次已不存在：只给一句明确说明和一个出口。
+    // 不轮询、不放任何操作按钮 —— 它们此刻全是死路（这正是用户被卡住的那次现场）。
+    if (_liveGone) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.link_off, size: 40, color: AppColors.nightTextDim),
+              const SizedBox(height: 14),
+              Text(
+                _error ?? '这场直播已不存在',
+                key: const Key('liveMonitorGoneText'),
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: AppColors.nightText,
+                  fontSize: 14,
+                  height: 1.6,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '它可能已在别处被删除，或当前账号已变更。',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppColors.nightTextDim, fontSize: 12),
+              ),
+              const SizedBox(height: 18),
+              FilledButton(
+                key: const Key('liveMonitorGoneBack'),
+                onPressed: () => context.pop(),
+                child: const Text('返回列表'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     if (_loading) {
       return const Center(
         child: CircularProgressIndicator(key: Key('liveMonitorLoading')),
