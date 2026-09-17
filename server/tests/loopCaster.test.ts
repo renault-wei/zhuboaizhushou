@@ -182,6 +182,43 @@ describe('M4 loopCaster 循环台本播出引擎（§8.2/§8.3）', () => {
     expect(order).toEqual(['台本句A。', '回复1', '台本句A。', '欢迎语']);
   });
 
+  // R36（2026-09-17）：手机线上助播机若不轮询（App 被杀 / 断网），远程队列排不空 →
+  // isBusy 恒真 → 台本会**卡死在空档避让里**（连同待播回复一起永远播不出去）。
+  // 所以让位必须有上限：超时就放弃等待继续推进，并告警留痕。
+  // R36（2026-09-17）：手机线上助播机若不轮询（App 被杀 / 断网），远程队列排不空 →
+  // isBusy 恒真 → 台本会**卡死在空档避让里**（连同待播回复一起永远播不出去）。
+  // 所以让位必须有上限：超时就放弃等待继续推进，并告警留痕。
+  it('R36：助播机不轮询时台本不卡死 —— 让位超时后继续播报并告警', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const order: string[] = [];
+    const caster = createLoopCaster({
+      itemGapSeconds: 0,
+      loopRestSeconds: 1,
+      idlePollMs: 1,
+      // 5ms / 1ms = 5 次轮询就放弃让位
+      maxYieldMs: 5,
+      loadItems: async () => [{ text: '台本句A。', gapAfterSeconds: null }],
+      // 永远忙：模拟「助播机停止轮询、远程队列排不空」
+      isBusy: () => true,
+      speak: async (text) => {
+        order.push(text);
+        if (order.filter((entry) => entry === '台本句A。').length >= 2) {
+          caster.stop(LIVE_ID);
+        }
+        return { spoken: true, reason: 'spoken' };
+      },
+      sleep: async () => undefined,
+    });
+
+    caster.start(LIVE_ID);
+    await waitRunnerGone(caster, LIVE_ID);
+
+    // 修复前：永远卡在 while(isBusy) 里，一条都播不出去（测试会挂死超时）
+    expect(order.filter((entry) => entry === '台本句A。').length).toBeGreaterThanOrEqual(2);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   // 🔴 R42 回归复现（2026-09-17 用户提问「AI 回复会进入语音队列吗」时查出来的）：
   // 手机线用的是 remoteSpeechSink —— 它的 play 是「**入队即返回**」（不等播放）。
   // 于是 speak 返回后链路里必然还有那条台本句 → isBusy 恒为真 →

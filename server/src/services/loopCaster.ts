@@ -25,6 +25,9 @@ import { takePendingReply } from './pendingReplies';
 export const DEFAULT_ITEM_GAP_SECONDS = 0;
 /** 每轮播完后的轮间休息（秒）：2026-09-11 由 20s 收紧到 6s（一轮结束不长时间留白） */
 export const DEFAULT_LOOP_REST_SECONDS = 6;
+/** 单次空档避让的最长等待（ms）：超过就放弃让位继续播报（防助播机不轮询时台本卡死） */
+export const DEFAULT_MAX_YIELD_MS = 30_000;
+
 /** 出声链路忙时的空档避让轮询步长（ms） */
 export const DEFAULT_IDLE_POLL_MS = 500;
 
@@ -77,6 +80,11 @@ export interface LoopCasterOptions {
   itemGapSeconds?: number;
   loopRestSeconds?: number;
   idlePollMs?: number;
+  /**
+   * 单次空档避让的最长等待（ms）：超过就放弃让位继续播报。
+   * 防的是「助播机不轮询 → 远程队列排不空 → 台本卡死」。默认 30s。
+   */
+  maxYieldMs?: number;
 }
 
 /** 运行期已解析依赖：默认实现在工厂里兜底，runLoop 内部不再判空 */
@@ -89,8 +97,9 @@ type ResolvedLoopDeps = Required<
     | 'sleep'
     | 'isBusy'
     | 'pickPendingReply'
-  | 'pickAtmosphere'
+    | 'pickAtmosphere'
     | 'markAtmosphereSpoken'
+    | 'maxYieldMs'
     | 'now'
   >
 >;
@@ -274,6 +283,12 @@ async function runLoop(
   loopRestSeconds: number,
   idlePollMs: number,
 ): Promise<void> {
+  // 空档避让的上限（见下方让位循环的注释：防助播机不轮询时台本卡死）
+  const maxYieldMs = options.maxYieldMs ?? DEFAULT_MAX_YIELD_MS;
+  // 换算成轮询次数：sleep 步长固定，与墙钟等价但可测（假时钟下也能确定性复现）
+  const maxYieldPolls = Math.max(1, Math.ceil(maxYieldMs / idlePollMs));
+  let polls = 0;
+
   let loaded: LoopCastItem[] | null;
   try {
     loaded = await options.loadItems(liveId);
@@ -343,8 +358,21 @@ async function runLoop(
           break;
         }
         state.currentSeq = index + 1;
-        // 空档避让：出声链路忙（回复排队 / 远程积压）→ 小步轮询，不在播放间隙插队
+        // 空档避让：出声链路忙（回复排队 / 远程积压）→ 小步轮询，不在播放间隙插队。
+        //
+        // ⚠️ 但**不能无限等**（2026-09-17 修）：手机线用的是远程队列，助播机一旦停止轮询
+        // （App 被杀 / 断网），队列永远排不空 → isBusy 恒真 → **台本会卡死在这里**，
+        // 连同待播回复一起永远播不出去。超过 maxYieldMs 就放弃让位继续推进，并告警留痕。
+        // 用「轮询次数」而不是墙钟：sleep 步长固定，两者等价，且测试可用假时钟确定性复现。
+        polls = 0;
         while (!state.cancelled && options.isBusy(liveId)) {
+          polls += 1;
+          if (polls > maxYieldPolls) {
+            console.warn(
+              `[loopCaster] 场次 ${liveId} 出声链路持续繁忙超过 ${maxYieldMs}ms（疑似助播机未轮询），放弃本次让位继续播报`,
+            );
+            break;
+          }
           await options.sleep(idlePollMs);
         }
         if (state.cancelled) {
@@ -399,6 +427,7 @@ export function createLoopCaster(options: LoopCasterOptions = {}): LoopCaster {
   const itemGapSeconds = options.itemGapSeconds ?? DEFAULT_ITEM_GAP_SECONDS;
   const loopRestSeconds = options.loopRestSeconds ?? DEFAULT_LOOP_REST_SECONDS;
   const idlePollMs = options.idlePollMs ?? DEFAULT_IDLE_POLL_MS;
+  const maxYieldMs = options.maxYieldMs ?? DEFAULT_MAX_YIELD_MS;
 
   const runners = new Map<string, RunnerState>();
 
@@ -421,6 +450,7 @@ export function createLoopCaster(options: LoopCasterOptions = {}): LoopCaster {
         pickPendingReply,
         pickAtmosphere,
         markAtmosphereSpoken,
+        maxYieldMs,
         now,
       },
       itemGapSeconds,

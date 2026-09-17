@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { unlink } from 'node:fs/promises';
 
 // P1 手机线：远程出声队列（出声端下沉到助播机）。
 // AI 大脑（本服务）合成好 wav 后不再本地播放，而是交给「远程出声队列」；
@@ -27,13 +28,48 @@ export interface RemoteSpeechQueue {
   clear(liveId?: string): void;
 }
 
+/**
+ * 单场次队列上界。
+ *
+ * 为什么必须有（2026-09-17）：帮助机（手机）若停止轮询（App 被杀 / 断网），
+ * 远程队列排不空 → 台本的空档避让会一直等到超时 → 之后仍持续推新条目。
+ * 没有上界的话，助播机回来时会被灌一长串**过时**的语音（十几分钟前的台词）。
+ * 上限之内正常；超了就**丢最旧的**——过时的语音播出来反而奇怪。
+ */
+export const MAX_REMOTE_SPEECH_JOBS_PER_LIVE = 20;
+
 /** 内存 FIFO 实现：服务重启即清空（一期自用可接受；云 / 多商家化时再落库持久化） */
 class MemoryRemoteSpeechQueue implements RemoteSpeechQueue {
   private readonly jobs: RemoteSpeechJob[] = [];
 
+  /** 淘汰回调：让调用方有机会清理被丢掉那条的 wav 文件（否则临时目录会堆垃圾） */
+  constructor(private readonly onEvict?: (job: RemoteSpeechJob) => void) {}
+
   push(wavPath: string, liveId?: string): string {
     const id = randomUUID();
     this.jobs.push({ id, wavPath, liveId });
+    if (liveId !== undefined) {
+      while (this.size(liveId) > MAX_REMOTE_SPEECH_JOBS_PER_LIVE) {
+        const index = this.jobs.findIndex((job) => job.liveId === liveId);
+        if (index < 0) {
+          break;
+        }
+        const [evicted] = this.jobs.splice(index, 1);
+        if (evicted) {
+          // 淘汰是尽力而为：清理回调（删 wav）失败**不该把入队搞挂** ——
+          // 队列的职责是保管任务，文件清理是附带收益。
+          try {
+            this.onEvict?.(evicted);
+          } catch (err) {
+            console.warn(
+              `[remoteSpeechQueue] 淘汰任务时清理失败（忽略）：${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+        }
+      }
+    }
     return id;
   }
 
@@ -69,5 +105,17 @@ class MemoryRemoteSpeechQueue implements RemoteSpeechQueue {
   }
 }
 
-/** 全局单例：全服务共用一条远程出声队列（当前单商家自用口径；多门店隔离后置） */
-export const remoteSpeechQueue: RemoteSpeechQueue = new MemoryRemoteSpeechQueue();
+/** 建一条独立的远程出声队列（测试用；生产走下面的全局单例） */
+export function createRemoteSpeechQueue(
+  onEvict?: (job: RemoteSpeechJob) => void,
+): RemoteSpeechQueue {
+  return new MemoryRemoteSpeechQueue(onEvict);
+}
+
+/**
+ * 全局单例：全服务共用一条远程出声队列（当前单商家自用口径；多门店隔离后置）。
+ * 淘汰任务时顺手删掉它的 wav —— 与轮询接口交付后的清理口径一致，避免临时目录堆垃圾。
+ */
+export const remoteSpeechQueue: RemoteSpeechQueue = createRemoteSpeechQueue((evicted) => {
+  void unlink(evicted.wavPath).catch(() => undefined);
+});
