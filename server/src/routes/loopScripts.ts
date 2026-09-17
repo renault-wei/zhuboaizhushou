@@ -9,7 +9,6 @@ import {
 } from '../db/schema';
 import { scanSensitive } from '../services/sensitive';
 import {
-  DEFAULT_LOOP_ITEM_COUNT,
   DEFAULT_LOOP_SCRIPT_SCENARIO,
   isLoopScriptScenario,
   loopScriptService,
@@ -18,6 +17,7 @@ import {
   MAX_LOOP_ITEM_TEXT_LENGTH,
   MAX_LOOP_ITEMS,
   MIN_LOOP_ITEMS,
+  resolveItemCount,
 } from '../services/loopScript';
 import { splitTtsSegments, VOLC_TTS_MAX_CHARS_PER_REQUEST } from '../services/volcTTS';
 
@@ -225,18 +225,6 @@ export const loopScriptsRoutes: FastifyPluginAsync = async (app) => {
         .send({ error: 'SCRIPT_REQUIRED', message: '必须指定来源话术才能生成循环台本' });
     }
 
-    let itemCount = DEFAULT_LOOP_ITEM_COUNT;
-    if (body.itemCount !== null && body.itemCount !== undefined) {
-      const raw = Number(body.itemCount);
-      if (!Number.isInteger(raw) || raw < MIN_LOOP_ITEMS || raw > MAX_LOOP_ITEMS) {
-        return reply.code(400).send({
-          error: 'ITEM_COUNT_INVALID',
-          message: `期望条目数需在 ${MIN_LOOP_ITEMS}-${MAX_LOOP_ITEMS} 之间`,
-        });
-      }
-      itemCount = raw;
-    }
-
     const source = await findOwnedScript(sourceScriptId, request.user.userId);
     if (!source) {
       return reply.code(404).send({ error: 'SCRIPT_NOT_FOUND', message: '话术不存在或不属于当前用户' });
@@ -246,6 +234,22 @@ export const loopScriptsRoutes: FastifyPluginAsync = async (app) => {
         error: 'SCRIPT_REQUIRED',
         message: '仅支持敏感词扫描通过且已就绪的正式话术生成循环台本',
       });
+    }
+
+    // R46：段数解析放在**来源话术加载之后** —— 没显式指定时按话术字数自适应
+    // （用户 2026-09-17 拍板「不限制拆分」：商家不该被默认的 6 段摁住）。
+    let itemCount: number;
+    if (body.itemCount !== null && body.itemCount !== undefined) {
+      const raw = Number(body.itemCount);
+      if (!Number.isInteger(raw) || raw < MIN_LOOP_ITEMS || raw > MAX_LOOP_ITEMS) {
+        return reply.code(400).send({
+          error: 'ITEM_COUNT_INVALID',
+          message: `期望条目数需在 ${MIN_LOOP_ITEMS}-${MAX_LOOP_ITEMS} 之间`,
+        });
+      }
+      itemCount = resolveItemCount(source.content, raw);
+    } else {
+      itemCount = resolveItemCount(source.content, null);
     }
 
     const couponText =

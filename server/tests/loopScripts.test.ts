@@ -253,8 +253,8 @@ dbIt('条目数/单条字数/空文本/标题非法返回对应 400，且不触�
   expect(empty.statusCode).toBe(400);
   expect(empty.json()).toMatchObject({ error: 'ITEMS_INVALID' });
 
-  // 超过 12 条
-  const tooManyItems = Array.from({ length: 13 }, (_, index) => ({
+  // 超过上限（R46：12 → 60，13 条现在是合法的；真实长话术经常超过 12 段）
+  const tooManyItems = Array.from({ length: 61 }, (_, index) => ({
     kind: 'custom' as const,
     text: `第 ${index + 1} 句干净台词。`,
     gapAfterSeconds: null,
@@ -617,7 +617,9 @@ dbIt('期望条目数：itemCount 生效且越界返回 400 ITEM_COUNT_INVALID',
   expect(ok.statusCode).toBe(200);
   expect(ok.json().items).toHaveLength(3);
 
-  for (const itemCount of [0, 13, 1.5, 'abc']) {
+  // R46：上限由 12 放宽到 60（安全阀，不是业务限制），所以越界值改用 61。
+  // 12 现在是**合法**的 —— 真实团购话术按每条 50 字拆经常超过 12 段。
+  for (const itemCount of [0, 61, 1.5, 'abc']) {
     const invalid = await app.inject({
       method: 'POST',
       url: '/api/loop-scripts/generate',
@@ -629,6 +631,35 @@ dbIt('期望条目数：itemCount 生效且越界返回 400 ITEM_COUNT_INVALID',
   }
   // 校验失败不触发 AI
   expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+});
+
+dbIt('R46：不传 itemCount 时按话术字数自适应 —— 长话术不再被默认 6 段摁住', async () => {
+  const token = await registerAndGetToken(PHONE_GEN_COUNT);
+  await resetUserData(PHONE_GEN_COUNT);
+  // 造一段**正好 500 字**的话术：按每条 50 字应拆成 10 段（而不是默认的 6）
+  // 注意用 10 个字一组的重复串，避免像「锅圈食汇团购套餐介绍。」那样是 11 字、算出来是 11 段
+  const sourceScriptId = await seedOwnedScript(PHONE_GEN_COUNT, {
+    content: '一二三四五六七八九十'.repeat(50),
+  });
+  vi.mocked(fetch).mockResolvedValue(fakeDeepSeekResponse(cleanLoopJson(10)));
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/loop-scripts/generate',
+    headers: bearer(token),
+    payload: { sourceScriptId },
+  });
+  expect(res.statusCode).toBe(200);
+  expect(res.json().items).toHaveLength(10);
+
+  // 关键证据：请求 DeepSeek 的提示词里写的是自适应算出来的段数，不是 6
+  const call = vi.mocked(fetch).mock.calls[0];
+  const body = JSON.parse(String((call?.[1] as RequestInit | undefined)?.body ?? '{}')) as {
+    messages?: Array<{ content?: string }>;
+  };
+  const prompt = (body.messages ?? []).map((m) => m.content ?? '').join('\n');
+  expect(prompt).toContain('10 条左右');
+  expect(prompt).not.toContain('6 条左右');
 });
 
 dbIt('生成场景：缺省按团购、自定义透传参考素材、非法场景 400 且不触发 AI', async () => {

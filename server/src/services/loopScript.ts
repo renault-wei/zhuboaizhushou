@@ -12,8 +12,45 @@ import { SENSITIVE_GUARD_PROMPT } from './sensitive';
 //   长文本的合成由 volcTTS 的分段合成（A5-1）承接：按标点切段 → 逐段合成 → 拼回单段音频，
 //   对外仍是一次出声、**句中不停顿**（见 services/volcTTS.ts 的 splitTtsSegments）。
 export const MIN_LOOP_ITEMS = 1;
-export const MAX_LOOP_ITEMS = 12;
+/**
+ * 段数上限（用户 2026-09-17 由 12 放宽到 60）。
+ *
+ * 它的定位是**拦异常的安全阀，不是业务限制** —— 与 R18 放宽字数是同一个思路：
+ * 「不限制段数」不等于「不设防线」，但这个防线只该拦住异常输入，
+ * 不该拦住正常需求（真实团购话术 300~1000 字，按每条 50 字拆是 6~20 段）。
+ * 60 段 × 约 13 秒 ≈ 13 分钟一轮，已远超正常需求。
+ */
+export const MAX_LOOP_ITEMS = 60;
 export const DEFAULT_LOOP_ITEM_COUNT = 6;
+
+/**
+ * 目标单条字数：段数不再由用户/默认值决定，而是**按源文本字数反推**。
+ * 商家不用管「拆几段」，我们按「每条大约这么多字」算。
+ */
+export const LOOP_ITEM_TARGET_CHARS = 50;
+
+/**
+ * 解析本次拆成几段。
+ *
+ * 用户拍板「不限制拆分」后的口径：
+ *   * 显式传了段数 → 尊重它（仍夹在 MIN~MAX 之间）；
+ *   * 没传 → **按源文本字数自适应**（去掉空白后的字数 ÷ 目标字数）。
+ * 这样「一段 800 字的话术」自然得到 16 段，而不是被默认值死死摁在 6 段。
+ */
+export function resolveItemCount(
+  sourceText: string | null | undefined,
+  requested: number | null | undefined,
+): number {
+  if (typeof requested === 'number' && Number.isFinite(requested)) {
+    return Math.min(Math.max(Math.trunc(requested), MIN_LOOP_ITEMS), MAX_LOOP_ITEMS);
+  }
+  const length = typeof sourceText === 'string' ? sourceText.replace(/\s+/g, '').length : 0;
+  if (length === 0) {
+    return DEFAULT_LOOP_ITEM_COUNT;
+  }
+  const derived = Math.round(length / LOOP_ITEM_TARGET_CHARS);
+  return Math.min(Math.max(derived, MIN_LOOP_ITEMS), MAX_LOOP_ITEMS);
+}
 export const MAX_LOOP_ITEM_TEXT_LENGTH = 2000;
 
 /** 合法段落类型（宽松存储：未知类型一律按 null 落库） */
@@ -236,6 +273,9 @@ export class DeepSeekLoopScriptServiceImpl implements DeepSeekLoopScriptService 
     const scenario = input.scenario ?? DEFAULT_LOOP_SCRIPT_SCENARIO;
     const parts: string[] = [
       `把下面这段口播话术改写成 ${input.itemCount} 条左右的循环台本短句：`,
+      // R46：段数上限放宽到 60 之后，必须显式禁止「为凑条数把句子拆断」——
+      // 拆断的短句循环到一半就是断章取义，比少几条更糟。
+      '拆分要求：每条必须是一个**语义完整的句子**；宁可少几条，也不要为了凑条数把一句话从中间断开。',
       `【话术全文】${input.sourceContent}`,
       `【商品信息】${JSON.stringify(input.product)}`,
     ];
