@@ -542,6 +542,8 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
           const SizedBox(height: 12),
           _buildComplianceBadge(monitor),
           const SizedBox(height: 16),
+          _buildRepliesSection(monitor),
+          const SizedBox(height: 16),
           _buildDanmakuSection(),
         ],
       ),
@@ -1616,6 +1618,132 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   }
 
   /// 弹幕日志区：只读滚动展示；空态显示「暂无弹幕」。
+  /// R24：AI 回复区 —— 让商家看得见「AI 到底回了什么」。
+  /// 服务端是内存台账（开播清空、结束保留、重启即丢），这里只做展示。
+  Widget _buildRepliesSection(LiveMonitor monitor) {
+    final replies = monitor.recentReplies;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text(
+              'AI 回复',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: AppColors.nightText,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppColors.nightCardHi,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                '共 ${replies.length} 条',
+                key: const Key('liveMonitorReplyCount'),
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: AppColors.nightTextFaint,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        if (replies.isEmpty)
+          Container(
+            key: const Key('liveMonitorRepliesEmpty'),
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 28),
+            decoration: BoxDecoration(
+              color: AppColors.nightCard,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppColors.nightStroke),
+            ),
+            child: Column(
+              children: [
+                const Icon(
+                  Icons.record_voice_over_outlined,
+                  size: 34,
+                  color: AppColors.nightTextFaint,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '还没有回复',
+                  style: TextStyle(color: AppColors.nightTextDim),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  '观众提问后，AI 的回话会出现在这里',
+                  style: TextStyle(fontSize: 11, color: AppColors.nightTextFaint),
+                ),
+              ],
+            ),
+          )
+        else
+          for (final item in replies) _buildReplyItem(item),
+      ],
+    );
+  }
+
+  Widget _buildReplyItem(LiveReply item) {
+    final nickname = (item.senderNickname ?? '').trim();
+    return Container(
+      key: Key('liveMonitorReply_${item.createdAt}'),
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.nightCard,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.nightStroke),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.smart_toy_outlined, size: 14, color: AppColors.primary),
+              const SizedBox(width: 6),
+              if (nickname.isNotEmpty)
+                Text(
+                  '回给 $nickname',
+                  style: const TextStyle(fontSize: 11, color: AppColors.nightTextFaint),
+                ),
+              const Spacer(),
+              // 兜底话术要能一眼看出来：那句不是 AI 想的，是命中敏感词后的安全替身
+              if (item.isFallback)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: AppColors.warning.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text(
+                    '兜底话术',
+                    style: TextStyle(fontSize: 10, color: AppColors.warning),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            item.text,
+            style: const TextStyle(
+              fontSize: 13,
+              height: 1.5,
+              color: AppColors.nightText,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildDanmakuSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

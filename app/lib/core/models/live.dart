@@ -175,6 +175,41 @@ class LiveStreamStatus {
   final bool aiBadgeShown;
 }
 
+/// 一条 AI 回复（R24）：服务端内存台账回带，**最新的在前**。
+///
+/// 存在的意义：回复此前完全没留痕，商家看不到 AI 到底说了什么。
+class LiveReply {
+  const LiveReply({
+    required this.senderNickname,
+    required this.text,
+    required this.source,
+    required this.createdAt,
+  });
+
+  factory LiveReply.fromJson(Map<String, dynamic> json) {
+    return LiveReply(
+      senderNickname: _nullableString(json['senderNickname']),
+      text: json['text']?.toString() ?? '',
+      source: json['source']?.toString() ?? 'generated',
+      createdAt: json['createdAt']?.toString() ?? '',
+    );
+  }
+
+  /// 触发这条回复的观众昵称（匿名弹幕为 null）
+  final String? senderNickname;
+
+  /// 实际口播的文案
+  final String text;
+
+  /// generated = AI 正常生成；fallback = 命中内置敏感词改念兜底话术
+  final String source;
+
+  final String createdAt;
+
+  /// 兜底话术：工作台用不同颜色标出来，便于商家一眼看出「这句不是 AI 想的」
+  bool get isFallback => source == 'fallback';
+}
+
 /// 直播中监控快照：对应 GET /api/lives/:id/monitor 的返回形状，
 /// 供监控页轮询展示状态、已播时长与弹幕计数。
 class LiveMonitor {
@@ -190,6 +225,7 @@ class LiveMonitor {
     required this.loopRound,
     required this.loopCurrentSeq,
     required this.loopMissing,
+    required this.recentReplies,
   });
 
   factory LiveMonitor.fromJson(Map<String, dynamic> json) {
@@ -206,6 +242,12 @@ class LiveMonitor {
       loopRound: (json['loopRound'] as num?)?.toInt() ?? 0,
       loopCurrentSeq: (json['loopCurrentSeq'] as num?)?.toInt() ?? 0,
       loopMissing: json['loopMissing'] == true,
+      recentReplies: json['recentReplies'] is List
+          ? (json['recentReplies'] as List)
+                .whereType<Map>()
+                .map((item) => LiveReply.fromJson(Map<String, dynamic>.from(item)))
+                .toList()
+          : const <LiveReply>[],
     );
   }
 
@@ -235,6 +277,9 @@ class LiveMonitor {
 
   /// 已播轮数（服务端内存态；进程重启不恢复属已知限制）
   final int loopRound;
+
+  /// R24：最近若干条 AI 回复（最新的在前；服务端内存态，进程重启即丢）
+  final List<LiveReply> recentReplies;
 
   /// 当前轮到第几条（1 起；空闲 / 结束为 0）
   final int loopCurrentSeq;

@@ -238,6 +238,10 @@ class FakeBackend implements HttpClientAdapter {
   /// 采集通道是否启用（模拟服务端未配签名 Key 的部署 → false）。
   bool danmakuSourceEnabled = true;
 
+  // ---------- R24 AI 回复台账（内存态，最新在前） ----------
+  final Map<String, List<Map<String, dynamic>>> liveReplies =
+      <String, List<Map<String, dynamic>>>{};
+
   // ---------- R25 氛围语（内存态） ----------
   final List<Map<String, dynamic>> atmosphereTemplates = <Map<String, dynamic>>[];
   final Map<String, int> atmosphereIntervals = <String, int>{};
@@ -1244,6 +1248,8 @@ class FakeBackend implements HttpClientAdapter {
       'loopRound': (live['loopRound'] as num?)?.toInt() ?? 0,
       'loopCurrentSeq': (live['loopCurrentSeq'] as num?)?.toInt() ?? 0,
       'loopMissing': live['loopMissing'] == true,
+      // R24：AI 回复台账（内存态，最新在前）—— 测试可直接往里塞
+      'recentReplies': liveReplies[id] ?? <Map<String, dynamic>>[],
     });
   }
 
