@@ -34,6 +34,15 @@ export interface ShortLinkExpansion {
   url: string;
   /** 形如 `ttwid=…`；未取到则无此字段 */
   cookie?: string;
+  /**
+   * ★主播的**稳定身份**（抖音 `sec_user_id`）。
+   *
+   * 为什么必须留：`room_id` 是**一次直播会话**的编号，商家**下播重开就会变**；
+   * 而 `sec_user_id` 不变。2026-09-18 的生产事故正是因为我们只锁了 room_id ——
+   * 商家重开后采集仍连着旧房间，`connected` 但零事件，AI 独自讲了 15 分钟。
+   * 详见 docs/LIVE-ROOM-LOCKING.md。
+   */
+  anchorId?: string;
 }
 
 export type ShortLinkExpander = (url: string) => Promise<ShortLinkExpansion>;
@@ -68,6 +77,26 @@ function roomRefFromHtml(html: string): string | null {
     }
   }
   return null;
+}
+
+/**
+ * 从展开后的 URL 里取**主播的稳定身份**（抖音 `sec_user_id`）。取不到返回 undefined。
+ *
+ * 注意别和 `share_user_id` 混：那是**分享这条链接的人**，换个人转发就变 ——
+ * 语义上根本不能用来标识主播（config/env.ts 里记过同一类错误的前科）。
+ *
+ * 为什么要它：`room_id` 是**一次直播会话**的编号，商家下播重开就会变；
+ * `sec_user_id` 不变。2026-09-18 的生产事故就是我们只锁了 room_id。
+ * 详见 docs/LIVE-ROOM-LOCKING.md。
+ */
+export function anchorIdOf(rawUrl: string): string | undefined {
+  try {
+    const value = new URL(rawUrl).searchParams.get('sec_user_id');
+    const trimmed = value?.trim() ?? '';
+    return trimmed.length > 0 ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 从 Set-Cookie 里挑出 ttwid（值含 % 编码与竖线，不能按分号粗暴切完就丢） */
@@ -158,8 +187,14 @@ export function createHttpShortLinkExpander(deps: ShortLinkExpanderDeps = {}): S
       const setCookies =
         typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
       const cookie = ttwidOf(setCookies);
-      const withCookie = (finalUrl: string): ShortLinkExpansion =>
-        cookie ? { url: finalUrl, cookie } : { url: finalUrl };
+      const withCookie = (finalUrl: string): ShortLinkExpansion => {
+        const anchorId = anchorIdOf(finalUrl);
+        return {
+          url: finalUrl,
+          ...(cookie ? { cookie } : {}),
+          ...(anchorId ? { anchorId } : {}),
+        };
+      };
 
       // 常规情形：302 跟随后 response.url 已是最终地址
       if (response.url && response.url !== url) {

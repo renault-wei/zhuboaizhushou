@@ -635,4 +635,63 @@ void main() {
 
     await _unmount(tester);
   });
+
+  testWidgets('R51：采集连着但长时间零事件 → 采集卡给出警示（实测踩到的「看着正常」）', (tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
+      ],
+    );
+    // 采集已绑定，但**5 分钟前就连上了、至今一个事件都没收到** ——
+    // 2026-09-18 的真实现场：商家下播重开、房间号变了，我们连着旧房间。
+    backend.danmakuSource = <String, dynamic>{
+      'liveId': 'live-001',
+      'platform': 'douyin',
+      'roomRef': '7123456789012345678',
+      'watchKey': 'douyin:douyin:7123456789012345678',
+      'startedAt': DateTime.now()
+          .toUtc()
+          .subtract(const Duration(minutes: 5))
+          .toIso8601String(),
+    };
+    backend.danmakuSourceEventCount = 0;
+    backend.danmakuSourceLastEventAt = null;
+
+    await _pumpMonitor(tester, backend);
+    final card = find.byKey(const Key('liveMonitorSourceCard'));
+    await tester.ensureVisible(card);
+    await tester.pump();
+
+    expect(find.byKey(const Key('liveMonitorSourceIdleWarn')), findsOneWidget);
+    expect(find.textContaining('分钟没收到任何弹幕'), findsOneWidget);
+    expect(find.textContaining('换链接'), findsWidgets);
+
+    await _unmount(tester);
+  });
+
+  testWidgets('R51：刚连上还没事件时不误报（避免正常情况就弹黄条）', (tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
+      ],
+    );
+    backend.danmakuSource = <String, dynamic>{
+      'liveId': 'live-001',
+      'platform': 'douyin',
+      'roomRef': '7123456789012345678',
+      'watchKey': 'douyin:douyin:7123456789012345678',
+      // 刚刚连上
+      'startedAt': DateTime.now().toUtc().toIso8601String(),
+    };
+    backend.danmakuSourceEventCount = 0;
+
+    await _pumpMonitor(tester, backend);
+    final card = find.byKey(const Key('liveMonitorSourceCard'));
+    await tester.ensureVisible(card);
+    await tester.pump();
+
+    expect(find.byKey(const Key('liveMonitorSourceIdleWarn')), findsNothing);
+
+    await _unmount(tester);
+  });
 }

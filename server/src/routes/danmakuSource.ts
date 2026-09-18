@@ -78,6 +78,8 @@ export const danmakuSourceRoutes: FastifyPluginAsync = async (app) => {
         await saveLiveDanmakuSource(request.user.userId, id, {
           sourceUrl: body.shareText ?? null,
           roomRef: binding.roomRef ?? null,
+          // R51：主播的稳定身份 —— roomRef 会随「下播重开」变，anchorId 不变
+          anchorId: binding.anchorId ?? null,
           enabled: true,
         });
       } catch (err) {

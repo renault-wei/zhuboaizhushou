@@ -1,4 +1,5 @@
 import type { DanmakuPlatform } from './types';
+import { anchorIdOf } from './shortLinkExpander';
 import type { ShortLinkExpansion } from './shortLinkExpander';
 
 // D1 链接解析（DANMAKU-COLLECTOR-PLAN D1.1~D1.3 静态部分）：
@@ -18,6 +19,14 @@ export type ResolveFailureCode =
 export interface ResolvedRoom {
   platform: DanmakuPlatform;
   roomRef: string;
+  /**
+   * ★主播的**稳定身份**（抖音 `sec_user_id`）。
+   *
+   * `roomRef` 是**一次直播会话**的编号，商家下播重开就会变；`anchorId` 不变。
+   * 2026-09-18 的生产事故就是只锁了 roomRef —— 重开后采集仍连着旧房间，
+   * `connected` 但零事件，AI 独自讲了 15 分钟。详见 docs/LIVE-ROOM-LOCKING.md。
+   */
+  anchorId?: string;
   /** 命中的原始链接（短链场景为待展开链接） */
   matchedUrl: string;
   /**
@@ -195,12 +204,15 @@ export function createLinkResolver(deps: LinkResolverDeps = {}): LinkResolver {
       }
       const roomRef = staticRoomRefOf(candidate.url, candidate.host);
       if (roomRef) {
+        // 顺手取主播身份：短链展开后的 URL 里就带着 sec_user_id（见 anchorIdOf 的注释）
+        const anchorId = anchorIdOf(candidate.url);
         return {
           ok: true,
           room: {
             platform: candidate.platform,
             roomRef,
             matchedUrl: candidate.url,
+            ...(anchorId ? { anchorId } : {}),
             ...(cookie ? { connectHints: { cookie } } : {}),
           },
         };

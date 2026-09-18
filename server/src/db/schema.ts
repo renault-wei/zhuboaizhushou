@@ -210,7 +210,10 @@ export const lives = pgTable(
     // 原始分享链接：商家可编辑，开播时**以它重新解析为准**
     danmakuSourceUrl: text('danmaku_source_url'),
     // 解析出的房间号：解析失败时的兜底，也用于展示（省一次出网）
+    // ⚠️ 它是**一次直播会话**的编号 —— 商家下播重开就会变（见 drizzle/20260918_v15）
     danmakuRoomRef: varchar('danmaku_room_ref', { length: 128 }),
+    // R51：主播的**稳定身份**（抖音 sec_user_id）—— 换房间也不变，是识别「同一个主播」的依据
+    danmakuAnchorId: varchar('danmaku_anchor_id', { length: 128 }),
     // 本场是否启用采集：开播联动拉起采集的依据
     danmakuCollectEnabled: boolean('danmaku_collect_enabled').notNull().default(false),
     status: liveStatusEnum('status').notNull().default('idle'),

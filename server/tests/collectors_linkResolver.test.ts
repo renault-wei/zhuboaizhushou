@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createLinkResolver, extractCandidateUrls } from '../src/collectors/linkResolver';
+import { anchorIdOf } from '../src/collectors/shortLinkExpander';
 
 // D1 链接解析单测：覆盖抖音 / B站 / 快手分享形态、短链展开（注入假 expander）、
 // 无 URL / 不支持平台 / 无法静态取房间号等失败分支；全程不触网。
@@ -205,3 +206,37 @@ describe('D1 失败分支与多链接', () => {
     }
   });
 });
+
+// ---------- R51：主播的**稳定身份**不能被丢掉 ----------
+// 2026-09-18 生产事故（docs/LIVE-ROOM-LOCKING.md）：room_id 会随「下播重开」变，
+// 而 sec_user_id 不变。原先解析结果里只有 roomRef，导致「是不是同一个主播」无从判断。
+describe('R51 解析结果带上主播稳定身份（anchorId = sec_user_id）', () => {
+  const ANCHOR = 'MS4wLjABAAAAo5mo95UUXE9q4SdValE0jKS--qEwGQ5EfDPOr0K4HHw';
+
+  it('anchorIdOf 取 sec_user_id，并且**不会**误取分享者的 share_user_id', () => {
+    const url =
+      'https://webcast.amemv.com/douyin/webcast/reflow/123?sec_user_id=' +
+      ANCHOR +
+      '&share_user_id=92503310531';
+    expect(anchorIdOf(url)).toBe(ANCHOR);
+    // 只有 share_user_id 时应当取不到 —— 分享者随转发变化，不能用来标识主播
+    expect(anchorIdOf('https://webcast.amemv.com/x?share_user_id=92503310531')).toBeUndefined();
+    expect(anchorIdOf('https://v.douyin.com/AbC123/')).toBeUndefined();
+    expect(anchorIdOf('这不是 URL')).toBeUndefined();
+  });
+
+  it('短链展开后 room.anchorId 被带出来（与 roomRef 并存）', async () => {
+    const resolver = createLinkResolver({
+      expandShortLink: async () => ({
+        url: `https://webcast.amemv.com/douyin/webcast/reflow/${DOUYIN_RID}?sec_user_id=${ANCHOR}`,
+      }),
+    });
+    const result = await resolver.resolveShareText('https://v.douyin.com/AbC123/');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.room.roomRef).toBe(DOUYIN_RID);
+      expect(result.room.anchorId).toBe(ANCHOR);
+    }
+  });
+});
+

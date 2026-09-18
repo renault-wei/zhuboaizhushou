@@ -1,0 +1,11 @@
+-- R51：留下主播的**稳定身份**（抖音 sec_user_id），用于识别「同一个主播换了房间」。
+--
+-- 背景（2026-09-18 生产事故，docs/LIVE-ROOM-LOCKING.md）：
+--   lives.danmaku_room_ref 存的是**一次直播会话**的编号 —— 商家下播重开，抖音就给新房间号，
+--   而我们的采集仍连着旧房间：status=connected 但 eventCount=0，**AI 独自讲了 15 分钟**。
+--   实测新旧两条分享链接：room_id 变了，而 sec_user_id **逐字符相同**。
+--
+-- 这一列本身不解决自动换房间（那需要「按主播查当前在播」的能力），
+-- 但它是**一切后续方案的前提**：没有它，我们连「是不是同一个主播」都判断不了。
+-- 幂等：可重复执行。
+ALTER TABLE lives ADD COLUMN IF NOT EXISTS danmaku_anchor_id varchar(128);

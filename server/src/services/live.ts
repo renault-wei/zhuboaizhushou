@@ -39,8 +39,10 @@ export interface Live {
   loopScriptId: string | null;
   /** R47：弹幕采集的原始分享链接（商家可编辑；开播以它重新解析为准） */
   danmakuSourceUrl: string | null;
-  /** R47：解析出的房间号（解析失败时的兜底 / 展示用） */
+  /** R47：解析出的房间号（解析失败时的兜底 / 展示用）。⚠️ 会话级，下播重开会变 */
   danmakuRoomRef: string | null;
+  /** R51：主播的稳定身份（抖音 sec_user_id）—— 换房间也不变（docs/LIVE-ROOM-LOCKING.md） */
+  danmakuAnchorId: string | null;
   /** R47：本场是否启用弹幕采集（开播联动拉起的依据） */
   danmakuCollectEnabled: boolean;
   status: LiveStatus;
@@ -144,6 +146,7 @@ export function toLive(row: LiveRow): Live {
     loopScriptId: row.loopScriptId,
     danmakuSourceUrl: row.danmakuSourceUrl,
     danmakuRoomRef: row.danmakuRoomRef,
+    danmakuAnchorId: row.danmakuAnchorId,
     danmakuCollectEnabled: row.danmakuCollectEnabled,
     status: row.status,
     aiBadgeShown: row.aiBadgeShown,
@@ -560,11 +563,17 @@ export async function getLiveComposeContext(
 export async function saveLiveDanmakuSource(
   userId: string,
   id: string,
-  patch: { sourceUrl?: string | null; roomRef?: string | null; enabled?: boolean },
+  patch: {
+    sourceUrl?: string | null;
+    roomRef?: string | null;
+    anchorId?: string | null;
+    enabled?: boolean;
+  },
 ): Promise<Live | null> {
   const changes: Partial<{
     danmakuSourceUrl: string | null;
     danmakuRoomRef: string | null;
+    danmakuAnchorId: string | null;
     danmakuCollectEnabled: boolean;
   }> = {};
   if (patch.sourceUrl !== undefined) {
@@ -572,6 +581,9 @@ export async function saveLiveDanmakuSource(
   }
   if (patch.roomRef !== undefined) {
     changes.danmakuRoomRef = patch.roomRef;
+  }
+  if (patch.anchorId !== undefined) {
+    changes.danmakuAnchorId = patch.anchorId;
   }
   if (patch.enabled !== undefined) {
     changes.danmakuCollectEnabled = patch.enabled;

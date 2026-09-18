@@ -22,6 +22,16 @@ export interface CollectorWatchSummary {
   invalidEvents: number;
   startedAt: string;
   connectedAt: string | null;
+  /**
+   * ★最后一次收到有效事件的时刻（从未收到则为 null）。
+   *
+   * 为什么要它：`eventCount === 0` 只在**整场都没收到**时才有意义；
+   * 而真正要抓的是「**曾经收到、后来断了**」。有了这个时间戳，
+   * 「已连接但 N 分钟没有事件」就能被算出来并提醒商家
+   * （2026-09-18：商家中途下播重开，采集连着旧房间，_connected_ 但零事件，
+   *   AI 独自讲了 15 分钟 —— 详见 docs/LIVE-ROOM-LOCKING.md）。
+   */
+  lastEventAt: string | null;
   lastError: string | null;
 }
 
@@ -147,6 +157,7 @@ export function createCollectorManager(deps: CollectorManagerDeps): CollectorMan
         }
         const event = guarded.event;
         worker.summary.eventCount += 1;
+        worker.summary.lastEventAt = now().toISOString();
         if (event.msgType === 'end') {
           // 直播结束：优雅收尾（与业务主动 stop 区分，便于落库层联动场次状态）
           finalize(worker, 'ended');
@@ -281,6 +292,7 @@ export function createCollectorManager(deps: CollectorManagerDeps): CollectorMan
         invalidEvents: 0,
         startedAt: now().toISOString(),
         connectedAt: null,
+        lastEventAt: null,
         lastError: null,
       },
       session: null,

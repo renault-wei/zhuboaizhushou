@@ -1415,6 +1415,7 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     final source = _danmakuSource;
     final enabled = source?.enabled ?? true;
     final binding = source?.binding;
+    final watch = source?.watch;
     final live = monitor.status == LiveStatus.live;
     final canBind =
         enabled && live && !_bindingSource && _sourceController.text.trim().isNotEmpty;
@@ -1473,6 +1474,43 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
               height: 1.4,
             ),
           ),
+          // ★R51：连着但长时间零事件 —— 最危险的一种「看着正常」。
+          // 2026-09-18 商家中途下播重开、抖音给了新房间号，我们的采集仍连着旧房间：
+          // connected、lastError 为空、台本照跑，**一切看着都对**，实际零事件，
+          // AI 独自讲了 15 分钟才被人发现。这里必须主动说话。
+          if (watch != null && watch.looksIdle) ...[
+            const SizedBox(height: 10),
+            Container(
+              key: const Key('liveMonitorSourceIdleWarn'),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.warning.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(
+                    Icons.warning_amber_rounded,
+                    size: 15,
+                    color: AppColors.warning,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '已连接，但 ${(watch.idleSeconds() ?? 0) ~/ 60} 分钟没收到任何弹幕。'
+                      '若你中途重开过抖音直播，房间号会变 —— 请粘贴新链接后点「换链接」。',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        height: 1.5,
+                        color: AppColors.nightText,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           // ★R49：绑定了也**照样显示输入行** —— 原先 `binding == null` 才渲染，
           // 于是想换直播间只能「先停止、再粘新的」，既绕又容易停在半路。
           // 现在贴着新链接点一次即可换（服务端会先断旧会话再连新的）。

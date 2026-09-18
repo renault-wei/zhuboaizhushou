@@ -10,6 +10,7 @@ import {
   type Live,
   LiveError,
   LiveStatus,
+  saveLiveDanmakuSource,
   updateLive,
   updateLiveInternal,
 } from '../services/live';
@@ -571,11 +572,24 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
         const sourceUrl = live.danmakuCollectEnabled ? live.danmakuSourceUrl : null;
         const roomRef = live.danmakuCollectEnabled ? live.danmakuRoomRef : null;
         if (sourceUrl || roomRef) {
-          await liveCollector.start({
+          const binding = await liveCollector.start({
             userId: request.user.userId,
             liveId: live.id,
             ...(sourceUrl ? { shareText: sourceUrl } : { roomRef: roomRef as string }),
           });
+          // ★R51：把这次**真实解析出来的结果**写回场次。
+          // 原先 /start 这条路不落库（只在 POST /danmaku-source 落），于是
+          // 「开播自动恢复采集」的场次 roomRef 永远是空的 —— 2026-09-18 定位那次
+          // 生产事故时，光看数据库就判断不出采集连到了哪个房间。
+          // 同时把 anchorId（主播稳定身份）一并记下，作为后续「识别同一个主播换房间」的依据。
+          try {
+            await saveLiveDanmakuSource(request.user.userId, live.id, {
+              roomRef: binding.roomRef,
+              anchorId: binding.anchorId ?? null,
+            });
+          } catch (err) {
+            request.log.warn({ err }, '开播回写采集解析结果失败（采集已启动，不影响出声与入库）');
+          }
         } else {
           // 库里没存源 → 回落到内存绑定（兼容本轮之前登记的场次）
           await liveCollector.resume(live.id);

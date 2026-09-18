@@ -56,6 +56,12 @@ export interface LiveCollectorBinding {
   userId: string;
   platform: DanmakuPlatform;
   roomRef: string;
+  /**
+   * ★主播的**稳定身份**（抖音 `sec_user_id`）。
+   * `roomRef` 是**一次直播会话**，商家下播重开就变；anchorId 不变。
+   * 留着它才有可能做「同一个主播换了房间」的自动发现（docs/LIVE-ROOM-LOCKING.md）。
+   */
+  anchorId?: string;
   /** manager 的会话幂等键（= source:platform:roomRef） */
   watchKey: string;
   startedAt: string;
@@ -312,7 +318,12 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
 
   async function resolveRoom(
     input: { roomRef?: string; shareText?: string },
-  ): Promise<{ platform: DanmakuPlatform; roomRef: string; connectHeaders?: Record<string, string> }> {
+  ): Promise<{
+    platform: DanmakuPlatform;
+    roomRef: string;
+    anchorId?: string;
+    connectHeaders?: Record<string, string>;
+  }> {
     const directRoomRef = input.roomRef?.trim();
     if (directRoomRef) {
       // 直接给房间号：没有跳转链，ttwid 得按房间号现取（见下）
@@ -326,7 +337,12 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
     if (!resolved.ok) {
       throw new CollectorSourceError('RESOLVE_FAILED', `直播间解析失败（${resolved.code}）：${resolved.reason}`);
     }
-    return withTtwid(resolved.room.platform, resolved.room.roomRef, resolved.room.connectHints?.cookie);
+    return withTtwid(
+      resolved.room.platform,
+      resolved.room.roomRef,
+      resolved.room.connectHints?.cookie,
+      resolved.room.anchorId,
+    );
   }
 
   /**
@@ -339,15 +355,22 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
     platform: DanmakuPlatform,
     roomRef: string,
     existingCookie: string | undefined,
-  ): Promise<{ platform: DanmakuPlatform; roomRef: string; connectHeaders?: Record<string, string> }> {
+    anchorId?: string,
+  ): Promise<{
+    platform: DanmakuPlatform;
+    roomRef: string;
+    anchorId?: string;
+    connectHeaders?: Record<string, string>;
+  }> {
+    const base = { platform, roomRef, ...(anchorId ? { anchorId } : {}) };
     if (existingCookie) {
-      return { platform, roomRef, connectHeaders: { Cookie: existingCookie } };
+      return { ...base, connectHeaders: { Cookie: existingCookie } };
     }
     if (platform !== 'douyin') {
-      return { platform, roomRef };
+      return base;
     }
     const fetched = await fetchTtwid(roomRef);
-    return fetched ? { platform, roomRef, connectHeaders: { Cookie: fetched } } : { platform, roomRef };
+    return fetched ? { ...base, connectHeaders: { Cookie: fetched } } : base;
   }
 
   /**
@@ -410,6 +433,7 @@ export function createLiveCollector(deps: LiveCollectorDeps = {}): LiveCollector
         userId: input.userId,
         platform: room.platform,
         roomRef: room.roomRef,
+        ...(room.anchorId ? { anchorId: room.anchorId } : {}),
         watchKey,
         startedAt: now().toISOString(),
         ...(room.connectHeaders ? { connectHeaders: room.connectHeaders } : {}),

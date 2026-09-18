@@ -51,6 +51,8 @@ class DanmakuSourceWatch {
     required this.status,
     required this.eventCount,
     required this.invalidEvents,
+    this.connectedAt,
+    this.lastEventAt,
     this.lastError,
   });
 
@@ -59,6 +61,8 @@ class DanmakuSourceWatch {
       status: json['status']?.toString() ?? '',
       eventCount: (json['eventCount'] as num?)?.toInt() ?? 0,
       invalidEvents: (json['invalidEvents'] as num?)?.toInt() ?? 0,
+      connectedAt: json['connectedAt']?.toString(),
+      lastEventAt: json['lastEventAt']?.toString(),
       lastError: json['lastError']?.toString(),
     );
   }
@@ -71,9 +75,44 @@ class DanmakuSourceWatch {
 
   /// 被守卫丢弃的脏事件数。
   final int invalidEvents;
+
+  /// 连接成功时刻（ISO8601；未连接为 null）。
+  final String? connectedAt;
+
+  /// **最后一次收到有效事件的时刻**（从未收到为 null）。
+  final String? lastEventAt;
   final String? lastError;
 
   bool get connected => status == 'connected';
+
+  /// 超过这个时长没有事件就提示商家（3 分钟）。
+  static const idleWarnSeconds = 180;
+
+  /// 已连接但**多久没有收到任何事件**（秒）；未连接或时间缺失时返回 null。
+  ///
+  /// 起点是「最后一次事件」，从没收到过就从「连接成功」算 ——
+  /// 这样**「曾经收到、后来断了」也能被抓到**（只看 eventCount 是抓不到的）。
+  ///
+  /// 为什么需要它：2026-09-18 商家中途下播重开，抖音给了新房间号，我们的采集
+  /// 仍连着旧房间 —— `connected`、`lastError` 空、台本照跑，**看起来一切正常**，
+  /// 实际零事件，AI 独自讲了 15 分钟。详见 docs/LIVE-ROOM-LOCKING.md。
+  int? idleSeconds({DateTime? now}) {
+    if (!connected) {
+      return null;
+    }
+    final base = DateTime.tryParse(lastEventAt ?? connectedAt ?? '');
+    if (base == null) {
+      return null;
+    }
+    final elapsed = (now ?? DateTime.now())
+        .toUtc()
+        .difference(base.toUtc())
+        .inSeconds;
+    return elapsed < 0 ? 0 : elapsed;
+  }
+
+  /// 连着但长时间零事件 —— 自己判断不了「是我们断了」还是「对面没动静」，必须让商家知道。
+  bool get looksIdle => (idleSeconds() ?? 0) >= idleWarnSeconds;
 
   /// 给用户看的一行状态文案。
   String get label => switch (status) {

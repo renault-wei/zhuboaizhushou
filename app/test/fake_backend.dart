@@ -293,6 +293,10 @@ class FakeBackend implements HttpClientAdapter {
   /// 模拟已收到的事件数。
   int danmakuSourceEventCount = 0;
 
+  /// R51：最后一次收到有效事件的时刻（null = 从未收到）。
+  /// 真服务端由 collectorManager 打点 —— 替身必须镜像，否则「零事件告警」测不出来。
+  String? danmakuSourceLastEventAt;
+
   /// 模拟 DeepSeek 返回的话术全文：生成接口使用，测试可自行配置。
   final String generatedScriptContent;
 
@@ -1575,6 +1579,7 @@ class FakeBackend implements HttpClientAdapter {
               'invalidEvents': 0,
               'startedAt': binding['startedAt'],
               'connectedAt': binding['startedAt'],
+              'lastEventAt': danmakuSourceLastEventAt,
               'lastError': null,
             },
     });
