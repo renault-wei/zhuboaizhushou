@@ -9,6 +9,10 @@ import {
   type InteractionReply,
   type LiveInteractionContext,
 } from '../src/services/interactionEngine';
+import {
+  clearStats,
+  statsOf,
+} from '../src/services/interactionStats';
 import { scanSensitive } from '../src/services/sensitive';
 
 const app: FastifyInstance = buildApp();
@@ -246,6 +250,58 @@ it('用户级频控：同昵称刷屏只回一次，其他用户不受影响', a
   const otherUser = await engine.handle(makeMessage({ senderNickname: '路人乙' }));
   expect(otherUser.action).toBe('reply');
   expect(generateReply).toHaveBeenCalledTimes(2);
+});
+
+// ---------- R57：每一次跳过都要能对上账 ----------
+// 2026-09-21 真实直播实测：「7 条有效提问 − 3 条已回复 − 1 条因频次漏掉 = 3 条不知去向」，
+// 而引擎里那些 skip 分支**既不计账也不打日志**（generation 的 catch 还把错误整个吞掉）。
+// 用户据此发现「只有测试弹幕被回复」—— 账对不上，比漏了本身更糟。
+it('R57：用户级频控跳过也要计入 skippedByReason（原先完全不计账）', async () => {
+  let clock = 0;
+  const engine = createInteractionEngine({
+    loadContext: vi.fn(async () => makeContext()),
+    generateReply: vi.fn(async () => '这是回复'),
+    now: () => clock,
+    globalIntervalMs: 0,
+    senderIntervalMs: 5000,
+  });
+  // 注意：引擎的**跳过记账用的是 context.liveId**（而收到计数用 message.liveId），
+  // 两者在生产里同值；这里按替身上下文来断言，避免测错口径。
+  clearStats(FIXED_LIVE_ID);
+
+  await engine.handle(makeMessage({ senderNickname: '刷屏哥' }));
+  clock = 2000;
+  await engine.handle(makeMessage({ senderNickname: '刷屏哥' }));
+
+  const stats = statsOf(FIXED_LIVE_ID);
+  expect(stats.received).toBe(2);
+  expect(stats.replied).toBe(1);
+  // ★ 关键：跳过的原因被记下来了，商家能看见「那一条去哪了」
+  expect(stats.skippedByReason.SENDER_THROTTLED).toBe(1);
+  // 账闭得上：收到的 = 回了的 + 各原因跳过的
+  const skippedTotal = Object.values(stats.skippedByReason).reduce((a, b) => a + b, 0);
+  expect(stats.replied + skippedTotal).toBe(stats.received);
+});
+
+it('R57：AI 生成抛异常时记录 GENERATION_FAILED，并把原因带出来（不再静默吞掉）', async () => {
+  clearStats(FIXED_LIVE_ID);
+  const engine = createInteractionEngine({
+    loadContext: vi.fn(async () => makeContext()),
+    // 模拟 DeepSeek 欠费 / key 失效
+    generateReply: vi.fn(async () => {
+      throw new Error('401 Unauthorized');
+    }),
+    now: () => 0,
+    globalIntervalMs: 0,
+    senderIntervalMs: 0,
+  });
+
+  const outcome = await engine.handle(makeMessage());
+  expect(outcome).toEqual({ action: 'skip', reason: 'GENERATION_FAILED' });
+  const stats = statsOf(FIXED_LIVE_ID);
+  expect(stats.received).toBe(1);
+  expect(stats.replied).toBe(0);
+  expect(stats.skippedByReason.GENERATION_FAILED).toBe(1);
 });
 
 // ---------- R22 / R27：账号级配置生效 ----------

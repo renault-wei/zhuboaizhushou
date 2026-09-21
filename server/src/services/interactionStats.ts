@@ -18,6 +18,15 @@ export interface LiveInteractionStats {
   throttled: number;
   /** 按质量分类的计数（不含 replied/throttled，纯分类分布） */
   byQuality: Record<DanmakuQuality, number>;
+  /**
+   * ★R57：有效弹幕但**没产出回复**的「其它原因」计数（原因 → 条数）。
+   *
+   * 为什么必须有（2026-09-21 用户实测发现）：本场真实数据是
+   *   「7 条有效提问 − 3 条已回复 − 1 条因频次漏掉 = **3 条不知去向**」，
+   * 而系统**一个字都不说** —— 商家永远猜不出剩下那些去哪了。
+   * 账对不上，比漏了本身更糟：它会让人不敢信任任何一个数字。
+   */
+  skippedByReason: Record<string, number>;
 }
 
 function emptyStats(): LiveInteractionStats {
@@ -26,6 +35,7 @@ function emptyStats(): LiveInteractionStats {
     replied: 0,
     throttled: 0,
     byQuality: { question: 0, need: 0, greeting: 0, smalltalk: 0, spam: 0 },
+    skippedByReason: {},
   };
 }
 
@@ -58,10 +68,28 @@ export function recordThrottled(liveId: string): void {
   ensure(liveId).throttled += 1;
 }
 
+/**
+ * ★R57：有效弹幕但**没被回复**、且不属于「频次漏掉」的那些 —— 按原因记账。
+ *
+ * 覆盖引擎里所有静默返回的分支（LIVE_NOT_LIVE / REPLY_DISABLED /
+ * SENDER_THROTTLED / 模型判 NONE 等）。有了它，「有效提问 = 已回复 + 频次漏掉 +
+ * 其它原因」这条账才闭得上。
+ */
+export function recordSkipped(liveId: string, reason: string): void {
+  const stats = ensure(liveId);
+  stats.skippedByReason[reason] = (stats.skippedByReason[reason] ?? 0) + 1;
+}
+
 /** 读某场统计（无记录返回全零，不写库也不建条目） */
 export function statsOf(liveId: string): LiveInteractionStats {
   const existing = counters.get(liveId);
-  return existing ? { ...existing, byQuality: { ...existing.byQuality } } : emptyStats();
+  return existing
+    ? {
+        ...existing,
+        byQuality: { ...existing.byQuality },
+        skippedByReason: { ...existing.skippedByReason },
+      }
+    : emptyStats();
 }
 
 /** 开播清空（新场次从零开始） */

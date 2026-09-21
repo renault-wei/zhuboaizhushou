@@ -9,7 +9,12 @@ import { classifyDanmaku, isWorthReplying } from './danmakuQuality';
 import { buildBuiltinFaq, matchFaq } from './faq';
 import { loopCaster } from './loopCaster';
 import { enqueuePendingReply } from './pendingReplies';
-import { recordDanmakuReceived, recordReply, recordThrottled } from './interactionStats';
+import {
+  recordDanmakuReceived,
+  recordReply,
+  recordSkipped,
+  recordThrottled,
+} from './interactionStats';
 import { loadUserLiveSettings, matchBannedWords, parseBannedWords } from './liveSettings';
 import { recordLiveReply } from './replyLedger';
 import { scanSensitive } from './sensitive';
@@ -271,6 +276,31 @@ class InteractionEngineImpl implements InteractionEngine {
     return this.liveQueues.run(message.liveId, () => this.handleSerial(message));
   }
 
+  /**
+   * ★R57：**有效弹幕但没产出回复**时的统一出口 —— 记一笔账、留一行日志。
+   *
+   * 为什么必须统一走这里（2026-09-21 用户实测发现）：本场真实数据是
+   *   「7 条有效提问 − 3 条已回复 − 1 条因频次漏掉 = 3 条不知去向」，
+   * 而引擎里那些 skip 分支**既不计账也不打日志**（尤其 generateReply 的 catch
+   * 把 DeepSeek 失败整个吞掉）—— 于是「AI 是不是挂了」这种最基本的问题都答不上来。
+   *
+   * 注意：频次漏掉走 recordThrottled（有独立口径），无效弹幕走 byQuality，
+   * 两者都不进 skippedByReason，避免同一个数被算两次。
+   */
+  private skipWithReason(
+    liveId: string,
+    reason: InteractionSkipReason,
+    detail?: unknown,
+  ): InteractionOutcome {
+    recordSkipped(liveId, reason);
+    if (detail === undefined) {
+      console.info(`[interactionEngine] 跳过回复（${reason}）：${liveId}`);
+    } else {
+      console.warn(`[interactionEngine] 跳过回复（${reason}）：${liveId} —— ${String(detail)}`);
+    }
+    return { action: 'skip', reason };
+  }
+
   private async handleSerial(message: LiveDanmakuRecord): Promise<InteractionOutcome> {
     const content = message.content.trim();
     if (content.length === 0) {
@@ -289,15 +319,15 @@ class InteractionEngineImpl implements InteractionEngine {
 
     const context = await this.options.loadContext(message.liveId);
     if (!context) {
-      return { action: 'skip', reason: 'LIVE_NOT_FOUND' };
+      return this.skipWithReason(message.liveId, 'LIVE_NOT_FOUND');
     }
     // 只对直播中的场次互动：结束/就绪状态一律不产生回复
     if (context.status !== 'live') {
-      return { action: 'skip', reason: 'LIVE_NOT_LIVE' };
+      return this.skipWithReason(message.liveId, 'LIVE_NOT_LIVE');
     }
     // R22：商家关掉智能回复 → 直接跳过。**放在最前面**，一次 DeepSeek 都不调（省成本）
     if (context.replyEnabled === false) {
-      return { action: 'skip', reason: 'REPLY_DISABLED' };
+      return this.skipWithReason(message.liveId, 'REPLY_DISABLED');
     }
 
     // 场次级频控：与上一条实际回复间隔不足则丢弃（防连续弹幕刷屏）。
@@ -326,7 +356,8 @@ class InteractionEngineImpl implements InteractionEngine {
         lastSenderReplyAt !== undefined &&
         now - lastSenderReplyAt < this.options.senderIntervalMs
       ) {
-        return { action: 'skip', reason: 'SENDER_THROTTLED' };
+        // ★R57：这道闸原先**完全不计账**，是「账对不上」的主要来源之一
+        return this.skipWithReason(context.liveId, 'SENDER_THROTTLED');
       }
     }
 
@@ -358,19 +389,26 @@ class InteractionEngineImpl implements InteractionEngine {
             faqHints: faqEntries.map((entry) => entry.answer),
           },
         });
-      } catch {
-        // 单条生成失败直接跳过，不让上游弹幕链路感知（日志/统计排后续任务）
-        return { action: 'skip', reason: 'GENERATION_FAILED' };
+      } catch (error) {
+        // ★R57：这里原先**把错误整个吞掉**（连日志都没有）—— 于是 DeepSeek 挂了
+        // （欠费 / key 失效 / 网络不通）时，**每一条提问都被静默丢弃**，
+        // 而商家与运维都看不到任何迹象。现在把原因带出来。
+        return this.skipWithReason(
+          context.liveId,
+          'GENERATION_FAILED',
+          error instanceof Error ? error.message : error,
+        );
       }
       if (!generatedText) {
-        return { action: 'skip', reason: 'NO_REPLY_NEEDED' };
+        // 模型判定「不值得回」（NONE）—— 这是正常结果，但对不上账时必须能看见
+        return this.skipWithReason(context.liveId, 'NO_REPLY_NEEDED');
       }
 
       // R27（D4）：命中**商家自定义违禁词** → 整条丢弃，**不走兜底话术**。
       // 与内置词库的处置分开：商家写进词表的本意是「这句不要出现」，换个说法播反而是违背。
       const banned = matchBannedWords(generatedText, context.bannedWords ?? []);
       if (banned.length > 0) {
-        return { action: 'skip', reason: 'BANNED_WORD' };
+        return this.skipWithReason(context.liveId, 'BANNED_WORD', banned.join('/'));
       }
 
       // 合规兜底：命中拦截级敏感词不直接播，改念安全兜底话术

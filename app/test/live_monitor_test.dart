@@ -767,4 +767,36 @@ void main() {
 
     await _unmount(tester);
   });
+
+  testWidgets('R57：互动概况把「其它原因没回复」也列出来，账要对得上', (tester) async {
+    // 2026-09-21 实测：App 显示「有效提问 7 / 已回复 3 / 因频次漏掉 1」，
+    // 剩下 3 条**不知去向** —— 账对不上比漏了本身更糟，商家会不再相信任何数字。
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
+      ],
+    );
+    backend.interactionStats = <String, dynamic>{
+      'received': 12,
+      'replied': 3,
+      'throttled': 1,
+      'byQuality': <String, dynamic>{'question': 7, 'smalltalk': 5},
+      'skippedByReason': <String, dynamic>{
+        'NO_REPLY_NEEDED': 2,
+        'GENERATION_FAILED': 1,
+      },
+    };
+
+    await _pumpMonitor(tester, backend);
+    await tester.ensureVisible(find.byKey(const Key('liveMonitorStatsSkipped')));
+    await tester.pump();
+
+    expect(find.byKey(const Key('liveMonitorStatsSkipped')), findsOneWidget);
+    expect(find.textContaining('未回复 3 条'), findsOneWidget);
+    // 原因要翻成人话，而不是把 NO_REPLY_NEEDED 这种码直接甩给商家
+    expect(find.textContaining('模型判无需回'), findsOneWidget);
+    expect(find.textContaining('AI 生成失败'), findsOneWidget);
+
+    await _unmount(tester);
+  });
 }

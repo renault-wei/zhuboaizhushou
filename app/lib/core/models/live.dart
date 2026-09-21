@@ -202,6 +202,7 @@ class InteractionStats {
     required this.replied,
     required this.throttled,
     required this.byQuality,
+    this.skippedByReason = const <String, int>{},
   });
 
   factory InteractionStats.fromJson(Map<String, dynamic> json) {
@@ -212,11 +213,19 @@ class InteractionStats {
         quality[entry.key.toString()] = (entry.value as num?)?.toInt() ?? 0;
       }
     }
+    final rawSkip = json['skippedByReason'];
+    final skipped = <String, int>{};
+    if (rawSkip is Map) {
+      for (final entry in rawSkip.entries) {
+        skipped[entry.key.toString()] = (entry.value as num?)?.toInt() ?? 0;
+      }
+    }
     return InteractionStats(
       received: (json['received'] as num?)?.toInt() ?? 0,
       replied: (json['replied'] as num?)?.toInt() ?? 0,
       throttled: (json['throttled'] as num?)?.toInt() ?? 0,
       byQuality: quality,
+      skippedByReason: skipped,
     );
   }
 
@@ -228,6 +237,17 @@ class InteractionStats {
   final int throttled;
   /// 按质量分类的计数：question / need / greeting / smalltalk / spam
   final Map<String, int> byQuality;
+
+  /// ★R57：有效弹幕但**没被回复**的「其它原因」计数（原因 → 条数）。
+  ///
+  /// 为什么需要：2026-09-21 实测「7 条有效提问 − 3 条已回复 − 1 条因频次漏掉",
+  /// = 3 条不知去向」，系统一个字都不说。账对不上比漏了本身更糟 ——
+  /// 它会让人不敢信任任何一个数字。
+  final Map<String, int> skippedByReason;
+
+  /// 「其它原因」合计（不含频次漏掉、不含无效弹幕）
+  int get skippedOther =>
+      skippedByReason.values.fold(0, (sum, value) => sum + value);
 
   int _count(String key) => byQuality[key] ?? 0;
 

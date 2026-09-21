@@ -1798,7 +1798,27 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   /// 弹幕日志区：只读滚动展示；空态显示「暂无弹幕」。
   /// R24：AI 回复区 —— 让商家看得见「AI 到底回了什么」。
   /// 服务端是内存台账（开播清空、结束保留、重启即丢），这里只做展示。
-  /// R45：互动概况 —— 让商家看见「收到多少 / 有效多少 / 回了多少 / 因为频次漏了多少」。
+  /// R57：引擎跳过原因 → 人话。未知原因原样显示（便于发现新增分支没配文案）。
+  static const Map<String, String> _skipReasonLabels = <String, String>{
+  'NO_REPLY_NEEDED': '模型判无需回',
+  'GENERATION_FAILED': 'AI 生成失败',
+  'SENDER_THROTTLED': '同一人刷屏',
+  'LIVE_NOT_LIVE': '当时已不在播',
+  'LIVE_NOT_FOUND': '场次不存在',
+  'REPLY_DISABLED': '智能回复已关',
+  'BANNED_WORD': '命中违禁词',
+};
+
+/// 把「原因 → 条数」压成一行，按条数从多到少。
+String _skipReasonSummary(Map<String, int> byReason) {
+  final entries = byReason.entries.where((e) => e.value > 0).toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  return entries
+      .map((e) => '${_skipReasonLabels[e.key] ?? e.key} ${e.value}')
+      .join(' · ');
+}
+
+/// R45：互动概况 —— 让商家看见「收到多少 / 有效多少 / 回了多少 / 因为频次漏了多少」。
   ///
   /// 这是**唯一**能让商家判断「回复频次是不是设得太紧」的地方：
   /// 没有它，商家只会觉得「今天 AI 怎么不搭理人」，却不知道是自己的设置挡的。
@@ -1854,6 +1874,20 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                 '挡掉无效弹幕 ${stats.filtered} 条（灌水 ${stats.spam} · 闲聊 ${stats.smalltalk} · 问候 ${stats.greeting}）',
                 style: const TextStyle(fontSize: 11, color: AppColors.nightTextFaint),
               ),
+              // ★R57：把「有效但没回」的**其它原因**也列出来 —— 否则账对不上：
+              // 「有效提问 7 − 已回复 3 − 频次漏掉 1 = 3 条不知去向」（2026-09-21 实测）。
+              // 商家看到数字对不上时，第一反应是不再相信任何一个数字。
+              if (stats.skippedOther > 0) ...[
+                const SizedBox(height: 4),
+                Text(
+                  '未回复 ${stats.skippedOther} 条（${_skipReasonSummary(stats.skippedByReason)}）',
+                  key: const Key('liveMonitorStatsSkipped'),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.nightTextFaint,
+                  ),
+                ),
+              ],
               if (monitor.pendingReplies > 0) ...[
                 const SizedBox(height: 4),
                 Text(
