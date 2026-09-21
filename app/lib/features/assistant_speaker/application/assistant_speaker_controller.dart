@@ -158,6 +158,24 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   /// 播放循环是否已在跑（同一时刻只允许一个）
   bool _playLoopRunning = false;
 
+  /// ★R63：**播放互斥** —— 同一时刻只允许一条音频在播。
+  ///
+  /// 为什么必须有（2026-09-22 用户实测「直播间打开时部分语音一起播放」）：
+  /// `_playOneFromBuffer()` 有**两个调用方** —— 每秒的定时器 tick（`pollOnce`）
+  /// 与播放循环。两者互不知情，于是每秒都去 `player.play(...)`，
+  /// **前一句还没播完就被切掉重放**，听上去就是几句叠在一起 ✗。
+  /// 加了这道闸之后：谁先取到谁播，另一个直接跳过，等下一轮。
+  bool _playing = false;
+
+  // R63 记录一次**抄歪了**的尝试（写给未来的我）：
+  //   竞品的 `firstaudio` 语义是「第一条【直接播】，不走排队/垫音逻辑」。
+  //   但它那套队列里有「垫音」分支，所以首播确实需要特判绕开；
+  //   而**我们本来就是直接播**（填完缓冲立刻播），没有需要绕开的东西。
+  //   我一度把它实现成「首播只保留最新一条、其余丢掉」——那是**丢好音频** ✗，
+  //   与 R61 的批量缓冲设计冲突，被 R61/R63 两条测试当场抓住。已撤销。
+  //   真正需要治的「陈旧积压」放在**服务端**（MAX_REMOTE_SPEECH_AGE_MS，>20s 直接丢），
+  //   那才是对症的位置：一句台词该不该播，取决于它多久以前说的 ✗ 排第几位。
+
   /// dispose 后不再触碰 state：在途轮询回来时直接返回（stop/dispose 竞态兜底）。
   bool _disposed = false;
 
@@ -279,15 +297,21 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   /// 播放循环与每轮 tick（[pollOnce]）共用它 —— 只有一个出入口，
   /// 而 `removeAt(0)` 是同步的，两边同时进来也不会重复播同一条。
   Future<bool> _playOneFromBuffer() async {
-    if (_buffer.isEmpty) {
+    // ★R63：在途互斥 —— 有音频正在播就什么都不做。
+    // 少了这一句，定时器 tick 与播放循环会互相抢播放器，把前一句切碎重放。
+    if (_playing || _buffer.isEmpty) {
       return false;
     }
+    _playing = true;
     final bytes = _buffer.removeAt(0);
     state = state.copyWith(status: AssistantSpeakerStatus.playing);
     try {
       await _player.play(bytes);
     } catch (_) {
       // 单条播放失败（文件损坏等）不该整体停：丢掉它继续下一条
+    } finally {
+      // ★R63：任何路径都要放闸 —— 漏了这一步会永久卡死后续播放
+      _playing = false;
     }
     if (_disposed || !state.enabled) {
       return true;
@@ -297,6 +321,7 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
       playedCount: state.playedCount + 1,
       lastError: null,
     );
+    _playing = false;
     return true;
   }
 

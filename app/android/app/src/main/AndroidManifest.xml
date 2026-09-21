@@ -8,6 +8,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- R62 保活加固（对照竞品 xcai1618 的清单取证）：
+         ① 主动申请电池优化豁免 —— 系统提供的**正规 API**，会弹系统对话框；
+            此前我们只写了个「请你自己去设置里找」的引导页，等于连正规手段都没用满。
+         ② 开机自启 / 应用被替换后重排保活（需用户先放行自启动，代码绕不过）
+         ③ JobScheduler 定时唤醒（BIND_JOB_SERVICE）—— 不受应用定时器被限流影响 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <uses-permission android:name="android.permission.BIND_JOB_SERVICE"/>
     <!-- MVP 联调使用 http://10.0.2.2:3000，需允许明文流量；上线切 https 后可移除 -->
     <application
         android:label="starvoice_app"
@@ -45,6 +53,32 @@
             android:exported="false"
             android:stopWithTask="false"
             android:foregroundServiceType="mediaPlayback"/>
+        <!-- R62：JobScheduler 保活心跳（对照竞品 CactusJobService） -->
+        <service
+            android:name=".KeepAliveJobService"
+            android:enabled="true"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE"/>
+        <!-- R62：开机 / 应用更新后重排保活（需用户先放行自启动） -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
+        </receiver>
+        <!-- R62：1 像素透明 Activity（对照竞品 OnePixActivity）—— 让进程留在更高的优先级桶里；
+             用户完全看不见。用系统自带的半透明无标题主题，不额外定义 style。 -->
+        <activity
+            android:name=".OnePixelActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
+            android:noHistory="true"/>
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />

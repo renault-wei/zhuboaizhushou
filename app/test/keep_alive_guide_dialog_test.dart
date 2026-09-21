@@ -1,5 +1,5 @@
-/// 助播保活引导弹窗（M9 手机线 / 极简系统风）Widget 测试：标题 + 一句说明渲染、
-/// 电量优化状态随入参变化、两个动作按钮的关闭与回调行为。
+/// 助播保活引导弹窗（M9 / R62）Widget 测试：
+/// 两项放行（电量优化 + 自启动）的渲染、状态行随入参变化、各按钮的回调行为。
 library;
 
 import 'package:flutter/material.dart';
@@ -11,7 +11,8 @@ import 'package:starvoice_app/features/assistant_speaker/presentation/keep_alive
 Future<void> _openGuide(
   WidgetTester tester, {
   bool? exempt,
-  VoidCallback? onOpen,
+  VoidCallback? onOpenBattery,
+  VoidCallback? onOpenAutoStart,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -23,7 +24,14 @@ Future<void> _openGuide(
               onPressed: () => showKeepAliveGuideDialog(
                 context,
                 batteryExempt: exempt,
-                onOpenSettings: () async => onOpen?.call(),
+                onRequestBatteryExemption: () async {
+                  onOpenBattery?.call();
+                  return true;
+                },
+                onOpenAutoStartSettings: () async {
+                  onOpenAutoStart?.call();
+                  return true;
+                },
               ),
               child: const Text('open'),
             ),
@@ -37,14 +45,18 @@ Future<void> _openGuide(
 }
 
 void main() {
-  testWidgets('渲染系统风弹窗：标题 + 一句说明 + 两个动作按钮', (tester) async {
+  testWidgets('R62：弹窗同时列出两项放行（电量优化 + 自启动）', (tester) async {
     await _openGuide(tester, exempt: false);
 
     expect(find.byKey(const Key('keepAliveGuideDialog')), findsOneWidget);
     expect(find.text('提示'), findsOneWidget);
-    expect(find.text('直播中锁屏会让 AI 声音中断，需放行后台运行。'), findsOneWidget);
+    expect(find.text('① 电量优化'), findsOneWidget);
+    expect(find.text('② 自启动 / 受保护应用'), findsOneWidget);
+    // 必须告诉用户「只能手动点」—— 代码代开不了
+    expect(find.byKey(const Key('keepAliveGuideAutoStartHint')), findsOneWidget);
+    expect(find.byKey(const Key('keepAliveGuideBattery')), findsOneWidget);
+    expect(find.byKey(const Key('keepAliveGuideAutoStart')), findsOneWidget);
     expect(find.byKey(const Key('keepAliveGuideLater')), findsOneWidget);
-    expect(find.byKey(const Key('keepAliveGuideGo')), findsOneWidget);
   });
 
   testWidgets('电量优化状态行随入参变化', (tester) async {
@@ -62,25 +74,42 @@ void main() {
     expect(find.text('电量优化状态未知'), findsOneWidget);
   });
 
-  testWidgets('「暂不设置」关闭弹窗且不触发去设置回调', (tester) async {
-    var opened = false;
-    await _openGuide(tester, exempt: false, onOpen: () => opened = true);
+  testWidgets('「暂不设置」关闭弹窗且不触发任何回调', (tester) async {
+    var battery = false;
+    var autoStart = false;
+    await _openGuide(
+      tester,
+      exempt: false,
+      onOpenBattery: () => battery = true,
+      onOpenAutoStart: () => autoStart = true,
+    );
 
     await tester.tap(find.byKey(const Key('keepAliveGuideLater')));
     await tester.pumpAndSettle();
-
     expect(find.byKey(const Key('keepAliveGuideDialog')), findsNothing);
-    expect(opened, isFalse);
+    expect(battery, isFalse);
+    expect(autoStart, isFalse);
   });
 
-  testWidgets('「去放行」触发去设置回调并关闭弹窗', (tester) async {
-    var opened = false;
-    await _openGuide(tester, exempt: false, onOpen: () => opened = true);
+  testWidgets('「去放行电量」触发电量回调，并保持弹窗可继续操作', (tester) async {
+    var battery = false;
+    await _openGuide(tester, exempt: false, onOpenBattery: () => battery = true);
 
-    await tester.tap(find.byKey(const Key('keepAliveGuideGo')));
+    await tester.tap(find.byKey(const Key('keepAliveGuideBattery')));
     await tester.pumpAndSettle();
+    expect(battery, isTrue);
+  });
 
-    expect(opened, isTrue);
-    expect(find.byKey(const Key('keepAliveGuideDialog')), findsNothing);
+  testWidgets('「去开自启动」触发自启动回调（代码代开不了，只能拉起设置页）', (tester) async {
+    var autoStart = false;
+    await _openGuide(
+      tester,
+      exempt: false,
+      onOpenAutoStart: () => autoStart = true,
+    );
+
+    await tester.tap(find.byKey(const Key('keepAliveGuideAutoStart')));
+    await tester.pumpAndSettle();
+    expect(autoStart, isTrue);
   });
 }

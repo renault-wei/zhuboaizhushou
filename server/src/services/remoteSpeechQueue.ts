@@ -12,6 +12,8 @@ export interface RemoteSpeechJob {
   wavPath: string;
   /** 归属场次：助播机按场拉取，避免多场并发时音频互相插队（旧数据 / 未标记为空） */
   liveId?: string;
+  /** 入队时刻（epoch ms）：用于**过期丢弃**（R63） */
+  createdAt: number;
 }
 
 export interface RemoteSpeechQueue {
@@ -46,6 +48,23 @@ export interface RemoteSpeechQueue {
  */
 export const MAX_REMOTE_SPEECH_JOBS_PER_LIVE = 20;
 
+/**
+ * 队列条目的**最大存活时长**（R63）。超过就直接丢掉，永远不交付。
+ *
+ * 为什么需要（2026-09-22 用户实测「直播间打开时部分语音一起播放」）：
+ *   只有**条数**上界还不够 —— 手机切后台 / 被限流时，队列里会攒下十几条
+ *   **十几秒甚至几分钟前**的台词；等它恢复，这些陈年旧话会**一起涌出来**，
+ *   和台上的循环台本叠在一起，听上去就是「几句一起播」✗。
+ *
+ * 参照竞品 xcai1618 的 `appMaxAudio`（客户端队列上限，超了不入队）；
+ * 我们在服务端用**时间**而不是**条数**来判断更对症：
+ *   陈旧与否取决于「多久之前的台词」，而不是「排在第几位」。
+ *
+ * 20 秒的来由：一句台本通常在 8~15 秒之间，晚 20 秒还没送出去的，
+ * 台上的循环早就把同一件事又说了一遍 —— 再播一遍反而奇怪。
+ */
+export const MAX_REMOTE_SPEECH_AGE_MS = 20_000;
+
 /** 内存 FIFO 实现：服务重启即清空（一期自用可接受；云 / 多商家化时再落库持久化） */
 class MemoryRemoteSpeechQueue implements RemoteSpeechQueue {
   private readonly jobs: RemoteSpeechJob[] = [];
@@ -55,7 +74,7 @@ class MemoryRemoteSpeechQueue implements RemoteSpeechQueue {
 
   push(wavPath: string, liveId?: string): string {
     const id = randomUUID();
-    this.jobs.push({ id, wavPath, liveId });
+    this.jobs.push({ id, wavPath, liveId, createdAt: Date.now() });
     if (liveId !== undefined) {
       while (this.size(liveId) > MAX_REMOTE_SPEECH_JOBS_PER_LIVE) {
         const index = this.jobs.findIndex((job) => job.liveId === liveId);
@@ -82,6 +101,9 @@ class MemoryRemoteSpeechQueue implements RemoteSpeechQueue {
   }
 
   size(liveId?: string): number {
+    // R63：先剔陈旧 —— 只被「过期积压」占着的链路不该算忙，
+    // 否则台本会一直判「出声链路繁忙」然后让位超时（就是那条卡死路径）。
+    this.pruneStale();
     if (liveId === undefined) {
       return this.jobs.length;
     }
@@ -89,6 +111,7 @@ class MemoryRemoteSpeechQueue implements RemoteSpeechQueue {
   }
 
   list(liveId?: string, limit = 10): RemoteSpeechJob[] {
+    this.pruneStale();
     const matched =
       liveId === undefined ? this.jobs : this.jobs.filter((job) => job.liveId === liveId);
     // 浅拷贝：调用方拿到的是快照，不能借它改动队列内部状态
@@ -96,6 +119,7 @@ class MemoryRemoteSpeechQueue implements RemoteSpeechQueue {
   }
 
   take(liveId?: string): RemoteSpeechJob | undefined {
+    this.pruneStale();
     if (liveId === undefined) {
       return this.jobs.shift();
     }
@@ -105,6 +129,23 @@ class MemoryRemoteSpeechQueue implements RemoteSpeechQueue {
     }
     const [job] = this.jobs.splice(index, 1);
     return job;
+  }
+
+  /**
+   * 剔掉过期条目并清理其 wav（R63）。
+   *
+   * 每个对外方法入口都调一次 —— 队列是内存里的短数组，这个开销可以忽略，
+   * 而「任何一次读写都看不到陈旧条目」这个性质很重要。
+   */
+  private pruneStale(): void {
+    const now = Date.now();
+    for (let index = this.jobs.length - 1; index >= 0; index -= 1) {
+      const job = this.jobs[index];
+      if (job && now - job.createdAt > MAX_REMOTE_SPEECH_AGE_MS) {
+        this.jobs.splice(index, 1);
+        this.onEvict?.(job);
+      }
+    }
   }
 
   clear(liveId?: string): void {

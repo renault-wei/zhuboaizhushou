@@ -18,6 +18,26 @@ abstract interface class KeepAliveBridge {
 
   /// 拉起系统电池优化设置页，由用户自行放行（不强制、不代改系统设置）。
   Future<void> openBatteryOptimizationSettings();
+
+  /// R62：**主动申请**电池优化豁免 —— 弹系统对话框让用户点「允许」。
+  ///
+  /// 与 [openBatteryOptimizationSettings] 的区别很关键：
+  ///   那个是「把用户丢到设置页、让他自己找」✗；
+  ///   这个是系统提供的**正规 API**，会弹明确的授权框 ✓。
+  /// 竞品 xcai1618 的清单里就有 `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` ——
+  /// 我们此前只做了前者，等于**连正规手段都没用满**。
+  /// 返回是否已豁免（含「本来就已经豁免」）。
+  Future<bool> requestIgnoreBatteryOptimizations();
+
+  /// R62：拉起**厂商的「自启动 / 受保护应用」设置页**。
+  ///
+  /// 为什么必须有：华为 / 小米 / OPPO / vivo 各有自己一套后台管制，
+  /// **代码无法申请**，只能引导用户手动开。2026-09-21 真机实测（华为 ELS-AN10）：
+  /// 前台服务照起（isForeground=true、有通知），但系统照样**强制释放 WakeLock**、
+  /// 冻掉 Dart 定时器 —— 助播拉取从 1 秒掉到 8~22 秒，表现为「后台没声音」。
+  ///
+  /// 返回是否成功拉起（拉不起时调用方应引导用户手动去找）。
+  Future<bool> openAutoStartSettings();
 }
 
 /// Android 实现：转发到原生方法通道 `starvoice/keep_alive`。
@@ -54,6 +74,20 @@ class MethodChannelKeepAliveBridge implements KeepAliveBridge {
   Future<void> openBatteryOptimizationSettings() async {
     await _channel.invokeMethod<bool>('openBatteryOptimizationSettings');
   }
+
+  @override
+  Future<bool> openAutoStartSettings() async {
+    final opened = await _channel.invokeMethod<bool>('openAutoStartSettings');
+    return opened ?? false;
+  }
+
+  @override
+  Future<bool> requestIgnoreBatteryOptimizations() async {
+    final granted = await _channel.invokeMethod<bool>(
+      'requestIgnoreBatteryOptimizations',
+    );
+    return granted ?? false;
+  }
 }
 
 /// 空实现：非 Android 平台（桌面 / 测试）与原生通道不可用时使用。
@@ -72,6 +106,12 @@ class NoopKeepAliveBridge implements KeepAliveBridge {
 
   @override
   Future<void> openBatteryOptimizationSettings() async {}
+
+  @override
+  Future<bool> openAutoStartSettings() async => false;
+
+  @override
+  Future<bool> requestIgnoreBatteryOptimizations() async => true;
 }
 
 /// 按运行平台挑选默认实现：仅 Android 走原生前台服务，其余走空实现。

@@ -655,9 +655,13 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     );
   }
 
-  /// 首次启用助播出声时弹一次后台保活引导：极简系统风弹窗告知「锁屏可能
-  /// 导致出声中断」，并给一键去系统设置放行的入口。
-  /// 仅 Android 有效（电池优化设置是 Android 概念）；仅引导一次、不阻断。
+  /// R62：首次进入直播时弹一次后台保活引导。
+  ///
+  /// 从「只引导电量优化」扩成**两项**：电量优化 + **自启动白名单**。
+  /// 2026-09-21 真机实测（华为）证明缺一不可 —— 只放行电量优化，
+  /// 系统照样强制释放 WakeLock、冻掉定时器（表现为「后台没声音」）。
+  /// 而自启动这一项**代码无法申请**，只能引导用户手动点。
+  /// 仅 Android 有效；仅引导一次、不阻断开播。
   Future<void> _maybeShowKeepAliveGuide() async {
     if (!mounted || defaultTargetPlatform != TargetPlatform.android) {
       return;
@@ -676,7 +680,9 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
       await showKeepAliveGuideDialog(
         context,
         batteryExempt: exempt,
-        onOpenSettings: bridge.openBatteryOptimizationSettings,
+        // R62：从「丢进设置页」改成**主动弹系统授权框**（正规 API，竞品在用）
+        onRequestBatteryExemption: bridge.requestIgnoreBatteryOptimizations,
+        onOpenAutoStartSettings: bridge.openAutoStartSettings,
       );
     } catch (_) {
       // 引导只是锦上添花：原生桥不可用 / 读写偏好失败时静默跳过，不阻断开播

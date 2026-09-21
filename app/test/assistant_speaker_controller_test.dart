@@ -95,6 +95,24 @@ class _FakeKeepAliveBridge implements KeepAliveBridge {
   Future<void> openBatteryOptimizationSettings() async {
     settingsOpenCount += 1;
   }
+
+  /// R62：自启动设置页（厂商专有，代码无法代开，只能拉起）
+  int autoStartOpenCount = 0;
+
+  @override
+  Future<bool> openAutoStartSettings() async {
+    autoStartOpenCount += 1;
+    return true;
+  }
+
+  /// R62：主动申请电池优化豁免（系统授权框）
+  int batteryRequestCount = 0;
+
+  @override
+  Future<bool> requestIgnoreBatteryOptimizations() async {
+    batteryRequestCount += 1;
+    return true;
+  }
 }
 
 /// 轮询间隔拉大到一天：让 start 的即时拉取可控，测试期间不会自然再跳。
@@ -361,12 +379,63 @@ void main() {
     controller.dispose();
   });
 
-  test('R58：出声上下文不申请音频焦点（并行），且按 speech/assistant 路由', () {
+  test('R58：出声上下文只改「不抢焦点」，其余保持系统默认', () {
     final ctx = buildParallelAudioContext();
-    // ★ 关键：不是 gain（独占），而是 none（不申请）
+    // ★ 唯一要改的：不是 gain（独占），而是 none（不申请）——「声音应该可以并行」
     expect(ctx.android.audioFocus, AndroidAudioFocus.none);
-    expect(ctx.android.contentType, AndroidContentType.speech);
-    expect(ctx.android.usageType, AndroidUsageType.assistant);
     expect(ctx.android.stayAwake, isTrue);
+    // ★★ 回归防线（2026-09-22 真机教训）：**不许**把 contentType / usageType
+    //    改成 speech / assistant —— 那样音轨增益会变成 -inf（静音），
+    //    用户只听到「声音阻塞」，而播放本身不报错，极难排查。
+    expect(ctx.android.contentType, AndroidContentType.music);
+    expect(ctx.android.usageType, AndroidUsageType.media);
+  });
+
+  // ---------- R63：播放互斥（治「部分语音一起播放」） ----------
+  // 2026-09-22 用户实测：直播间打开时**几句语音一起播放**。
+  // 根因是我 R61 引入的**双驱动**：`_playOneFromBuffer()` 既被每秒的定时器 tick
+  // （pollOnce）调用，又被播放循环调用 —— 两者互不知情，每秒都去 player.play(...)，
+  // 前一句还没播完就被切掉重放，听上去就是几句叠在一起。
+  test('R63：同时驱动 tick 与播放循环，也不会重叠播放（同一时刻只有一条在播）', () async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        <String, dynamic>{
+          'id': 'live-001',
+          'title': '测试场次',
+          'videoSourceUrl': '',
+          'status': 'live',
+          'aiBadgeShown': true,
+        },
+      ],
+    );
+    for (var index = 0; index < 5; index += 1) {
+      backend.speechOut.add(_wavBytes(index));
+    }
+    final api = ApiClient(buildMockDio(backend));
+    final player = _FakeSpeechOutPlayer();
+    final controller = AssistantSpeakerController(
+      api,
+      player,
+      const Duration(days: 1),
+    );
+
+    controller.start(liveId: 'live-001');
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+
+    // 播放循环已在跑（start 时拉起）。此时【再并发地】多次驱动 tick ——
+    // 修复前这里会不断抢播放器；修复后必须一条条来。
+    await Future.wait<void>(<Future<void>>[
+      controller.pollOnce(),
+      controller.pollOnce(),
+      controller.pollOnce(),
+      controller.pollOnce(),
+    ]);
+
+    await _waitUntil(() => player.played.length >= 5);
+    // 一条不多、一条不少 —— 说明没有重复播、也没有被抢掉
+    expect(player.played, hasLength(5));
+    expect(controller.state.playedCount, 5);
+
+    controller.dispose();
   });
 }
