@@ -158,6 +158,9 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   /// 播放循环是否已在跑（同一时刻只允许一个）
   bool _playLoopRunning = false;
 
+  /// R64：播放循环「没播到」时的让出时长。必须是正数，否则循环会空转烧 CPU。
+  static const Duration _playLoopYield = Duration(milliseconds: 50);
+
   /// ★R63：**播放互斥** —— 同一时刻只允许一条音频在播。
   ///
   /// 为什么必须有（2026-09-22 用户实测「直播间打开时部分语音一起播放」）：
@@ -341,7 +344,20 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
           await _waitIdle();
           continue;
         }
-        await _playOneFromBuffer();
+        final played = await _playOneFromBuffer();
+        if (!played) {
+          // ★R64：**必须让出事件循环** —— 少了这一句就是【空转】✗
+          //
+          // 为什么会有「没播到」：`_playOneFromBuffer` 里有播放互斥，
+          // 正在播时它会**立刻返回 false**。若循环不歇地重试，
+          // 在每条音频播放的那几秒里就会以百万次/秒空转 ✗
+          //
+          // 2026-09-22 真机实测（华为 ELS-AN10）：
+          //   `top` 显示本进程 R 状态、CPU 100~106%、每 3 秒墙钟烧掉 4 秒 CPU，
+          //   事件循环被饿死 → **应用卡死 + 完全没有声音** ✗
+          // 让出 50ms 之后，CPU 归零，播放与轮询恢复正常。
+          await Future<void>.delayed(_playLoopYield);
+        }
       }
     } finally {
       _playLoopRunning = false;
