@@ -253,7 +253,12 @@ export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveS
   const voice = options.voice ?? env.liveSpeaker.localTtsVoice ?? DEFAULT_LOCAL_TTS_VOICE;
   const rate = options.rate ?? LOCAL_TTS_RATE;
   const synth = options.synth ?? new WindowsLocalSpeechSynth({ voice, rate });
-  const sink = options.sink ?? getSharedSink();
+  // ★R61 修复：这里原先写的是 `getSharedSink()`（**本机**播放器），于是
+  //   phone 模式下合成的 wav 全进了「本机播放队列」—— 而本机是云端服务器，
+  //   没有声卡；同时 speechLinePendingCount / App 拉取读的都是**远程队列**。
+  //   一边入本机、一边读远程 → **助播机永远拉到 0 条，一个音都出不来**。
+  //   正确做法：与读写忙闲走**同一条链路**（谁出声只解析一次，见 getLineSink）。
+  const sink = options.sink ?? getLineSink();
   // 平台限制只约束「本机出声」（Windows SAPI / 本机播放器）；phone 远程出声队列任意平台可入队
   const remoteOutput = options.remoteOutput ?? env.liveSpeaker.output === 'phone';
 
