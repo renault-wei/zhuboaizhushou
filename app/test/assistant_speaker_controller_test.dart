@@ -7,7 +7,9 @@ library;
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:starvoice_app/features/assistant_speaker/data/audioplayers_speech_out_player.dart';
 
 import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/core/platform/keep_alive_bridge.dart';
@@ -310,5 +312,18 @@ void main() {
     expect(controller.state.enabled, isFalse);
 
     controller.dispose();
+  });
+
+  // ---------- R58：并行出声（不抢音频焦点） ----------
+  // 2026-09-21 用户提出「声音应该可以并行」。根因：audioplayers 默认
+  // AndroidAudioFocus.gain = 「the sole source of audio」独占 ——
+  // 助播机一开口就把手机上的音乐/导航顶停。
+  test('R58：出声上下文不申请音频焦点（并行），且按 speech/assistant 路由', () {
+    final ctx = buildParallelAudioContext();
+    // ★ 关键：不是 gain（独占），而是 none（不申请）
+    expect(ctx.android.audioFocus, AndroidAudioFocus.none);
+    expect(ctx.android.contentType, AndroidContentType.speech);
+    expect(ctx.android.usageType, AndroidUsageType.assistant);
+    expect(ctx.android.stayAwake, isTrue);
   });
 }
