@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app';
 import { pool } from '../src/db/client';
 import { loopCaster } from '../src/services/loopCaster';
+import { restoreLiveSessions } from '../src/services/liveRecovery';
 import { liveSpeaker } from '../src/services/liveSpeaker';
 
 const app: FastifyInstance = buildApp();
@@ -39,6 +40,7 @@ const PHONE_LOOP_SWAP_B = '13920000309'; // M4 热更归属隔离（他人）
 const PHONE_SCRIPT_SWAP = '13920000310'; // 直播中热更话术
 const PHONE_SCRIPT_SWAP_B = '13920000311'; // 话术热更归属隔离（他人）
 const PHONE_MUTEX = '13920000312'; // 单账号单场互斥（同台本多音色修复）
+const PHONE_RECOVERY = '13920000320'; // R59 重启恢复
 
 async function registerAndGetToken(phone: string): Promise<string> {
   const send = await app.inject({
@@ -669,3 +671,49 @@ dbIt('热更话术：非直播中 409；直播中换绑 200；参数/归属/过�
   // 兜底：停掉本场 Runner（start 未调用，但 setLiveStatus 直接置 live 可能触发轮询）
   loopCaster.stop(liveId);
 });
+
+// ---------- R59：服务重启后的直播恢复 ----------
+// 2026-09-21 发现：直播运行时（音色快照/循环台本/氛围语/采集/定时关播）全在内存，
+// 原先只在 /start 被拉起 —— 进程一重启，DB 里 status 还是 live，
+// 但采集断了、台本哑了、**定时关播也不会再响**（那场直播会一直播下去）。
+dbIt('R59：重启恢复会扫出 status=live 的场次并逐一拉起', async () => {
+  const token = await registerAndGetToken(PHONE_RECOVERY);
+  const ids: string[] = [];
+  for (const title of ['重启恢复A', '重启恢复B']) {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/lives',
+      headers: bearer(token),
+      payload: { title },
+    });
+    const liveId = created.json().live.id as string;
+    ids.push(liveId);
+    // 直接置库为 live：本用例模拟的是「进程重启时这场**本来就在播**」，
+    // 走 /start 反而要先把音色与话术备齐（那是另一条链路的约束）。
+    await pool.query(
+      "UPDATE lives SET status = 'live', started_at = now() WHERE id = $1",
+      [liveId],
+    );
+  }
+
+  // 模拟「进程重启」：运行时随进程消失，只剩 DB 里的 status=live
+  const warnings: string[] = [];
+  const restored = await restoreLiveSessions((message) => warnings.push(message));
+
+  // 这两场必须在恢复之列（不能用等号 —— 库里可能还有别的进行中场次）
+  expect(restored).toBeGreaterThanOrEqual(2);
+  for (const id of ids) {
+    const monitor = await app.inject({
+      method: 'GET',
+      url: `/api/lives/${id}/monitor`,
+      headers: bearer(token),
+    });
+    expect(monitor.statusCode).toBe(200);
+    expect(monitor.json().status).toBe('live');
+  }
+
+  // 收尾：把这两场结束掉，别把 live 状态留给下一轮
+  for (const id of ids) {
+    await app.inject({ method: 'POST', url: `/api/lives/${id}/end`, headers: bearer(token) });
+  }
+}, 30000);

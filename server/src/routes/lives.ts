@@ -7,10 +7,8 @@ import {
   getLiveById,
   getLiveComposeContext,
   listLives,
-  type Live,
   LiveError,
   LiveStatus,
-  saveLiveDanmakuSource,
   updateLive,
   updateLiveInternal,
 } from '../services/live';
@@ -18,20 +16,17 @@ import { createWriteStream, mkdirSync, rmSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { streamingService } from '../services/streaming';
-import { endLive, getLiveMonitor, listDanmaku, startLive } from '../services/liveSession';
-import { settleLiveSession } from '../services/liveBilling';
+import { getLiveMonitor, listDanmaku, startLive } from '../services/liveSession';
+// R59：直播运行时的拉起与收尾都收进 liveRuntime（开播与「重启恢复」共用同一份）
+import { bringUpLiveSession, finishLiveSession } from '../services/liveRuntime';
 import { danmakuGateway, DanmakuError } from '../services/danmaku';
 import { loopCaster } from '../services/loopCaster';
-import { liveCollector } from '../services/liveCollector';
-import { atmosphereScheduler } from '../services/atmosphereScheduler';
-import { autoEndScheduler } from '../services/autoEnd';
-import { interactionEngine } from '../services/interactionEngine';
 import { clearStats } from '../services/interactionStats';
 import { clearPendingReplies } from '../services/pendingReplies';
 import { forgetSpeakerHeartbeat } from '../services/speakerHeartbeat';
 import { clearLiveReplies } from '../services/replyLedger';
 import { AUTO_END_MAX_MINUTES, AUTO_END_MIN_MINUTES } from '../services/liveSettings';
-import { captureLiveSpeech, clampLiveSpeechRate, forgetLiveSpeech } from '../services/liveVoice';
+import { clampLiveSpeechRate } from '../services/liveVoice';
 
 // 直播状态全集：用于列表 ?status= 过滤校验（与服务端 live_status 枚举一致）
 const LIVE_STATUSES: LiveStatus[] = ['idle', 'processing', 'ready', 'live', 'ended', 'failed'];
@@ -558,46 +553,12 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       if (!live) {
         return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
       }
-      // 音色口径统一：开播即冻结本场音色 / 语速快照，循环台本句与弹幕回复共用同一份
-      await captureLiveSpeech(live.id);
-      // M5：开播即启动循环台本 Runner（未绑定台本 → 快照为空自动退出，只回弹幕）
-      loopCaster.start(live.id);
-      // M10：开播即读一次氛围语快照（空档插播取词用；无氛围语 → 空快照，不影响循环）
-      atmosphereScheduler.start(live.id);
-      // R4 + R47：开播联动拉起本场登记的弹幕采集。
-      // R47 起采集源**持久化在场次上**，所以优先按库里存的源起会话 —— 这样
-      // **服务重启后也能自动恢复**（原先绑定只在内存，重启即丢，正是 R17）。
-      // 恢复顺序遵循用户拍板 D4：**以原始链接重新解析为准**，房间号只在没有链接时兜底。
-      // 采集起不来绝不能阻断开播（可能是第三方签名服务不可用），失败只告警。
-      try {
-        const sourceUrl = live.danmakuCollectEnabled ? live.danmakuSourceUrl : null;
-        const roomRef = live.danmakuCollectEnabled ? live.danmakuRoomRef : null;
-        if (sourceUrl || roomRef) {
-          const binding = await liveCollector.start({
-            userId: request.user.userId,
-            liveId: live.id,
-            ...(sourceUrl ? { shareText: sourceUrl } : { roomRef: roomRef as string }),
-          });
-          // ★R51：把这次**真实解析出来的结果**写回场次。
-          // 原先 /start 这条路不落库（只在 POST /danmaku-source 落），于是
-          // 「开播自动恢复采集」的场次 roomRef 永远是空的 —— 2026-09-18 定位那次
-          // 生产事故时，光看数据库就判断不出采集连到了哪个房间。
-          // 同时把 anchorId（主播稳定身份）一并记下，作为后续「识别同一个主播换房间」的依据。
-          try {
-            await saveLiveDanmakuSource(request.user.userId, live.id, {
-              roomRef: binding.roomRef,
-              anchorId: binding.anchorId ?? null,
-            });
-          } catch (err) {
-            request.log.warn({ err }, '开播回写采集解析结果失败（采集已启动，不影响出声与入库）');
-          }
-        } else {
-          // 库里没存源 → 回落到内存绑定（兼容本轮之前登记的场次）
-          await liveCollector.resume(live.id);
-        }
-      } catch (err) {
-        request.log.warn({ err }, '开播联动启动弹幕采集失败（不阻断开播）');
-      }
+      // R59：开播与「服务重启恢复」**共用同一份运行时拉起逻辑**（services/liveRuntime）。
+      // 原先这段是内联在这里的，而重启恢复没有这条路 —— 于是进程一重启，
+      // 采集/台本/氛围语全丢，商家看到的是一场「安静的直播」。抽出来才不会漂移。
+      await bringUpLiveSession(request.user.userId, live, (message, err) => {
+        request.log.warn({ err }, message);
+      });
       // R24：开播即清空上一场的回复台账 —— 工作台只看本场 AI 回了什么
       clearLiveReplies(live.id);
       // R45：互动统计同样从零开始
@@ -606,25 +567,7 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       clearPendingReplies(live.id);
       // R53：助播机心跳也从头计 —— 否则上一场的心跳会让本场的「掉线告警」判错
       forgetSpeakerHeartbeat(live.id);
-      // R26：登记定时关播（未设 → 不登记）。到点走与手动 /end **完全同一条收尾路径**。
-      const autoEndMinutes = live.autoEndMinutes;
-      if (autoEndMinutes !== null) {
-        const ownerId = request.user.userId;
-        const registration = autoEndScheduler.schedule({
-          liveId: live.id,
-          minutes: autoEndMinutes,
-          onFire: async (id) => {
-            await finishLive(ownerId, id, (message, err) => {
-              console.warn(
-                `[autoEnd] ${message}：${err instanceof Error ? err.message : String(err)}`,
-              );
-            });
-          },
-        });
-        console.info(
-          `[autoEnd] 场次 ${live.id} 已登记定时关播：${autoEndMinutes} 分钟后（${registration.endsAt}）`,
-        );
-      }
+      // R26/R59：定时关播的登记已进 `bringUpLiveSession`（开播与重启恢复共用）
       return { live };
     } catch (err) {
       if (err instanceof LiveError) {
@@ -634,67 +577,15 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-/**
- * 结束直播的完整收尾（R26）。手动 /end 与**定时关播**共用同一条路径，避免两套收尾各自漂移。
- *
- * 优雅收尾（用户拍板 D2）：
- *   * loopCaster.stop() 本身是「当前句播完即止」，不打断半句；
- *   * 出声队列**不清空** —— 已入队的音频自然播完；
- *   * 停采集 → 不再产生新回复；
- *   * 取消可能存在的定时器（自触发那次已出表，取消是无害空操作）。
- * 代价：实际静默时刻会比设定晚十几秒（用户已知并接受）。
- */
-async function finishLive(
-  userId: string,
-  liveId: string,
-  warn: (message: string, err?: unknown) => void,
-): Promise<{ live: Live | null; billing: Awaited<ReturnType<typeof settleLiveSession>> | null }> {
-  const live = await endLive(userId, liveId);
-  if (!live) {
-    return { live: null, billing: null };
-  }
-  loopCaster.stop(live.id);
-  try {
-    await liveCollector.suspend(live.id);
-  } catch (err) {
-    warn('结束直播停止弹幕采集失败（不阻断结束）', err);
-  }
-  forgetLiveSpeech(live.id);
-  atmosphereScheduler.stop(live.id);
-  autoEndScheduler.cancel(live.id);
-  // R29：清掉本场的频控记账 —— 否则进程内 Map 会随场次数无界增长
-  interactionEngine.forgetLive(live.id);
-  // R42：台本已停，队列里没放出去的回复不会再有机会播 —— 清掉，避免内存滞留
-  clearPendingReplies(live.id);
-  // R53：助播机心跳记录也回收（Map 不该随场次数无界增长）
-  forgetSpeakerHeartbeat(live.id);
-  let billing: Awaited<ReturnType<typeof settleLiveSession>> | null = null;
-  try {
-    billing = await settleLiveSession({
-      userId,
-      liveId: live.id,
-      startedAt: live.startedAt,
-      endedAt: live.endedAt,
-    });
-    if (billing.settledMinutes > 0) {
-      console.info(
-        `[liveBilling] 场次 ${live.id} 结算 ${billing.settledMinutes} 分钟（余额 ${billing.drawnFromBalance} / 免费 ${billing.drawnFromQuota}）`,
-      );
-    }
-  } catch (err) {
-    console.warn(
-      `[liveBilling] 场次 ${live.id} 结算失败：${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-  return { live, billing };
-}
+// R59：收尾逻辑已挪到 `services/liveRuntime.finishLiveSession` ——
+// 重启恢复也要能调它，路由局部函数做不到。
 
   // 结束直播：live → ended（记录 endedAt）
   app.post('/api/lives/:id/end', { preHandler: app.authenticate }, async (request, reply) => {
     const { id } = request.params as LiveIdParams;
     try {
       // R26：收尾逻辑抽到 finishLive —— 手动 /end 与定时关播**共用同一条路径**
-      const { live, billing } = await finishLive(request.user.userId, id, (message, err) => {
+      const { live, billing } = await finishLiveSession(request.user.userId, id, (message, err) => {
         request.log.warn({ err, liveId: id }, message);
       });
       if (!live) {
