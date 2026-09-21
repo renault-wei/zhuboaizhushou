@@ -1436,8 +1436,13 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     }
     final binding = source?.binding;
     if (binding == null) {
-      return monitor.status == LiveStatus.live
-          ? '贴一段直播分享链接，服务端会以观众身份连入监听真实弹幕'
+      if (monitor.status == LiveStatus.live) {
+        return '贴一段直播分享链接，服务端会以观众身份连入监听真实弹幕';
+      }
+      // ★R56：`ready` 时就能填并保存（R56 之前这里写「开播后即可开始采集」，
+      // 但输入行已经在了 —— 文案和界面对不上，商家不会想到「现在就能存」。
+      return monitor.status == LiveStatus.ready
+          ? '贴链接点「保存链接」，开播时会自动开始采集'
           : '开播后即可开始采集';
     }
     // ★R56：`ready` 时已经填好链接 → 明确告诉商家「开播会自动开始」，
