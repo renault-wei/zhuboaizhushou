@@ -41,6 +41,11 @@ const SCRIPT_STRUCTURE_PROMPT = [
   '4. **只依据给定的商品信息来写**：资料里没有的内容（人群、核销规则、品牌背书、原价等）',
   '   **宁可省略那一段，也绝对不要编造**；省略时保持其余段落连贯。',
   '5. 不夸大宣传，不出现广告法极限词（最、第一、顶级、全网最低、百分百、100% 等），内容真实合规。',
+  // R54（D3）：输入字段补齐后，必须**明确告诉模型哪段用哪个字段** ——
+  // 否则字段加了也不会被用上，「简陋」照旧。
+  '6. 各段的素材出处（**对应字段为空时，那段就整段省略**，别用泛泛的话凑数）：',
+  '   【开场】的品牌承诺 ←「品牌背书」；【适用人群和场景】←「适用人群」「使用场景」；',
+  '   【核销注意事项】←「核销规则」；【价格福利】的对比 ←「门店原价」与「直播间价」。',
 ].join('\n');
 
 /** 行业模板表：POST generate 的 industry 必须落在其中 */
@@ -55,6 +60,7 @@ export const scriptTemplates: Record<string, ScriptIndustryTemplate> = {
     productFields: {
       name: '团购券名',
       package: '套餐内容',
+      priceOriginal: '门店原价',
       price: '价格',
       sellingPoints: '卖点',
     },
@@ -69,6 +75,7 @@ export const scriptTemplates: Record<string, ScriptIndustryTemplate> = {
     productFields: {
       name: '服务名',
       package: '服务内容',
+      priceOriginal: '门店原价',
       price: '价格',
       sellingPoints: '卖点',
     },
@@ -83,6 +90,7 @@ export const scriptTemplates: Record<string, ScriptIndustryTemplate> = {
     productFields: {
       name: '商品名',
       package: '规格',
+      priceOriginal: '原价',
       price: '价格',
       sellingPoints: '卖点',
     },

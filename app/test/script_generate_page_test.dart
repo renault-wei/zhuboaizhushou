@@ -11,6 +11,10 @@ Future<void> _pumpGeneratePage(
   WidgetTester tester,
   FakeBackend backend,
 ) async {
+  // R54：商品字段从 4 个扩到 9 个，默认视口装不下 ——
+  // ListView 懒加载会让下方字段根本没被构建，断言直接找不到。把视口调高最稳。
+  await tester.binding.setSurfaceSize(const Size(900, 2600));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
   await tester.pumpWidget(
     ProviderScope(
       overrides: [dioProvider.overrideWithValue(buildMockDio(backend))],
@@ -65,10 +69,17 @@ void main() {
     expect(find.byKey(const Key('scriptIndustry_retail')), findsOneWidget);
 
     // 商品表单字段（餐饮模板标签）
+    // R54（D3）：从 4 个字段扩到 9 个 —— 「价格」拆成「门店原价 / 直播间价」，
+    // 并补上适用人群/使用场景/核销规则/品牌背书（都是**选填**，不填就让那段省略）。
     expect(find.text('团购券名'), findsOneWidget);
     expect(find.text('套餐内容'), findsOneWidget);
-    expect(find.text('价格'), findsOneWidget);
+    expect(find.text('门店原价'), findsOneWidget);
+    expect(find.text('直播间价'), findsOneWidget);
     expect(find.text('卖点'), findsOneWidget);
+    expect(find.text('适用人群（选填）'), findsOneWidget);
+    expect(find.text('使用场景（选填）'), findsOneWidget);
+    expect(find.text('核销规则（选填）'), findsOneWidget);
+    expect(find.text('品牌背书（选填）'), findsOneWidget);
 
     // 空态引导文案
     await _scrollTo(tester, find.text('我的话术（0）'));
@@ -84,7 +95,10 @@ void main() {
 
     expect(find.text('商品名'), findsOneWidget);
     expect(find.text('规格'), findsOneWidget);
-    expect(find.text('价格'), findsOneWidget);
+    expect(find.text('原价'), findsOneWidget);
+    expect(find.text('直播间价'), findsOneWidget);
+    // 零售行业的核销字段措辞不同（不是「到店核销」）
+    expect(find.text('使用方法 / 售后（选填）'), findsOneWidget);
   });
 
   testWidgets('商品信息为空时点生成：提示先填写', (WidgetTester tester) async {

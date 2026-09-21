@@ -32,8 +32,13 @@ const List<ScriptIndustryOption> kScriptIndustryOptions =
         productFields: <String, String>{
           'name': '团购券名',
           'package': '套餐内容',
-          'price': '价格',
+          'priceOriginal': '门店原价',
+          'price': '直播间价',
           'sellingPoints': '卖点',
+          'audience': '适用人群（选填）',
+          'scenarios': '使用场景（选填）',
+          'redemption': '核销规则（选填）',
+          'brand': '品牌背书（选填）',
         },
       ),
       ScriptIndustryOption(
@@ -42,8 +47,13 @@ const List<ScriptIndustryOption> kScriptIndustryOptions =
         productFields: <String, String>{
           'name': '服务名',
           'package': '服务内容',
-          'price': '价格',
+          'priceOriginal': '门店原价',
+          'price': '直播间价',
           'sellingPoints': '卖点',
+          'audience': '适用人群（选填）',
+          'scenarios': '使用场景（选填）',
+          'redemption': '核销规则（选填）',
+          'brand': '品牌背书（选填）',
         },
       ),
       ScriptIndustryOption(
@@ -52,19 +62,44 @@ const List<ScriptIndustryOption> kScriptIndustryOptions =
         productFields: <String, String>{
           'name': '商品名',
           'package': '规格',
-          'price': '价格',
+          'priceOriginal': '原价',
+          'price': '直播间价',
           'sellingPoints': '卖点',
+          'audience': '适用人群（选填）',
+          'scenarios': '使用场景（选填）',
+          'redemption': '使用方法 / 售后（选填）',
+          'brand': '品牌背书（选填）',
         },
       ),
     ];
 
 /// 商品表单固定字段顺序，标签随行业切换。
+///
+/// R54（D3）：客户方反馈「生成的话术很简陋」，定位出的**第三个原因**是输入字段太少 ——
+/// 只有 name/package/price/sellingPoints 四个，于是「适用人群和场景 / 核销注意事项 /
+/// 品牌背书 / 原价对比」这几段我们**根本没有素材**，模型只能略过或编造。
+/// 现在补齐（全部**选填**：不填就走「该段省略」那条路，绝不诱导编造）。
 const List<String> _scriptFieldKeys = <String>[
   'name',
   'package',
+  'priceOriginal',
   'price',
   'sellingPoints',
+  'audience',
+  'scenarios',
+  'redemption',
+  'brand',
 ];
+
+/// 需要多行输入的字段（其余单行）
+const Set<String> _scriptMultilineFieldKeys = <String>{
+  'package',
+  'sellingPoints',
+  'audience',
+  'scenarios',
+  'redemption',
+  'brand',
+};
 
 String _twoDigits(int value) => value.toString().padLeft(2, '0');
 
@@ -232,7 +267,7 @@ class _ScriptGeneratePageState extends ConsumerState<ScriptGeneratePage> {
               child: TextField(
                 key: Key('scriptField_$key'),
                 controller: _fieldControllers[key],
-                maxLines: key == 'sellingPoints' ? 2 : 1,
+                maxLines: _scriptMultilineFieldKeys.contains(key) ? 2 : 1,
                 decoration: InputDecoration(
                   labelText: option.productFields[key] ?? key,
                   border: const OutlineInputBorder(),
