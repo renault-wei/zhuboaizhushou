@@ -5,6 +5,7 @@ import { autoEndScheduler } from './services/autoEnd';
 import { interactionEngine } from './services/interactionEngine';
 import { liveCollector } from './services/liveCollector';
 import { restoreLiveSessions } from './services/liveRecovery';
+import { startSpeechWavSweeper } from './services/speechOutSweeper';
 import { disposeStats } from './services/interactionStats';
 import { disposePendingReplies } from './services/pendingReplies';
 import { disposeSpeakerHeartbeat } from './services/speakerHeartbeat';
@@ -23,6 +24,9 @@ async function bootstrap(): Promise<void> {
     // 但采集断了、台本哑了、**定时关播也不会再响**（那场直播会一直播下去）。
     // 尽力而为：失败只告警，绝不拦住服务启动。
     await restoreLiveSessions((message, err) => app.log.warn({ err }, message));
+  // R68：回收未交付的孤儿音频 —— 远程出声队列是内存态，服务重启时
+  // 排队 job 的删除义务会随内存一起消失，文件却留在磁盘上（实测累积到 62 个）✗
+  startSpeechWavSweeper((message) => app.log.warn(message));
   } catch (err) {
     app.log.error(err, '服务启动失败');
     process.exit(1);
