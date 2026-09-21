@@ -29,6 +29,22 @@ abstract interface class KeepAliveBridge {
   /// 返回是否已豁免（含「本来就已经豁免」）。
   Future<bool> requestIgnoreBatteryOptimizations();
 
+  // ---------- R65：权限**查询**（对照竞品 xcai1618 的 `checkAppNotification()` 等） ----------
+  // 没有这些方法，权限向导的按钮就无法在「下一步 / 马上设置」之间切换
+  //（竞品的 `checkquan()` 正是靠它们决定 `quanbutton` 文案）。
+
+  /// 通知权限是否已授予（Android 13+ 才需要；低版本恒 true）。
+  Future<bool> checkNotificationPermission();
+
+  /// 悬浮窗（显示在其他应用上层）权限是否已授予。
+  Future<bool> checkOverlayPermission();
+
+  /// 拉起悬浮窗权限设置页。
+  Future<void> openOverlaySettings();
+
+  /// 拉起本应用的通知设置页。
+  Future<void> openNotificationSettings();
+
   /// R62：拉起**厂商的「自启动 / 受保护应用」设置页**。
   ///
   /// 为什么必须有：华为 / 小米 / OPPO / vivo 各有自己一套后台管制，
@@ -88,6 +104,31 @@ class MethodChannelKeepAliveBridge implements KeepAliveBridge {
     );
     return granted ?? false;
   }
+
+  @override
+  Future<bool> checkNotificationPermission() async {
+    // 查询类接口：原生缺失时按「已授权」处理，避免无谓打扰用户
+    final granted = await _channel.invokeMethod<bool>(
+      'checkNotificationPermission',
+    );
+    return granted ?? true;
+  }
+
+  @override
+  Future<bool> checkOverlayPermission() async {
+    final granted = await _channel.invokeMethod<bool>('checkOverlayPermission');
+    return granted ?? true;
+  }
+
+  @override
+  Future<void> openOverlaySettings() async {
+    await _channel.invokeMethod<bool>('openOverlaySettings');
+  }
+
+  @override
+  Future<void> openNotificationSettings() async {
+    await _channel.invokeMethod<bool>('openNotificationSettings');
+  }
 }
 
 /// 空实现：非 Android 平台（桌面 / 测试）与原生通道不可用时使用。
@@ -112,6 +153,18 @@ class NoopKeepAliveBridge implements KeepAliveBridge {
 
   @override
   Future<bool> requestIgnoreBatteryOptimizations() async => true;
+
+  @override
+  Future<bool> checkNotificationPermission() async => true;
+
+  @override
+  Future<bool> checkOverlayPermission() async => true;
+
+  @override
+  Future<void> openOverlaySettings() async {}
+
+  @override
+  Future<void> openNotificationSettings() async {}
 }
 
 /// 按运行平台挑选默认实现：仅 Android 走原生前台服务，其余走空实现。

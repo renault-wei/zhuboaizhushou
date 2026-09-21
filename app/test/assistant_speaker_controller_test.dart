@@ -113,6 +113,19 @@ class _FakeKeepAliveBridge implements KeepAliveBridge {
     batteryRequestCount += 1;
     return true;
   }
+
+  // R65：权限查询（对照竞品 xcai1618 的 checkAppNotification 等）
+  @override
+  Future<bool> checkNotificationPermission() async => true;
+
+  @override
+  Future<bool> checkOverlayPermission() async => true;
+
+  @override
+  Future<void> openOverlaySettings() async {}
+
+  @override
+  Future<void> openNotificationSettings() async {}
 }
 
 /// 轮询间隔拉大到一天：让 start 的即时拉取可控，测试期间不会自然再跳。

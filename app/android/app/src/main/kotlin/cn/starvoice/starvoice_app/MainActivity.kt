@@ -52,6 +52,20 @@ class MainActivity : FlutterActivity() {
                 "requestIgnoreBatteryOptimizations" -> {
                     result.success(requestIgnoreBatteryOptimizations())
                 }
+                // R65：权限**查询**（对照竞品 xcai1618 的 `checkAppNotification()` 等）——
+                // 没有这些方法，向导的按钮就无法在「下一步 / 马上设置」之间切换。
+                "checkNotificationPermission" -> {
+                    result.success(checkNotificationPermission())
+                }
+                "checkOverlayPermission" -> {
+                    result.success(checkOverlayPermission())
+                }
+                "openOverlaySettings" -> {
+                    result.success(openOverlaySettings())
+                }
+                "openNotificationSettings" -> {
+                    result.success(openNotificationSettings())
+                }
                 else -> result.notImplemented()
             }
         }
@@ -91,6 +105,57 @@ class MainActivity : FlutterActivity() {
         return false
     }
 
+    /** 通知权限是否已授予（Android 13+ 才需要；低版本恒 true）。 */
+    private fun checkNotificationPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return true
+        }
+        return checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * 悬浮窗权限是否已授予（R65）。
+     *
+     * 竞品为什么查这项：它是「保活 + 悬浮展示」的前提，
+     * 系统提供了可查询判定 `Settings.canDrawOverlays` ✓ 且能直接跳设置页。
+     * 我们的助播机不画悬浮窗，但**持有该权限的进程在多数 ROM 上更不容易被冻结**，
+     * 因此按竞品口径纳入向导。
+     */
+    private fun checkOverlayPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return true
+        }
+        return Settings.canDrawOverlays(this)
+    }
+
+    /** 拉起「显示在其他应用上层」设置页（失败返回 false，由调用方引导手找）。 */
+    private fun openOverlaySettings(): Boolean {
+        return try {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.fromParts("package", packageName, null),
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    /** 拉起本应用的通知设置页（用户可在这里打开通知开关）。 */
+    private fun openNotificationSettings(): Boolean {
+        return try {
+            val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
     /**
      * **主动申请**电池优化豁免（R62）。
      *

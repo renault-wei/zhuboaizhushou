@@ -128,7 +128,11 @@ Map<String, dynamic> _loopSeed() {
 /// 走真实路由渲染工作台：覆盖「更新话术 → 台本库点选 → 换绑」闭环。
 /// 页面内含 3s 轮询与 1s 秒表定时器，故全程用固定 pump，不用 pumpAndSettle。
 Future<void> _pumpMonitorRouter(WidgetTester tester, FakeBackend backend) async {
-  SharedPreferences.setMockInitialValues(const <String, Object>{});
+  // R65：把「权限向导已引导过」预置为 true —— 否则进入直播会自动弹出分步向导，
+  // 挡住本文件要测的其它交互。向导本身由 keep_alive_permission_wizard_test.dart 覆盖。
+  SharedPreferences.setMockInitialValues(const <String, Object>{
+    'assistant_keep_alive_guided': true,
+  });
   tester.view.physicalSize = const Size(1200, 2600);
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
@@ -166,7 +170,11 @@ Future<void> _pumpMonitor(
   List<Override> overrides = const <Override>[],
   Map<String, Object> initialPrefs = const <String, Object>{},
 }) async {
-  SharedPreferences.setMockInitialValues(initialPrefs);
+  // R65：同上 —— 预置「已引导」把权限向导挡在测试之外
+  SharedPreferences.setMockInitialValues(<String, Object>{
+    'assistant_keep_alive_guided': true,
+    ...initialPrefs,
+  });
   // 放大测试视口：让弹幕日志区也处于可视区（ListView 懒构建，默认视口可能不渲染）
   tester.view.physicalSize = const Size(1200, 2600);
   tester.view.devicePixelRatio = 1.0;
