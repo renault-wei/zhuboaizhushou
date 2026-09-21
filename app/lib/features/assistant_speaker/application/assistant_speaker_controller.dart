@@ -7,7 +7,9 @@ import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/core/platform/keep_alive_bridge.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'speaker_supervisor.dart';
 import 'speech_out_player.dart';
 
 /// 助播机出声端状态（P1 手机线）：
@@ -188,6 +190,9 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
       return;
     }
     _liveId = liveId;
+    // ★R68：把「本次出声属于哪个场次」落到本地 ——
+    // 应用级监督者（SpeakerSupervisor）靠它跨页面、跨进程重启把出声拉回来 ✓
+    unawaited(_rememberLiveId(liveId));
     state = AssistantSpeakerState(
       enabled: true,
       status: AssistantSpeakerStatus.waiting,
@@ -215,12 +220,29 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     _timer?.cancel();
     _timer = null;
     _liveId = null;
+    // ★R68：停用时忘掉场次线索 —— 否则监督者会把它再拉起来（与用户意图相反）
+    unawaited(_rememberLiveId(null));
     // R61：缓冲一起清掉 —— 停用还继续播旧音频会更奇怪（播放循环靠 enabled 退出）
     _buffer.clear();
     _wakeIdle();
     state = AssistantSpeakerState.idle();
     unawaited(_player.stop());
     unawaited(_syncKeepAlive(false));
+  }
+
+  /// 记下 / 忘掉「在播的场次」，供应用级监督者读取（R68）。
+  /// 失败一律吞掉：这只是保命机制的线索，丢了最多是恢复不了，不该影响出声。
+  Future<void> _rememberLiveId(String? liveId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (liveId == null || liveId.isEmpty) {
+        await prefs.remove(speakerLiveIdKey);
+      } else {
+        await prefs.setString(speakerLiveIdKey, liveId);
+      }
+    } catch (_) {
+      // 读写偏好失败不影响出声链路
+    }
   }
 
   /// 保活联动：启用出声时拉起前台服务，停用时释放。

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:starvoice_app/core/theme/app_theme.dart';
+import 'package:starvoice_app/features/assistant_speaker/application/speaker_supervisor.dart';
 import 'package:starvoice_app/features/auth/application/auth_controller.dart';
 import 'package:starvoice_app/providers.dart';
 
@@ -24,6 +25,10 @@ class _StarVoiceAppState extends ConsumerState<StarVoiceApp> {
     // 首帧渲染后再恢复本地会话，避免在 build 阶段触发网络请求
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(authControllerProvider.notifier).init();
+      // ★R68：助播出声的**应用级监督者** —— 它不属于任何页面。
+      // 此前出声的启动只有「监控页拉到 live 快照」这一条路 ✗，页面一走就永远起不来；
+      // 现在由它按【服务端场次状态】跨页面、跨进程重启把出声拉回来 ✓。
+      ref.read(speakerSupervisorProvider).start();
     });
   }
 

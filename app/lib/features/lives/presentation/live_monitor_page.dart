@@ -24,7 +24,6 @@ import 'package:starvoice_app/core/models/loop_script.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/core/theme/app_colors.dart';
 import 'package:starvoice_app/core/theme/app_theme.dart';
-import 'package:starvoice_app/features/assistant_speaker/application/assistant_speaker_controller.dart';
 import 'package:starvoice_app/features/assistant_speaker/presentation/keep_alive_permission_wizard.dart';
 import 'package:starvoice_app/providers.dart';
 
@@ -85,7 +84,10 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   Timer? _ticker;
 
   /// 助播机出声控制器实例缓存：dispose 阶段 ref 已失效，需用本实例收口出声。
-  AssistantSpeakerController? _speakerNotifier;
+  // ★R68：删掉 `_speakerNotifier` —— 它的赋值语句原本长在助播机卡片里，
+  // R61 删卡片时没删它，于是它成了【永不赋值】的死变量，dispose 里那句
+  // `if (speaker != null) speaker.stop()` 永远不会执行 —— 留着只会让人误以为
+  // 「出声会随页面收口」，而事实上出声早就不受页面管辖了（这正是我们要的方向）。
 
   /// 测试弹幕输入框（直播中可用，模拟观众提问触发 AI 语音回复）
   final TextEditingController _testController = TextEditingController();
@@ -146,12 +148,11 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     _ticker?.cancel();
     _testController.dispose();
     _sourceController.dispose();
-    final speaker = _speakerNotifier;
-    if (speaker != null) {
-      // 出声收口延后到当前卸载帧完成后再停用：元素已随页面卸载，同步
-      // notify 会触发已 defunct 元素的 markNeedsBuild 断言。
-      scheduleMicrotask(speaker.stop);
-    }
+    // ★R68：**这里不再停止出声**。
+    //
+    // 出声的生命周期 = 场次的生命周期，不是页面的生命周期 ✓
+    // 离开页面（导航、切后台、Activity 被回收）都不该让直播断声 ——
+    // 该停的时候由「场次进入终态」说了算（见 _loadMonitor）。
     super.dispose();
   }
 
@@ -186,11 +187,22 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
           monitor.status == LiveStatus.failed) {
         _stopPolling();
       }
-      // 非直播中一律停用助播出声：直播结束 / 外部变更时自动收口
-      if (monitor.status != LiveStatus.live) {
+      // ★R68 修复（2026-09-22）：这里原来是
+      //     if (monitor.status != LiveStatus.live) { stop(); }
+      // —— 「非直播中」被当成了「该停」✗。后果：
+      //   ① 页面每 3 秒拉一次快照，只要有一次不是 live 就把出声停掉；
+      //   ② 而重新启动只有「status == live」那一条路，且它在【本页面内】✗；
+      //   ③ 于是「一停就停死，要起来必须回到这个页面」✗。
+      // 用户实测「切到应用内界面（前台）队列就不阻塞了、停在后台就阻塞」正是这个形态。
+      //
+      // 新口径：**只有场次进入终态才停**（ended / failed / 不存在）。
+      //   ready（就绪）不是「该停」，它只是「还没开播」——
+      //   此时若出声在跑，该由「场次是否在播」这一权威事实决定，而不是由页面猜。
+      if (monitor.status == LiveStatus.ended ||
+          monitor.status == LiveStatus.failed) {
         ref.read(assistantSpeakerControllerProvider.notifier).stop();
       }
-      // 直播中按「常开」记忆自动恢复助播出声（用户手动关闭则不拉起）
+      // 在播时确保出声在跑（幂等；启动的判据是【服务端场次状态】，不是页面是否活着）
       if (monitor.status == LiveStatus.live) {
         _syncSpeakerAutoStart();
       }

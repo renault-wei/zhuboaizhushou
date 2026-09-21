@@ -698,4 +698,46 @@ void main() {
 
     await _unmount(tester);
   });
+
+  // ---------- R68：出声的启停不该由页面快照决定 ----------
+  // 2026-09-22 真机定位结论：监控页每 3 秒拉一次快照，原文写着
+  //   if (monitor.status != LiveStatus.live) { stop(); }
+  // —— 「非直播中」被当成「该停」✗。于是只要有一次拿到非 live 的快照就把出声停掉，
+  //    而重新启动只有页面里那一条路 → 「一停就停死」。
+  // 新口径：只有终态（ended / failed）才停；ready 不是「该停」。
+  testWidgets('R68：场次处于 ready 时不再把出声停掉', (tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市火锅直播', status: 'ready'),
+      ],
+    );
+    final speakerController = AssistantSpeakerController(
+      ApiClient(buildMockDio(backend)),
+      _FakeSpeechOutPlayer(),
+    );
+    await _pumpMonitor(
+      tester,
+      backend,
+      overrides: <Override>[
+        assistantSpeakerControllerProvider.overrideWith(
+          (ref) => speakerController,
+        ),
+      ],
+    );
+
+    // 模拟「直播中途状态回落到 ready」：先让出声跑起来
+    speakerController.start(liveId: 'live-001');
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(speakerController.state.enabled, isTrue);
+
+    // 等页面轮询拿到 ready 快照并处理完（3 秒轮询 + 余量）
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pump(const Duration(milliseconds: 200));
+
+    // ★ 关键断言：ready 不该把出声停掉（修复前这里会是 false）
+    expect(speakerController.state.enabled, isTrue);
+
+    await _unmount(tester);
+    speakerController.dispose();
+  });
 }
