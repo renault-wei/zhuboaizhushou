@@ -16,9 +16,20 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.BIND_JOB_SERVICE"/>
+    <!-- R66 关键修复（2026-09-22 真机实测）：
+         **Android 的权限设置页只列出「声明了该权限」的应用** ——
+         系统「显示在其他应用的上层」（悬浮窗）列表只会列声明 SYSTEM_ALERT_WINDOW 的应用。
+         我们此前没有这一条 → 用户在那个页面**根本搜不到本应用** ✗，
+         而我们的权限向导第 2 步恰恰把用户带去了那里 ✗（把人送到一个自己不在名单里的页面）。
+         竞品 xcai1618 的清单里本来就有这一行，是我抄权限时漏掉的。 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <!-- MVP 联调使用 http://10.0.2.2:3000，需允许明文流量；上线切 https 后可移除 -->
+    <!-- R66：应用在系统里的名字。
+         此前这里是 `starvoice_app`（= 包名）—— 用户在「设置 → 应用管理 / 应用启动管理 /
+         权限管理」里搜「星辰语音」**根本搜不到** ✗（桌面上也只显示被截断的 "starvoice..."）。
+         保活那几道闸都得用户手动去系统设置里点，名字对不上等于路都没法走。 -->
     <application
-        android:label="starvoice_app"
+        android:label="星辰语音"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">

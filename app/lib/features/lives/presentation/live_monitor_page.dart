@@ -240,6 +240,21 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     unawaited(_maybeShowKeepAliveGuide());
   }
 
+  /// R65：手动打开权限向导（AppBar「权限」入口）。
+  ///
+  /// 与自动弹的那次是同一套向导，只是不写「已引导」标记 ——
+  /// 用户主动来查，随时可以再查一遍。
+  Future<void> _openPermissionWizard() async {
+    if (!mounted || defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    final bridge = ref.read(keepAliveBridgeProvider);
+    await showKeepAlivePermissionWizard(
+      context,
+      actions: buildPermissionActions(bridge),
+    );
+  }
+
   /// 拉取弹幕日志：失败静默保留旧列表，不打断观看体验。
   Future<void> _loadDanmaku() async {
     try {
@@ -422,7 +437,19 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
       data: AppTheme.workbench(),
       child: Scaffold(
         key: const Key('liveMonitorPage'),
-        appBar: AppBar(title: const Text('现场直播工作台')),
+        appBar: AppBar(
+          title: const Text('现场直播工作台'),
+          actions: <Widget>[
+            // R65：「权限」入口 —— 向导只在首次自动弹一次，
+            // 之后用户想复查 / 改放行，得有地方点（否则改名成一次性弹窗就白做了）。
+            TextButton.icon(
+              key: const Key('liveMonitorPermissionEntry'),
+              onPressed: _openPermissionWizard,
+              icon: const Icon(Icons.shield_outlined, size: 18),
+              label: const Text('权限'),
+            ),
+          ],
+        ),
         body: _buildBody(),
         bottomNavigationBar: _buildBottomBar(),
       ),

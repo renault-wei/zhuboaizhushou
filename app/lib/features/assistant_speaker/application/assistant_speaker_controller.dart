@@ -302,30 +302,47 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   Future<bool> _playOneFromBuffer() async {
     // ★R63：在途互斥 —— 有音频正在播就什么都不做。
     // 少了这一句，定时器 tick 与播放循环会互相抢播放器，把前一句切碎重放。
-    if (_playing || _buffer.isEmpty) {
+    if (_playing || _buffer.isEmpty || _disposed) {
       return false;
     }
     _playing = true;
-    final bytes = _buffer.removeAt(0);
-    state = state.copyWith(status: AssistantSpeakerStatus.playing);
+    // ★★R67 致命修复：**把放闸包住「置位之后的全部代码」**
+    //
+    // 此前写成：
+    //     _playing = true;
+    //     final bytes = _buffer.removeAt(0);      ← 在 try 之外
+    //     state = state.copyWith(...);            ← 在 try 之外，且【会抛异常】
+    //     try { await _player.play(bytes); } finally { _playing = false; }
+    //
+    // 后果：只要 `state = ...` 抛一次（Riverpod 在 dispose 后读写 state 即抛），
+    // 异常直接冒出函数，**`_playing` 永远停在 true** ✗
+    // → 播放循环每 50ms 让出一次、**永远播不出任何东西** ✗
+    // → 表现正是用户报告的「没声音 + 不空转 + CPU 0% + 队列堆积」✓
+    //
+    // 现在整个函数体都在 try 里，`finally` 覆盖一切路径（含上面两句抛出的情况）。
     try {
-      await _player.play(bytes);
-    } catch (_) {
-      // 单条播放失败（文件损坏等）不该整体停：丢掉它继续下一条
+      final bytes = _buffer.removeAt(0);
+      if (_disposed || !state.enabled) {
+        return false;
+      }
+      state = state.copyWith(status: AssistantSpeakerStatus.playing);
+      try {
+        await _player.play(bytes);
+      } catch (_) {
+        // 单条播放失败（文件损坏等）不该整体停：丢掉它继续下一条
+      }
+      if (_disposed || !state.enabled) {
+        return true;
+      }
+      state = state.copyWith(
+        status: AssistantSpeakerStatus.waiting,
+        playedCount: state.playedCount + 1,
+        lastError: null,
+      );
+      return true;
     } finally {
-      // ★R63：任何路径都要放闸 —— 漏了这一步会永久卡死后续播放
       _playing = false;
     }
-    if (_disposed || !state.enabled) {
-      return true;
-    }
-    state = state.copyWith(
-      status: AssistantSpeakerStatus.waiting,
-      playedCount: state.playedCount + 1,
-      lastError: null,
-    );
-    _playing = false;
-    return true;
   }
 
   ///
@@ -344,7 +361,14 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
           await _waitIdle();
           continue;
         }
-        final played = await _playOneFromBuffer();
+        // ★R67：单轮异常**绝不能**让整个播放循环退出 ——
+        // 循环一死就再也不会播，而且外面看不出来（CPU 0%、进程健在）。
+        bool played;
+        try {
+          played = await _playOneFromBuffer();
+        } catch (_) {
+          played = false;
+        }
         if (!played) {
           // ★R64：**必须让出事件循环** —— 少了这一句就是【空转】✗
           //
