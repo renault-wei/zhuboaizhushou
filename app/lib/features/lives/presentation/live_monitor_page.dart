@@ -1440,6 +1440,11 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
           ? '贴一段直播分享链接，服务端会以观众身份连入监听真实弹幕'
           : '开播后即可开始采集';
     }
+    // ★R56：`ready` 时已经填好链接 → 明确告诉商家「开播会自动开始」，
+    // 免得他以为没生效又去点一遍。
+    if (monitor.status == LiveStatus.ready) {
+      return '${binding.platformLabel} · 房间 ${binding.roomRef} · 已保存，开播后自动开始采集';
+    }
     final state = source?.watch?.label ?? '未在监听';
     final err = source?.watch?.lastError;
     // R49：把「可以换」写出来 —— 之前这段只说在监听哪个房间，
@@ -1457,8 +1462,18 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     final binding = source?.binding;
     final watch = source?.watch;
     final live = monitor.status == LiveStatus.live;
+    // ★R56：`ready`（就绪未开播）也要能编辑采集链接。
+    //
+    // 原先输入行只在 `live` 时渲染，而列表在 `ready` 时又只给「进入监控」、不给「编辑」——
+    // **两头都改不了链接**，商家只能先开播再换，绕且容易出岔子。
+    // 服务端本来就支持：`ready` 时 POST /danmaku-source 走 `bind()`（只登记不连），
+    // 并且**落库**，开播时 `/start` 会按它自动拉起采集。所以缺的只是这个入口。
+    final ready = monitor.status == LiveStatus.ready;
+    final canEditSource = enabled && (live || ready);
     final canBind =
-        enabled && live && !_bindingSource && _sourceController.text.trim().isNotEmpty;
+        canEditSource &&
+        !_bindingSource &&
+        _sourceController.text.trim().isNotEmpty;
     return Container(
       key: const Key('liveMonitorSourceCard'),
       padding: const EdgeInsets.all(16),
@@ -1554,7 +1569,8 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
           // ★R49：绑定了也**照样显示输入行** —— 原先 `binding == null` 才渲染，
           // 于是想换直播间只能「先停止、再粘新的」，既绕又容易停在半路。
           // 现在贴着新链接点一次即可换（服务端会先断旧会话再连新的）。
-          if (enabled && live) ...[
+          // ★R56：`ready` 时也显示 —— 开播前就该能把链接填好/改好。
+          if (canEditSource) ...[
             const SizedBox(height: 12),
             Row(
               crossAxisAlignment: CrossAxisAlignment.center,
@@ -1563,13 +1579,15 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                   child: TextField(
                     key: const Key('liveMonitorSourceInput'),
                     controller: _sourceController,
-                    enabled: live && !_bindingSource,
+                    enabled: canEditSource && !_bindingSource,
                     textInputAction: TextInputAction.done,
                     onChanged: (_) => setState(() {}),
                     onSubmitted: canBind ? (_) => _bindDanmakuSource() : null,
                     style: const TextStyle(color: AppColors.nightText),
                     decoration: InputDecoration(
-                      hintText: binding == null
+                      hintText: ready
+                          ? '粘贴抖音分享链接（开播后自动开始采集）'
+                          : binding == null
                           ? '粘贴抖音分享链接 / 文本'
                           : '粘贴新链接可换直播间（自动重连）',
                       isDense: true,
@@ -1598,7 +1616,14 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         // R49：已绑定时按钮语义是「换链接」而不是「开始采集」
-                        : Text(binding == null ? '开始采集' : '换链接'),
+                        // R56：`ready` 时还没开始采集，语义是「保存链接」
+                        : Text(
+                            ready
+                                ? '保存链接'
+                                : binding == null
+                                ? '开始采集'
+                                : '换链接',
+                          ),
                   ),
                 ),
               ],

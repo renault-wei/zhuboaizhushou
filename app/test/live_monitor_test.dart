@@ -745,4 +745,26 @@ void main() {
     expect(find.byKey(const Key('liveMonitorSpeakerStaleWarn')), findsNothing);
     await _unmount(tester);
   });
+
+  testWidgets('R56：ready（未开播）也能编辑采集链接，按钮是「保存链接」', (tester) async {
+    // 原先输入行只在 live 时渲染，而列表在 ready 时又只给「进入监控」、
+    // 不给「编辑」—— 两头都改不了链接，商家只能先开播再换。
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市火锅直播', status: 'ready'),
+      ],
+    );
+    await _pumpMonitor(tester, backend);
+
+    final input = find.byKey(const Key('liveMonitorSourceInput'));
+    await tester.ensureVisible(input);
+    await tester.pump();
+
+    expect(input, findsOneWidget);
+    expect(find.text('保存链接'), findsOneWidget);
+    // 不该出现 live 才有的措辞
+    expect(find.text('开始采集'), findsNothing);
+
+    await _unmount(tester);
+  });
 }
