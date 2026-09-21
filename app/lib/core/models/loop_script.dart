@@ -41,7 +41,7 @@ class LoopScriptItem {
   /// 台词正文（trim 后非空；上限是**宽松安全上限** 2000 字，不是业务字数限制）
   final String text;
 
-  /// 本条播完后的间隔秒（0-60）；null = 用全局默认 **0 秒**（2026-09-17 由 2s 改为 0s）
+  /// 本条播完后的间隔秒（0-60）；null = 用服务端默认（R60 起为 **1 秒**）
   final int? gapAfterSeconds;
 
   /// 这条台词在合成层会被切成几段（R19，服务端回带）。
@@ -49,7 +49,7 @@ class LoopScriptItem {
   final int? ttsSegmentCount;
 
   /// 提交给新建 / 整体替换接口的条目载荷：
-  /// kind / gapAfterSeconds 缺省时不下发，服务端按 null（默认 **0 秒**间隔）处理。
+  /// kind / gapAfterSeconds 缺省时不下发，服务端按 null（默认 **1 秒**间隔）处理。
   Map<String, dynamic> toPayload() {
     final kind = this.kind;
     final gap = gapAfterSeconds;

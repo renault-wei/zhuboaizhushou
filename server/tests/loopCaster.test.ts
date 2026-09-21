@@ -256,12 +256,14 @@ describe('M4 loopCaster 循环台本播出引擎（§8.2/§8.3）', () => {
     expect(order.filter((entry) => entry.startsWith('回复'))).toHaveLength(2);
   });
 
-  // R20（2026-09-17）：用户拍板「循环话本播放期间间隔默认 0s」——连读更顺、静默几乎归零。
-  it('R20：条间默认间隔为 0s', () => {
-    expect(DEFAULT_ITEM_GAP_SECONDS).toBe(0);
+  // R60（2026-09-21）：用户把口径从「默认 0s」改成「默认 1s」——
+  // 0s 连读太急、句子之间没有呼吸感；1s 更像真人在直播间一句一句说。
+  // 这个数字被改过两次（6→2→0），所以在这里**钉住**，避免以后再被顺手改掉。
+  it('R60：条间默认间隔为 1s', () => {
+    expect(DEFAULT_ITEM_GAP_SECONDS).toBe(1);
   });
 
-  it('R20：条间默认 0 时不产生条间睡眠（连读），只剩轮间休息', async () => {
+  it('R60：条目未配置间隔时按默认 1s 停顿，然后进入轮间休息', async () => {
     const items: LoopCastItem[] = [
       { text: '第一句。', gapAfterSeconds: null },
       { text: '第二句。', gapAfterSeconds: null },
@@ -269,8 +271,8 @@ describe('M4 loopCaster 循环台本播出引擎（§8.2/§8.3）', () => {
     const spoken: string[] = [];
     const sleeps: number[] = [];
     const caster = createLoopCaster({
-      // 不传 itemGapSeconds → 走默认 0；轮间给 1s，避免 0 间隔下紧密空转
-      loopRestSeconds: 1,
+      // 不传 itemGapSeconds → 走默认 1s；轮间给 2s，两者可区分
+      loopRestSeconds: 2,
       idlePollMs: DEFAULT_IDLE_POLL_MS,
       loadItems: async () => items,
       isBusy: () => false,
@@ -279,9 +281,11 @@ describe('M4 loopCaster 循环台本播出引擎（§8.2/§8.3）', () => {
         return { spoken: true, reason: 'spoken' };
       },
       sleep: async (ms) => {
-        // 第一次睡眠即轮末休息：收到就收工，顺带回证「条间一次都没睡」
         sleeps.push(ms);
-        caster.stop(LIVE_ID);
+        // 收满三次就收工：句1后 1s、句2后 1s、轮末 2s
+        if (sleeps.length >= 3) {
+          caster.stop(LIVE_ID);
+        }
       },
     });
 
@@ -289,7 +293,8 @@ describe('M4 loopCaster 循环台本播出引擎（§8.2/§8.3）', () => {
     await waitRunnerGone(caster, LIVE_ID);
 
     expect(spoken).toEqual(['第一句。', '第二句。']);
-    expect(sleeps).toEqual([1000]);
+    // 条间两次各 1s（默认间隔），轮末一次 2s（轮间休息）
+    expect(sleeps).toEqual([1000, 1000, 2000]);
   });
 
   it.each([null, [] as LoopCastItem[]])('空台本（%p）不启动 Runner：不出声、状态即回 null', async (loaded) => {

@@ -65,8 +65,12 @@ describe('示例循环台本（谈单演示，G7）', () => {
         expect((LOOP_ITEM_KINDS as readonly string[])).toContain(item.kind);
         expect(item.text.length).toBeGreaterThanOrEqual(1);
         expect(item.text.length).toBeLessThanOrEqual(MAX_LOOP_ITEM_TEXT_LENGTH);
-        expect(item.gapAfterSeconds).toBeGreaterThanOrEqual(0);
-        expect(item.gapAfterSeconds).toBeLessThanOrEqual(60);
+        // R60：示例刻意**不写死**间隔（null = 跟随服务端默认，当前 1 秒），
+        // 这样以后调默认值示例也跟着走；写死过就得逐个改。
+        if (item.gapAfterSeconds !== null) {
+          expect(item.gapAfterSeconds).toBeGreaterThanOrEqual(0);
+          expect(item.gapAfterSeconds).toBeLessThanOrEqual(60);
+        }
       }
     }
   });

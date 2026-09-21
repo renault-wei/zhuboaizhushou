@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app';
 import { pool } from '../src/db/client';
+import { scriptTemplates } from '../src/services/script';
 import { SENSITIVE_GUARD_PROMPT } from '../src/services/sensitive';
 
 const app: FastifyInstance = buildApp();
@@ -574,4 +575,22 @@ dbIt('当月话术额度耗尽：生成返回 402 QUOTA_EXCEEDED 且不触发 De
     [userId],
   );
   expect(logRes.rows[0]?.total).toBe(1);
+});
+
+// ---------- R60：话术不得体现「无人直播」 ----------
+// 2026-09-21 用户要求：「不要在话术中体现无人直播的概念」。
+// 观众看到的应当是一场正常的直播，而不是「这是机器在播」。
+// 做法是从**提示词**里就把这个词拿掉 —— 提示词里出现，模型就会顺着写进正文。
+describe('R60 话术不得体现「无人直播」', () => {
+  it('三个行业的提示词里都不出现「无人」相关表述', () => {
+    const codes = Object.keys(scriptTemplates);
+    expect(codes.length).toBeGreaterThan(0);
+    for (const code of codes) {
+      const prompt = scriptTemplates[code]!.systemPrompt;
+      expect(prompt).not.toContain('无人直播');
+      expect(prompt).not.toContain('无人');
+      // 顺带钉住：素材出处那一条也在（R54 加的），别被后来的改动冲掉
+      expect(prompt).toContain('素材出处');
+    }
+  });
 });

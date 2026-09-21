@@ -54,7 +54,9 @@ export const scriptTemplates: Record<string, ScriptIndustryTemplate> = {
     code: 'restaurant',
     label: '餐饮',
     systemPrompt:
-      '你是一名本地团购商家的 AI 直播话术写手，为无人直播写一段口播话术。' +
+      // R60：**不要在话术里体现「无人直播」** —— 观众看到的应当是一场正常的直播，
+      // 而不是「这是机器在播」。提示词里连这个词都不出现，模型才不会顺着写进正文。
+      '你是一名本地团购商家的直播话术写手，为一场直播写口播话术。' +
       '素材是团购商品信息，重点讲清套餐内容、价格与卖点。\n\n' +
       SCRIPT_STRUCTURE_PROMPT,
     productFields: {
@@ -69,7 +71,7 @@ export const scriptTemplates: Record<string, ScriptIndustryTemplate> = {
     code: 'local_service',
     label: '到店服务',
     systemPrompt:
-      '你是一名本地生活团购商家的 AI 直播话术写手，为无人直播写一段口播话术。' +
+      '你是一名本地生活团购商家的直播话术写手，为一场直播写口播话术。' +
       '素材是到店服务商品信息，重点讲清服务内容、价格与卖点。\n\n' +
       SCRIPT_STRUCTURE_PROMPT,
     productFields: {
@@ -84,7 +86,7 @@ export const scriptTemplates: Record<string, ScriptIndustryTemplate> = {
     code: 'retail',
     label: '零售',
     systemPrompt:
-      '你是一名零售商品的 AI 直播话术写手，为无人直播写一段口播话术。' +
+      '你是一名零售商品的直播话术写手，为一场直播写口播话术。' +
       '素材是商品信息，重点讲清规格、价格与卖点。\n\n' +
       SCRIPT_STRUCTURE_PROMPT,
     productFields: {

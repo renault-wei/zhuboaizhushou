@@ -152,7 +152,7 @@ const LOOP_SCRIPT_SYSTEM_PROMPT =
   '3. 若提供了团购券文案，可加入一条到两条介绍该券的句子（kind 用 coupon），但不得改动券名与价格口径；' +
   '4. 输出严格 JSON 数组，不要输出任何解释或代码块。数组元素格式为：' +
   '{"kind":"opening 或 product 或 coupon 或 warmup 或 closing 或 custom 之一，拿不准就写 custom",' +
-  '"text":"这条口播的台词","gapAfterSeconds":数字 0-60 或省略（省略表示用默认 6 秒间隔）}';
+  '"text":"这条口播的台词","gapAfterSeconds":数字 0-60 或省略（省略表示用默认 1 秒间隔）}';
 
 /** 台本生成场景：单品卖货 / 到店团购 / 自定义（决定增量编排片段，骨架共用） */
 export const LOOP_SCRIPT_SCENARIOS = ['single_product', 'group_buy', 'custom'] as const;

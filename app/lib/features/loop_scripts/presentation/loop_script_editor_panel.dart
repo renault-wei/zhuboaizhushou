@@ -1,5 +1,5 @@
 /// 循环台本编辑器（新建/编辑/生成草稿预览共用）：标题 + 有序条目编辑。
-/// 每条台词支持：多行文本、播后间隔秒（0-60，空 = 用全局默认 0 秒）、
+/// 每条台词支持：多行文本、播后间隔秒（0-60，空 = 用服务端默认，R60 起为 1 秒）、
 /// 上移 / 下移 / 删除 / 添加一句。保存前只做本地必填校验，命中敏感词由
 /// 服务端拦截（SENSITIVE_BLOCKED），页面透出命中词提示。
 library;
@@ -66,6 +66,8 @@ class _EditableLoopItem {
 /// 单条台词编辑行：文本多行输入 + 间隔秒输入 + 上移/下移/删除。
 class _LoopItemRow extends ConsumerStatefulWidget {
   const _LoopItemRow({
+    // R60：「统一设置间隔」靠带间隔的 Key 重建本行，让行内输入框显示新值
+    super.key,
     required this.item,
     required this.index,
     required this.total,
@@ -327,6 +329,9 @@ class LoopScriptEditorPanel extends StatefulWidget {
 
 class _LoopScriptEditorPanelState extends State<LoopScriptEditorPanel> {
   late final TextEditingController _titleController;
+
+  /// R60：**统一设置间隔** 的输入框 —— 逐条填太累，商家常常想让整本节奏一致
+  final TextEditingController _uniformGapController = TextEditingController();
   late List<_EditableLoopItem> _items;
   int _nextUid = 0;
   bool _saving = false;
@@ -344,7 +349,41 @@ class _LoopScriptEditorPanelState extends State<LoopScriptEditorPanel> {
   @override
   void dispose() {
     _titleController.dispose();
+    _uniformGapController.dispose();
     super.dispose();
+  }
+
+  /// R60：把统一间隔应用到**全部条目**。
+  ///
+  /// 空输入 = 清空所有条目的间隔（回到「跟随全局默认」，服务端当前默认 1 秒）。
+  /// 之所以要有这个入口：用户 2026-09-21 提「间隔秒默认 1s，但要能统一设置」——
+  /// 原先只能一条条点，几十条的台本根本没人愿意改。
+  void _applyUniformGap() {
+    if (_items.isEmpty) {
+      _showSnack('还没有台词');
+      return;
+    }
+    final raw = _uniformGapController.text.trim();
+    if (raw.isEmpty) {
+      setState(() {
+        for (final item in _items) {
+          item.gapAfterSeconds = null;
+        }
+      });
+      _showSnack('已清空全部间隔（跟随服务端默认）');
+      return;
+    }
+    final value = int.tryParse(raw);
+    if (value == null || value < 0 || value > 60) {
+      _showSnack('间隔秒需为 0-60 的整数');
+      return;
+    }
+    setState(() {
+      for (final item in _items) {
+        item.gapAfterSeconds = value;
+      }
+    });
+    _showSnack('已把全部 ${_items.length} 条设为 $value 秒');
   }
 
   void _showSnack(String message) {
@@ -484,6 +523,27 @@ class _LoopScriptEditorPanelState extends State<LoopScriptEditorPanel> {
                     ?.copyWith(fontWeight: FontWeight.bold),
               ),
             ),
+            // R60：**统一设置间隔** —— 逐条点太累，几十条的台本没人愿意改。
+            // 空输入 = 清空全部（回到「跟随服务端默认」）。
+            SizedBox(
+              width: 92,
+              child: TextField(
+                key: const Key('loopScriptUniformGapInput'),
+                controller: _uniformGapController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: '统一间隔秒',
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            TextButton(
+              key: const Key('loopScriptUniformGapApply'),
+              onPressed: _applyUniformGap,
+              child: const Text('应用到全部'),
+            ),
           ],
         ),
         const SizedBox(height: 8),
@@ -491,6 +551,11 @@ class _LoopScriptEditorPanelState extends State<LoopScriptEditorPanel> {
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: _LoopItemRow(
+              // R60：把间隔编进 Key —— 「应用到全部」改了 item.gapAfterSeconds 之后，
+              // 行内的控制器是 late final、不会自己刷新，靠重建这一行让它显示新值。
+              key: ValueKey<String>(
+                'loopItem-${_items[index].uid}-${_items[index].gapAfterSeconds}',
+              ),
               item: _items[index],
               index: index,
               total: _items.length,
@@ -518,7 +583,8 @@ class _LoopScriptEditorPanelState extends State<LoopScriptEditorPanel> {
         ),
         const SizedBox(height: 10),
         Text(
-          '循环节奏：整本按顺序循环播放，每条播完后停顿其「间隔秒」（空则默认 0 秒，连读不停）。',
+          '循环节奏：整本按顺序循环播放，每条播完后停顿其「间隔秒」'
+          '（留空则按服务端默认 1 秒；也可以在「台本条目」那一行「统一设置」一次改全部）。',
           style: TextStyle(fontSize: 12, color: context.tokenTextBody),
         ),
         const SizedBox(height: 16),
