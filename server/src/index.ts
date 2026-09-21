@@ -6,6 +6,7 @@ import { interactionEngine } from './services/interactionEngine';
 import { liveCollector } from './services/liveCollector';
 import { disposeStats } from './services/interactionStats';
 import { disposePendingReplies } from './services/pendingReplies';
+import { disposeSpeakerHeartbeat } from './services/speakerHeartbeat';
 import { disposeReplyLedger } from './services/replyLedger';
 
 const app = buildApp();
@@ -33,6 +34,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         disposeReplyLedger();
         disposeStats();
         disposePendingReplies();
+        disposeSpeakerHeartbeat();
         await liveCollector.dispose();
         await pool.end();
         process.exit(0);

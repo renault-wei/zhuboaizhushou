@@ -240,7 +240,7 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     if (_speakerAlwaysOn) {
       final notifier = ref.read(assistantSpeakerControllerProvider.notifier);
       if (!ref.read(assistantSpeakerControllerProvider).enabled) {
-        notifier.start();
+        notifier.start(liveId: widget.liveId);
       }
     }
   }
@@ -615,6 +615,8 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   /// 轮询远程出声队列并把 AI 语音经音频转接线送入开播手机。
   Widget _buildAssistantSpeakerCard() {
     final speaker = ref.watch(assistantSpeakerControllerProvider);
+    // R53：掉线告警要用监控快照里的心跳（页面持有的那份）
+    final monitor = _monitor;
     _speakerNotifier ??= ref.read(assistantSpeakerControllerProvider.notifier);
     final enabled = speaker.enabled;
     final accent = enabled ? AppColors.live : AppColors.nightTextFaint;
@@ -697,6 +699,44 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
               style: const TextStyle(fontSize: 12, color: AppColors.danger),
             ),
           ],
+          // ★R53：助播机掉线告警 —— 「AI 在说，但声音送不出去」。
+          // 2026-09-18 实测：助播机被系统冻结后不再拉音频，服务端早有 warn 日志
+          // （loopCaster「疑似助播机未轮询」），但**商家看不到**，AI 独自讲了 15 分钟。
+          // 判据用「距上次拉取多少秒」，而不是「有没有拉过」—— 后者抓不到「拉了又停」。
+          // 只在**本机确实开着出声**且**场次在播**时提示，避免商家主动关掉时误报。
+          if (enabled &&
+              monitor != null &&
+              monitor.status == LiveStatus.live &&
+              (monitor.speakerSecondsSincePull ?? 0) >= 30) ...[
+            const SizedBox(height: 10),
+            Container(
+              key: const Key('liveMonitorSpeakerStaleWarn'),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.danger.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.error_outline, size: 15, color: AppColors.danger),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '这台手机已经 ${monitor.speakerSecondsSincePull ?? 0} 秒没来取音频了 —— '
+                      'AI 还在说，但声音送不出去。请确认本机没被杀后台 / 锁屏冻结，'
+                      '并在系统设置里允许自启动。',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        height: 1.5,
+                        color: AppColors.nightText,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 4),
           Row(
             children: [
@@ -729,7 +769,7 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
                     assistantSpeakerControllerProvider.notifier,
                   );
                   if (value) {
-                    notifier.start();
+                    notifier.start(liveId: widget.liveId);
                     // 首次启用出声时引导一次后台保活；不阻断开播
                     await _maybeShowKeepAliveGuide();
                   } else {

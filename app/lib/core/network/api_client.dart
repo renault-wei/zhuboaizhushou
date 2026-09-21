@@ -1164,10 +1164,14 @@ class ApiClient {
   /// 拉取远程出声队列队首一条播报（P1 手机线·助播机出声端轮询用）：
   /// 空队列返回 null（服务端 204）；有内容返回 wav 字节与 jobId
   /// （交付即从服务端删除，无重试语义）。
-  Future<SpeechOutItem?> fetchNextOutSpeech() async {
+  /// R53：带 liveId 时服务端会校验「这场还在且仍在播」——
+  /// 不存在回 404 LIVE_NOT_FOUND、不在播回 409 LIVE_NOT_LIVE，
+  /// 助播机据此停下来，不再对着已删场次无限空转。
+  Future<SpeechOutItem?> fetchNextOutSpeech({String? liveId}) async {
     try {
       final response = await _dio.get<Uint8List?>(
         '/api/out/speech/next',
+        queryParameters: liveId == null ? null : <String, dynamic>{'liveId': liveId},
         options: Options(responseType: ResponseType.bytes),
       );
       if (response.statusCode == 204 ||

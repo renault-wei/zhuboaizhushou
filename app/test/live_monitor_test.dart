@@ -694,4 +694,55 @@ void main() {
 
     await _unmount(tester);
   });
+
+  testWidgets('R53：助播机长时间没来取音频 → 出声卡给出红色告警', (tester) async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
+      ],
+    );
+    // 助播机 45 秒没来拉过音频（正常是每秒一次）—— 2026-09-18 的现场：
+    // 手机被系统冻结，服务端早有 warn 日志，但商家看不到，AI 独自讲了 15 分钟。
+    backend.speakerSecondsSincePull = 45;
+
+    await _pumpMonitor(tester, backend);
+    final card = find.byKey(const Key('liveMonitorSpeakerCard'));
+    await tester.ensureVisible(card);
+    // 先把助播机打开 —— 告警只在「商家以为它在工作」时才该出现，
+    // 主动关掉出声是商家的选择，不是故障。
+    await tester.tap(find.byKey(const Key('liveMonitorSpeakerSwitch')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.byKey(const Key('liveMonitorSpeakerStaleWarn')), findsOneWidget);
+    expect(find.textContaining('45 秒没来取音频'), findsOneWidget);
+
+    await _unmount(tester);
+  });
+
+  testWidgets('R53：心跳正常 / 从未拉过时不误报', (tester) async {
+    final fresh = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
+      ],
+    );
+    fresh.speakerSecondsSincePull = 2; // 正常心跳
+    await _pumpMonitor(tester, fresh);
+    await tester.ensureVisible(find.byKey(const Key('liveMonitorSpeakerCard')));
+    await tester.pump();
+    expect(find.byKey(const Key('liveMonitorSpeakerStaleWarn')), findsNothing);
+    await _unmount(tester);
+
+    // null（助播机根本没开）也不该报 —— 那是商家的选择，不是故障
+    final off = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
+      ],
+    );
+    await _pumpMonitor(tester, off);
+    await tester.ensureVisible(find.byKey(const Key('liveMonitorSpeakerCard')));
+    await tester.pump();
+    expect(find.byKey(const Key('liveMonitorSpeakerStaleWarn')), findsNothing);
+    await _unmount(tester);
+  });
 }

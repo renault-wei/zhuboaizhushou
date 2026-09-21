@@ -5,6 +5,7 @@ import { LiveError, toLive } from './live';
 import { loopCaster } from './loopCaster';
 import { statsOf, type LiveInteractionStats } from './interactionStats';
 import { pendingReplyCount } from './pendingReplies';
+import { secondsSinceSpeakerPull } from './speakerHeartbeat';
 import { listLiveReplies, type LiveReplyRecord } from './replyLedger';
 import type { Live, LiveRow, LiveStatus } from './live';
 
@@ -50,6 +51,14 @@ export interface LiveMonitor {
   interactionStats: LiveInteractionStats;
   /** R42：还有几条回复在队列里等着放（台本每个空档放一条，积压不该无限涨） */
   pendingReplies: number;
+  /**
+   * ★R53：助播机（手机）距上次来拉音频过了多少秒；**从未拉过为 null**。
+   *
+   * null 与「数字很大」要分开看：null = 这场没被拉过（助播机没开或还没开始）→ 不该报警；
+   * 数字 = 拉过但停了多久 → 这才是「掉线」的信号。
+   * 商家据此知道「AI 在说，但声音送不出去」（2026-09-18 实测踩到过）。
+   */
+  speakerSecondsSincePull: number | null;
 }
 
 // ---------- 内部工具 ----------
@@ -169,6 +178,8 @@ export async function getLiveMonitor(userId: string, id: string): Promise<LiveMo
     interactionStats: statsOf(id),
     // R42：待播回复积压条数
     pendingReplies: pendingReplyCount(id),
+    // R53：助播机心跳（距上次拉音频多少秒；没拉过为 null）
+    speakerSecondsSincePull: secondsSinceSpeakerPull(id),
   };
 }
 

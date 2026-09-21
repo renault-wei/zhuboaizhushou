@@ -28,6 +28,7 @@ import { autoEndScheduler } from '../services/autoEnd';
 import { interactionEngine } from '../services/interactionEngine';
 import { clearStats } from '../services/interactionStats';
 import { clearPendingReplies } from '../services/pendingReplies';
+import { forgetSpeakerHeartbeat } from '../services/speakerHeartbeat';
 import { clearLiveReplies } from '../services/replyLedger';
 import { AUTO_END_MAX_MINUTES, AUTO_END_MIN_MINUTES } from '../services/liveSettings';
 import { captureLiveSpeech, clampLiveSpeechRate, forgetLiveSpeech } from '../services/liveVoice';
@@ -603,6 +604,8 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       clearStats(live.id);
       // R42：待播回复队列也要清 —— 上一场积压的回复不该在本场播出来
       clearPendingReplies(live.id);
+      // R53：助播机心跳也从头计 —— 否则上一场的心跳会让本场的「掉线告警」判错
+      forgetSpeakerHeartbeat(live.id);
       // R26：登记定时关播（未设 → 不登记）。到点走与手动 /end **完全同一条收尾路径**。
       const autoEndMinutes = live.autoEndMinutes;
       if (autoEndMinutes !== null) {
@@ -663,6 +666,8 @@ async function finishLive(
   interactionEngine.forgetLive(live.id);
   // R42：台本已停，队列里没放出去的回复不会再有机会播 —— 清掉，避免内存滞留
   clearPendingReplies(live.id);
+  // R53：助播机心跳记录也回收（Map 不该随场次数无界增长）
+  forgetSpeakerHeartbeat(live.id);
   let billing: Awaited<ReturnType<typeof settleLiveSession>> | null = null;
   try {
     billing = await settleLiveSession({

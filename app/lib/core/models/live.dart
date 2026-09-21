@@ -302,6 +302,7 @@ class LiveMonitor {
     required this.recentReplies,
     required this.interactionStats,
     required this.pendingReplies,
+    this.speakerSecondsSincePull,
   });
 
   factory LiveMonitor.fromJson(Map<String, dynamic> json) {
@@ -335,6 +336,8 @@ class LiveMonitor {
               byQuality: <String, int>{},
             ),
       pendingReplies: (json['pendingReplies'] as num?)?.toInt() ?? 0,
+      // R53：助播机（手机）距上次来拉音频过了多少秒；从未拉过为 null
+      speakerSecondsSincePull: (json['speakerSecondsSincePull'] as num?)?.toInt(),
     );
   }
 
@@ -373,6 +376,14 @@ class LiveMonitor {
 
   /// R42：还有几条回复在队列里等着放（台本每个空档放一条）
   final int pendingReplies;
+
+  /// ★R53：助播机（手机）距上次来拉音频过了多少秒；**从未拉过为 null**。
+  ///
+  /// null 与「数字很大」是两回事：null = 这场没被拉过（助播机没开）→ 不该报警；
+  /// 数字 = 拉过但停了多久 → 这才是「掉线」。
+  /// 2026-09-18 实测：助播机被系统冻结后不再拉音频，服务端早有 warn 日志，
+  /// 但**商家看不到**，AI 独自讲了 15 分钟。
+  final int? speakerSecondsSincePull;
 
   /// 当前轮到第几条（1 起；空闲 / 结束为 0）
   final int loopCurrentSeq;

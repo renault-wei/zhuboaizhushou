@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:starvoice_app/core/models/live.dart';
 import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/core/platform/keep_alive_bridge.dart';
@@ -84,17 +85,69 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
 
   Timer? _timer;
 
+  /// R53：核对本场是否还在直播；不在（或已不存在）就停掉出声。
+  ///
+  /// 与监控页 R50 的「场次被删后给出口」是**同一类病灶**：该停的时候要停。
+  /// 区别在于助播机可能**根本没有页面在看着**，所以必须自己发现问题。
+  Future<void> _checkLiveStillRunning() async {
+    final liveId = _liveId;
+    if (liveId == null) {
+      return;
+    }
+    try {
+      final live = await _api.getLive(liveId);
+      if (live.status != LiveStatus.live) {
+        _stopBecauseLiveEnded('本场已不在直播中，已自动停止出声');
+      }
+    } on ApiException catch (error) {
+      if (error.code == 'LIVE_NOT_FOUND' || error.statusCode == 404) {
+        _stopBecauseLiveEnded('这场直播已不存在（可能已被删除），已自动停止出声');
+      }
+      // 其它错误（网络抖动 / 服务端临时不可用）不在这里处理：
+      // 交给正常轮询的错误分支，避免一次抖动就把出声停掉。
+    }
+  }
+
+  /// 停表并留下原因（stop() 会把状态清成 idle，所以原因要在它之后写）
+  void _stopBecauseLiveEnded(String reason) {
+    if (_disposed || !state.enabled) {
+      return;
+    }
+    stop();
+    state = state.copyWith(
+      status: AssistantSpeakerStatus.error,
+      lastError: reason,
+    );
+  }
+
   /// 防止上一轮 poll 未结束时下一轮重入（播放中不重复拉取）。
   bool _busy = false;
+
+  /// R53：本次出声服务于哪一场。
+  ///
+  /// 为什么必须带上：不带 liveId 时服务端只能走「全局队列」，**无法告诉助播机
+  /// 「这场已经没了」** —— 于是场次被删后助播机会无限空转（2026-09-21 实测：
+  /// 两条已删场次被持续拉取，只有重启 App 才停）。带上之后，服务端能回 404/409。
+  String? _liveId;
+
+  /// R53：每 N 次轮询核对一次「本场还在播吗」。
+  ///
+  /// 为什么必要：助播机是**独立于监控页**在跑的（页面关掉它还在拉）。
+  /// 场次被删 / 结束后它不会自己知道，就会对着一个不存在的场次无限空转
+  /// （2026-09-21 实测：两条已删场次被持续拉取，只有重启 App 才停）。
+  /// 15 秒一次足够及时，也不会给服务端添多少负担。
+  static const int _liveCheckEveryNPolls = 15;
+  int _pollsSinceLiveCheck = 0;
 
   /// dispose 后不再触碰 state：在途轮询回来时直接返回（stop/dispose 竞态兜底）。
   bool _disposed = false;
 
   /// 启用出声：置 listening 态并启动轮询；先立即拉一次，不必等首个周期。
-  void start() {
+  void start({String? liveId}) {
     if (_disposed || state.enabled) {
       return;
     }
+    _liveId = liveId;
     state = AssistantSpeakerState(
       enabled: true,
       status: AssistantSpeakerStatus.waiting,
@@ -115,6 +168,7 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     }
     _timer?.cancel();
     _timer = null;
+    _liveId = null;
     state = AssistantSpeakerState.idle();
     unawaited(_player.stop());
     unawaited(_syncKeepAlive(false));
@@ -145,7 +199,16 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     }
     _busy = true;
     try {
-      final item = await _api.fetchNextOutSpeech();
+      // R53：周期性核对场次是否还在播 —— 不在就停，别空转
+      _pollsSinceLiveCheck += 1;
+      if (_pollsSinceLiveCheck >= _liveCheckEveryNPolls) {
+        _pollsSinceLiveCheck = 0;
+        await _checkLiveStillRunning();
+        if (_disposed || !state.enabled) {
+          return;
+        }
+      }
+      final item = await _api.fetchNextOutSpeech(liveId: _liveId);
       if (_disposed || !state.enabled) {
         return;
       }
@@ -169,6 +232,16 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
       );
     } on ApiException catch (error) {
       if (_disposed || !state.enabled) {
+        return;
+      }
+      // ★R53：场次不存在 / 已不在播 = **终态**，必须停下来、不能无限重试。
+      // 这正是 R50 在监控页修过的同一类病灶，只是发生在助播机组件里。
+      if (error.code == 'LIVE_NOT_FOUND' || error.code == 'LIVE_NOT_LIVE') {
+        stop();
+        state = state.copyWith(
+          status: AssistantSpeakerStatus.error,
+          lastError: error.message,
+        );
         return;
       }
       state = state.copyWith(

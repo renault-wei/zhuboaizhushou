@@ -253,6 +253,10 @@ class FakeBackend implements HttpClientAdapter {
   };
   int pendingReplies = 0;
 
+  /// R53：助播机距上次拉音频多少秒（null = 从未拉过）。
+  /// 真服务端由 speakerHeartbeat 打点 —— 替身必须镜像，否则「掉线告警」测不出来。
+  int? speakerSecondsSincePull;
+
   // ---------- R24 AI 回复台账（内存态，最新在前） ----------
   final Map<String, List<Map<String, dynamic>>> liveReplies =
       <String, List<Map<String, dynamic>>>{};
@@ -1286,6 +1290,8 @@ class FakeBackend implements HttpClientAdapter {
       'interactionStats': interactionStats,
       // R42：待播回复积压
       'pendingReplies': pendingReplies,
+      // R53：助播机心跳（距上次拉音频多少秒；null = 从未拉过）
+      'speakerSecondsSincePull': speakerSecondsSincePull,
     });
   }
 

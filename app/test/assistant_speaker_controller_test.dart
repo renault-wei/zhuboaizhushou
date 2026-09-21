@@ -257,4 +257,58 @@ void main() {
     expect(controller.state.lastError, isNull);
     controller.dispose();
   });
+
+  // ---------- R53：场次没了要自己停，不能空转 ----------
+  // 2026-09-21 实测：助播机独立于监控页在跑，场次被删后它**不会自己知道**，
+  // 对着两条已删场次持续拉取，只有重启 App 才停。
+  test('R53：场次被删后自动停止轮询，并留下原因', () async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        <String, dynamic>{
+          'id': 'live-001',
+          'title': '测试场次',
+          'videoSourceUrl': '',
+          'status': 'live',
+          'aiBadgeShown': true,
+        },
+      ],
+    );
+    final api = ApiClient(buildMockDio(backend));
+    final player = _FakeSpeechOutPlayer();
+    // 轮询间隔拉大到一天：只靠测试手动驱动 pollOnce
+    final controller = AssistantSpeakerController(
+      api,
+      player,
+      const Duration(days: 1),
+    );
+
+    controller.start(liveId: 'live-001');
+    // 等 start 的**首次拉取跑完**再手动驱动 —— 否则后续 pollOnce 会被 _busy 挡掉、
+    // 计数根本不会涨（前两版都栽在这里）。注意不能只等 status：start() 是
+    // **同步**把状态置成 waiting 的，等它等于没等。
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+
+    // 还没到核对周期（15 次）：场次即使没了也不该停
+    for (var i = 0; i < 14; i += 1) {
+      await controller.pollOnce();
+    }
+    expect(controller.state.enabled, isTrue);
+    expect(controller.state.lastError, isNull);
+
+    // 场次被删
+    backend.lives.clear();
+
+    // 继续轮询直到核对周期再次命中（start 的首拉也计入，所以不能假定「再 1 次就够」）
+    for (var i = 0; i < 20 && controller.state.enabled; i += 1) {
+      await controller.pollOnce();
+    }
+    await _waitUntil(() => !controller.state.enabled);
+    expect(controller.state.enabled, isFalse);
+    expect(controller.state.lastError, contains('不存在'));
+    // 停表后不该再有轮询（enabled=false 时 pollOnce 直接返回）
+    await controller.pollOnce();
+    expect(controller.state.enabled, isFalse);
+
+    controller.dispose();
+  });
 }

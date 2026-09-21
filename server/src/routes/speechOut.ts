@@ -2,14 +2,23 @@ import type { FastifyPluginAsync } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { remoteSpeechQueue } from '../services/remoteSpeechQueue';
+import { recordSpeakerPull } from '../services/speakerHeartbeat';
 
 // P1 手机线：远程出声端轮询拉取接口（助播机 App / 二期客户端消费）。
 // 语义：一次 GET = 交付队首一条 wav（拉取成功即视为已出声），流式返回后删除临时文件；
 // 空队列返回 204。鉴权复用登录 token；当前单商家自用口径为全局队列，多门店化时再按用户 / 场次隔离。
 // 带 ?liveId= 时只取该场次音频（多场并发互不插队）；不带则取全局队首（兼容旧客户端）。
+//
+// ★R53（2026-09-21）：带 liveId 时**记一次助播机心跳**（供工作台显示「掉线告警」）。
+//   「这场还在不在播」的判断**不放在这里** —— 那会把一个纯交付接口变成 DB 依赖，
+//   而助播机本来就要轮询场次状态；让它自己去问（见 App 的 AssistantSpeakerController），
+//   这个接口保持纯粹：只交付、只记心跳。
 export const speechOutRoutes: FastifyPluginAsync = async (app) => {
-  app.get('/api/out/speech/next', { preHandler: app.authenticate }, async (_request, reply) => {
-    const liveId = readLiveIdQuery(_request.query);
+  app.get('/api/out/speech/next', { preHandler: app.authenticate }, async (request, reply) => {
+    const liveId = readLiveIdQuery(request.query);
+    if (liveId) {
+      recordSpeakerPull(liveId);
+    }
     const job = remoteSpeechQueue.take(liveId);
     if (!job) {
       return reply.code(204).send();

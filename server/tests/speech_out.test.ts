@@ -6,6 +6,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '../src/app';
 import { remoteSpeechQueue } from '../src/services/remoteSpeechQueue';
+import {
+  forgetSpeakerHeartbeat,
+  secondsSinceSpeakerPull,
+} from '../src/services/speakerHeartbeat';
 import { createRemoteSpeechSink } from '../src/services/remoteSpeechSink';
 
 // P1 手机线：远程出声端轮询拉取接口集成测试。
@@ -172,3 +176,22 @@ it('按 liveId 取件：该场次空队返回 204，不误取他场次', async (
   // 他场次积压原样保留
   expect(remoteSpeechQueue.size('live-b')).toBe(1);
 });
+
+// ---------- R53：助播机心跳 ----------
+it('带 liveId 拉取会记一次心跳（供工作台显示「助播机掉线」）', async () => {
+  const liveId = `hb-${randomUUID()}`;
+  // 没拉过之前是 null —— 与「拉过但停了很久」必须区分开：
+  // 前者是「助播机没开」（商家的选择），后者才是故障。
+  expect(secondsSinceSpeakerPull(liveId)).toBeNull();
+
+  const res = await pullSpeechForLive(makeToken(), liveId);
+  expect(res.statusCode).toBe(204); // 空队列
+
+  const elapsed = secondsSinceSpeakerPull(liveId);
+  expect(elapsed).not.toBeNull();
+  expect(elapsed).toBeLessThan(5);
+
+  forgetSpeakerHeartbeat(liveId);
+  expect(secondsSinceSpeakerPull(liveId)).toBeNull();
+});
+
