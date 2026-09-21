@@ -5,8 +5,9 @@ import {
   liveSpeaker,
   speechLinePendingCount,
   type SpeechOverrides,
+  type TtsCacheContext,
 } from './liveSpeaker';
-import { getLiveSpeech } from './liveVoice';
+import { getLiveSpeech, loadLiveTtsCacheContext } from './liveVoice';
 import type { AtmosphereCategory, AtmosphereInsertion } from './atmosphere';
 import { atmosphereScheduler } from './atmosphereScheduler';
 import { takePendingReply } from './pendingReplies';
@@ -129,8 +130,9 @@ function defaultSpeak(
   text: string,
   overrides?: SpeechOverrides,
   liveId?: string,
+  cache?: TtsCacheContext,
 ): Promise<{ spoken: boolean; reason?: string }> {
-  return liveSpeaker.speak(text, overrides, liveId);
+  return liveSpeaker.speak(text, overrides, liveId, cache);
 }
 
 /** 默认睡眠：真实 setTimeout */
@@ -171,18 +173,43 @@ export async function loadBoundLoopItems(liveId: string): Promise<LoopCastItem[]
 }
 
 /** 逐句出声的容错包装：合成/播放失败只记日志，节奏照走，不让循环卡死（§8.3） */
+/**
+ * R69：本场次的合成缓存上下文，按 liveId 记忆化。
+ *
+ * 为什么记忆化：循环台本一场要念几十句，每句都回库查「商家 + 音色 + 语速」是浪费 ✗；
+ * 而这三样在一场之内由开播快照决定，不会变 ✓。
+ * 进程重启即清空（与场次音色快照同口径，不跨场次串读数）。
+ */
+const liveCacheContexts = new Map<string, TtsCacheContext | null>();
+
+async function resolveCacheContext(
+  liveId: string,
+): Promise<TtsCacheContext | undefined> {
+  const cached = liveCacheContexts.get(liveId);
+  if (cached !== undefined) {
+    return cached ?? undefined;
+  }
+  const resolved = await loadLiveTtsCacheContext(liveId).catch(() => null);
+  liveCacheContexts.set(liveId, resolved);
+  return resolved ?? undefined;
+}
+
+/** 逐句出声的容错包装：合成/播放失败只记日志，节奏照走，不让循环卡死（§8.3） */
 async function speakSafely(
   speak: (
     text: string,
     overrides?: SpeechOverrides,
     liveId?: string,
+    cache?: TtsCacheContext,
   ) => Promise<{ spoken: boolean; reason?: string }>,
   liveId: string,
   text: string,
   overrides: SpeechOverrides | null,
 ): Promise<boolean> {
   try {
-    const result = await speak(text, overrides ?? undefined, liveId);
+    // ★R69：把缓存上下文交给合成层 —— 命中缓存时【完全不碰火山】✓
+    const cache = await resolveCacheContext(liveId);
+    const result = await speak(text, overrides ?? undefined, liveId, cache);
     if (!result.spoken) {
       console.info(
         `[loopCaster] 场次 ${liveId} 循环句未出声（${result.reason ?? 'unknown'}），继续下一句`,

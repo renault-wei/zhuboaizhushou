@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { unlink } from 'node:fs/promises';
+
+import { findCachedTtsAudio, storeCachedTtsAudio } from './ttsCache';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { env } from '../config/env';
@@ -49,6 +51,22 @@ export interface SpeechOverrides {
   speaker?: string;
   /** 本次合成语速 [-50, 100]，0 为正常语速 */
   speechRate?: number;
+}
+
+/**
+ * R69：合成缓存上下文。
+ *
+ * 为什么由调用方传、而不是 liveSpeaker 自己查：
+ *   缓存键是「商家 + 音色 + 语速 + 文本」，而 liveSpeaker 只拿得到文本 ✗。
+ *   用户与音色档只有上层（loopCaster，握有场次）知道，所以由它提供。
+ * 为什么是可选的：
+ *   不传就退回「每次都实时合成」的旧行为 —— 弹幕回复等旁路调用可以不动 ✓。
+ */
+export interface TtsCacheContext {
+  userId: string;
+  /** 音色键：与看板/试听缓存共用同一口径（火山发音人 ID） */
+  voiceKey: string;
+  rate: number;
 }
 
 /** 合成器抽象：未来商用 / 克隆 TTS 只需实现同一接口 */
@@ -226,7 +244,12 @@ export interface LiveSpeaker {
    * overrides 指定本场音色（火山预设）；不传则用合成器默认音色，既有调用行为不变。
    * liveId 标记音频归属场次：远程队列按场隔离，避免多场并发时音色 / 台词交错。
    */
-  speak(text: string, overrides?: SpeechOverrides, liveId?: string): Promise<SpeakResult>;
+  speak(
+    text: string,
+    overrides?: SpeechOverrides,
+    liveId?: string,
+    cache?: TtsCacheContext,
+  ): Promise<SpeakResult>;
 }
 
 export interface CreateLiveSpeakerOptions {
@@ -267,6 +290,7 @@ export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveS
       text: string,
       overrides?: SpeechOverrides,
       liveId?: string,
+      cache?: TtsCacheContext,
     ): Promise<SpeakResult> {
       if (!enabled) {
         return { spoken: false, reason: 'disabled' };
@@ -277,7 +301,29 @@ export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveS
       }
       let sinkReached = false;
       try {
-        const { wavPath } = await synth.synthesize(text, overrides);
+        // ★R69：先查缓存，命中就【完全不碰火山】✓
+        //   这是「开播前预生成」能生效的前提：预热跑过之后，
+        //   开播期间一次都不调外部 TTS —— 火山抽风 / 额度用尽都伤不到直播 ✓
+        //   （2026-09-22 凌晨那次 80 条 45000030、整晚零音频，正是缺了这一步 ✗）
+        let wavPath: string | null = null;
+        if (cache) {
+          const hit = await findCachedTtsAudio({ ...cache, text }).catch(
+            () => null,
+          );
+          if (hit) {
+            wavPath = hit.audioPath;
+          }
+        }
+        if (wavPath === null) {
+          const synthesized = await synth.synthesize(text, overrides);
+          wavPath = synthesized.wavPath;
+          // miss 合成成功后落缓存；写失败只告警，绝不阻断本次出声 ✓
+          if (cache) {
+            await storeCachedTtsAudio({ ...cache, text }, wavPath).catch(
+              () => null,
+            );
+          }
+        }
         sinkReached = true;
         const outcome = await sink.play(wavPath, liveId);
         if (outcome === 'played') {

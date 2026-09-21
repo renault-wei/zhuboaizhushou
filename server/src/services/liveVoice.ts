@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { lives as livesTable } from '../db/schema';
-import type { SpeechOverrides } from './liveSpeaker';
+import type { SpeechOverrides, TtsCacheContext } from './liveSpeaker';
 import { findVolcPreset } from './volcPresets';
 
 // 档 A 场次音色解析：把 lives 上绑定的音色与语速翻译成合成器的「单次音色覆盖项」。
@@ -64,6 +64,43 @@ export async function loadLiveSpeechOverrides(
     return null;
   }
   return presetSpeechOverrides(row.volcPresetId, row.speechRate);
+}
+
+/**
+ * R69：取该场次的**合成缓存上下文**（商家 + 音色 + 语速）。
+ *
+ * 缓存键要这三样：缓存是「谁的、什么音色、什么语速」下的这句话 ✓
+ * 一次查询取回，避免每句台词都回库（循环台本一场要念几十句）✗
+ * 场次不存在 → null（调用方退回实时合成，不阻断出声）
+ */
+export async function loadLiveTtsCacheContext(
+  liveId: string,
+): Promise<TtsCacheContext | null> {
+  try {
+    const rows = await db
+      .select({
+        userId: livesTable.userId,
+        volcPresetId: livesTable.volcPresetId,
+        speechRate: livesTable.speechRate,
+      })
+      .from(livesTable)
+      .where(eq(livesTable.id, liveId))
+      .limit(1);
+    const row = rows[0];
+    if (!row) {
+      return null;
+    }
+    const overrides = presetSpeechOverrides(row.volcPresetId, row.speechRate);
+    return {
+      userId: row.userId,
+      // 音色键与 SpeechOverrides 同口径：有预设用预设，否则用合成器默认
+      voiceKey: overrides.speaker ?? 'default',
+      rate: overrides.speechRate ?? 0,
+    };
+  } catch {
+    // 读库失败按「无缓存上下文」处理：退回实时合成，不阻断出声
+    return null;
+  }
 }
 
 // ---------- 场次音色快照（开播冻结）----------
