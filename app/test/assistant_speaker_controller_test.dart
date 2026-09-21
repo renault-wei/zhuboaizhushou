@@ -318,6 +318,49 @@ void main() {
   // 2026-09-21 用户提出「声音应该可以并行」。根因：audioplayers 默认
   // AndroidAudioFocus.gain = 「the sole source of audio」独占 ——
   // 助播机一开口就把手机上的音乐/导航顶停。
+
+  // ---------- R61：本地缓冲 —— 播放与拉取解耦 ----------
+  // 2026-09-21 实测：App 切后台后 Dart 定时器被限流，拉取从 1 秒掉到 8~22 秒，
+  // 服务端台本因此长期判「链路忙」→ 反复让位 30 秒 → 静音。
+  // 修法：一次拉一批进本地缓冲，播放循环在两次 tick 之间把缓冲播完。
+  test('R61：一次拉一批进本地缓冲；不再轮询也能把整批播完', () async {
+    final backend = FakeBackend(
+      lives: <Map<String, dynamic>>[
+        <String, dynamic>{
+          'id': 'live-001',
+          'title': '测试场次',
+          'videoSourceUrl': '',
+          'status': 'live',
+          'aiBadgeShown': true,
+        },
+      ],
+    );
+    for (var index = 0; index < 5; index += 1) {
+      backend.speechOut.add(_wavBytes(index));
+    }
+    final api = ApiClient(buildMockDio(backend));
+    final player = _FakeSpeechOutPlayer();
+    // 轮询间隔拉大到一天：只靠一次 pollOnce 填批，之后全靠播放循环
+    final controller = AssistantSpeakerController(
+      api,
+      player,
+      const Duration(days: 1),
+    );
+
+    controller.start(liveId: 'live-001');
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    await controller.pollOnce();
+
+    // ★ 关键：只 tick 了一次，但五条都应该播出去 ——
+    //   旧实现是「一条 tick 播一条」，这里会永远停在 1。
+    await _waitUntil(() => player.played.length >= 5);
+    expect(player.played, hasLength(5));
+    expect(backend.speechOut, isEmpty);
+    expect(controller.state.playedCount, 5);
+
+    controller.dispose();
+  });
+
   test('R58：出声上下文不申请音频焦点（并行），且按 speech/assistant 路由', () {
     final ctx = buildParallelAudioContext();
     // ★ 关键：不是 gain（独占），而是 none（不申请）

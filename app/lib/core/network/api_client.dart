@@ -1167,6 +1167,38 @@ class ApiClient {
   /// R53：带 liveId 时服务端会校验「这场还在且仍在播」——
   /// 不存在回 404 LIVE_NOT_FOUND、不在播回 409 LIVE_NOT_LIVE，
   /// 助播机据此停下来，不再对着已删场次无限空转。
+  /// R61：问一次**待播清单**（只读，不取走）。
+  ///
+  /// 为什么要有它：App 切后台后 Dart 定时器会被系统限流，拉取节奏从 1 秒掉到 8~22 秒；
+  /// 单条拉取就变成「每次都慢半拍」。有了清单，手机可以**一次拉走一批存本地**，
+  /// 播放与拉取解耦 —— 拉得慢不影响正在播的。
+  /// （设计规格 docs/superpowers/specs/2026-09-21-speaker-local-buffer-design.md）
+  ///
+  /// 注意：看到清单 ≠ 已取走 —— 下载仍走 [fetchNextOutSpeech]（服务端原子取出）。
+  Future<List<SpeechPendingItem>> fetchPendingOutSpeech({String? liveId}) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/api/out/speech/pending',
+        queryParameters: liveId == null ? null : <String, dynamic>{'liveId': liveId},
+      );
+      final raw = response.data?['items'];
+      if (raw is! List) {
+        return const <SpeechPendingItem>[];
+      }
+      return raw
+          .whereType<Map>()
+          .map(
+            (item) => SpeechPendingItem(
+              jobId: item['jobId']?.toString() ?? '',
+              liveId: item['liveId']?.toString(),
+            ),
+          )
+          .toList(growable: false);
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
   Future<SpeechOutItem?> fetchNextOutSpeech({String? liveId}) async {
     try {
       final response = await _dio.get<Uint8List?>(

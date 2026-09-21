@@ -271,7 +271,7 @@ void main() {
     await _unmount(tester);
   });
 
-  testWidgets('直播中助播机出声卡：开关启停驱动轮询并展示状态', (tester) async {
+  testWidgets('R61：进入直播就自动出声 —— 不需要任何设置（原「常开记忆」已移除）', (tester) async {
     final backend = FakeBackend(
       lives: <Map<String, dynamic>>[
         _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
@@ -290,138 +290,35 @@ void main() {
         ),
       ],
     );
+    await tester.pump(const Duration(milliseconds: 120));
 
-    // 直播中展示出声卡，初始未启用
-    expect(find.byKey(const Key('liveMonitorSpeakerCard')), findsOneWidget);
-    expect(find.text('助播机出声（手机线）'), findsOneWidget);
-    expect(find.text('未启用'), findsOneWidget);
-    final switchBefore = tester.widget<Switch>(
-      find.byKey(const Key('liveMonitorSpeakerSwitch')),
-    );
-    expect(switchBefore.value, isFalse);
-
-    // 打开开关：控制器进入监听态并展示状态
-    await tester.tap(find.byKey(const Key('liveMonitorSpeakerSwitch')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
+    // R61：不再需要商家「开启」。助播机是一段看不见的保活 ——
+    // 装上、开播、有声音。原先要先读一个本地「常开」偏好，等于把
+    // 「要不要出声」推给商家，而他既没能力判断也不该关心。
     expect(speakerController.state.enabled, isTrue);
-    expect(find.text('监听中'), findsOneWidget);
-    // 常开记忆已写回本地，供下次直播自动恢复
-    var prefs = await SharedPreferences.getInstance();
-    expect(prefs.getBool('assistant_speaker_always_on'), isTrue);
-
-    // 关闭开关：回到未启用
-    await tester.tap(find.byKey(const Key('liveMonitorSpeakerSwitch')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
-    expect(speakerController.state.enabled, isFalse);
-    expect(find.text('未启用'), findsOneWidget);
-    prefs = await SharedPreferences.getInstance();
-    expect(prefs.getBool('assistant_speaker_always_on'), isFalse);
 
     await _unmount(tester);
     speakerController.dispose();
   });
 
-  testWidgets('直播中 + 常开记忆：偏好开启时进入直播自动启用助播出声（Q5）', (tester) async {
+  testWidgets('R61：一切正常时，界面不出现任何出声管理入口（开关/卡片都没有）', (tester) async {
     final backend = FakeBackend(
       lives: <Map<String, dynamic>>[
         _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
       ],
     );
-    final speakerController = AssistantSpeakerController(
-      ApiClient(buildMockDio(backend)),
-      _FakeSpeechOutPlayer(),
-    );
-    await _pumpMonitor(
-      tester,
-      backend,
-      overrides: <Override>[
-        assistantSpeakerControllerProvider.overrideWith(
-          (ref) => speakerController,
-        ),
-      ],
-      initialPrefs: <String, Object>{'assistant_speaker_always_on': true},
-    );
-    await tester.pump(const Duration(milliseconds: 50));
-
-    // 进入直播态即按常开记忆自动启用，无需再次手动打开
-    expect(speakerController.state.enabled, isTrue);
-    expect(find.text('监听中'), findsOneWidget);
-    final switchOn = tester.widget<Switch>(
-      find.byKey(const Key('liveMonitorSpeakerSwitch')),
-    );
-    expect(switchOn.value, isTrue);
-
-    await _unmount(tester);
-    speakerController.dispose();
-  });
-
-  testWidgets('已结束：AI 播报停止，测试弹幕入口禁用并提示', (tester) async {
-    final endedAt = DateTime.now().toUtc().toIso8601String();
-    final backend = FakeBackend(
-      lives: <Map<String, dynamic>>[
-        _liveJson(
-          id: 'live-001',
-          title: '午市火锅直播',
-          status: 'ended',
-          startedAt: endedAt,
-          endedAt: endedAt,
-        ),
-      ],
-    );
     await _pumpMonitor(tester, backend);
+    await tester.pump(const Duration(milliseconds: 120));
 
-    expect(find.text('已停止'), findsOneWidget);
-    expect(find.text('直播已结束，AI 语音播报已停止。'), findsOneWidget);
-    expect(find.text('直播已结束，无法再发送测试弹幕。'), findsOneWidget);
-
-    final send = tester.widget<FilledButton>(
-      find.byKey(const Key('liveMonitorTestSend')),
-    );
-    expect(send.onPressed, isNull);
-    final input = tester.widget<TextField>(
-      find.byKey(const Key('liveMonitorTestInput')),
-    );
-    expect(input.enabled, isFalse);
+    // 「助播机」这个概念已经不在界面上了：没有卡片、没有开关、没有累计播报。
+    expect(find.byKey(const Key('liveMonitorSpeakerCard')), findsNothing);
+    expect(find.byKey(const Key('liveMonitorSpeakerSwitch')), findsNothing);
+    expect(find.text('助播机出声（手机线）'), findsNothing);
+    // 正常时连告警也不该有
+    expect(find.byKey(const Key('liveMonitorSpeakerStaleWarn')), findsNothing);
 
     await _unmount(tester);
   });
-
-  testWidgets('就绪：工作台展示「开始直播」，点击后转直播中并出现结束按钮', (tester) async {
-    final backend = FakeBackend(
-      lives: <Map<String, dynamic>>[
-        _liveJson(id: 'live-001', title: '晚市就绪直播', status: 'ready'),
-      ],
-    );
-    await _pumpMonitor(tester, backend);
-
-    // 就绪态：主操作是「开始直播」，未开播不发弹幕、AI 待开播
-    expect(find.byKey(const Key('liveMonitorStartButton')), findsOneWidget);
-    expect(find.byKey(const Key('liveEndButton')), findsNothing);
-    // 就绪态展示「开播前自检」引导卡
-    expect(find.byKey(const Key('liveMonitorPreflight')), findsOneWidget);
-    expect(find.text('开播前自检'), findsOneWidget);
-    expect(find.text('配置已就绪，点击下方「开始直播」后 AI 语音主播将上线播报。'), findsOneWidget);
-    expect(find.text('尚未开播，无法发送测试弹幕；点击「开始直播」进入直播后即可联调。'), findsOneWidget);
-
-    // 点击开始：后端转 live，工作台切入直播中监控
-    await tester.tap(find.byKey(const Key('liveMonitorStartButton')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
-    await tester.pump(const Duration(milliseconds: 50));
-    await tester.pump(const Duration(milliseconds: 50));
-
-    expect(backend.lives.single['status'], 'live');
-    expect(find.byKey(const Key('liveMonitorStartButton')), findsNothing);
-    expect(find.byKey(const Key('liveEndButton')), findsOneWidget);
-    expect(find.byKey(const Key('liveMonitorPreflight')), findsNothing);
-    expect(find.text('播报中'), findsOneWidget);
-    expect(find.text('直播已开始，AI 语音主播已上线'), findsOneWidget);
-
-    await _unmount(tester);
-  });
-
   testWidgets('直播中 + 循环播报：AI 主播卡展示当前条 / 轮（M5）', (tester) async {
     final liveJson = _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live');
     liveJson['loopRunning'] = true;
@@ -705,17 +602,12 @@ void main() {
     // 手机被系统冻结，服务端早有 warn 日志，但商家看不到，AI 独自讲了 15 分钟。
     backend.speakerSecondsSincePull = 45;
 
+    // R61：**不需要点任何开关** —— 出声是自动的，坏了也自动告诉你。
     await _pumpMonitor(tester, backend);
-    final card = find.byKey(const Key('liveMonitorSpeakerCard'));
-    await tester.ensureVisible(card);
-    // 先把助播机打开 —— 告警只在「商家以为它在工作」时才该出现，
-    // 主动关掉出声是商家的选择，不是故障。
-    await tester.tap(find.byKey(const Key('liveMonitorSpeakerSwitch')));
-    await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.byKey(const Key('liveMonitorSpeakerStaleWarn')), findsOneWidget);
-    expect(find.textContaining('45 秒没来取音频'), findsOneWidget);
+    expect(find.textContaining('45 秒没取出音频'), findsOneWidget);
 
     await _unmount(tester);
   });
@@ -728,20 +620,19 @@ void main() {
     );
     fresh.speakerSecondsSincePull = 2; // 正常心跳
     await _pumpMonitor(tester, fresh);
-    await tester.ensureVisible(find.byKey(const Key('liveMonitorSpeakerCard')));
-    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 120));
     expect(find.byKey(const Key('liveMonitorSpeakerStaleWarn')), findsNothing);
+    expect(find.byKey(const Key('liveMonitorSpeakerCard')), findsNothing);
     await _unmount(tester);
 
-    // null（助播机根本没开）也不该报 —— 那是商家的选择，不是故障
+    // null（服务端还没记到心跳）也不该报 —— 刚开播时本来就还没有心跳
     final off = FakeBackend(
       lives: <Map<String, dynamic>>[
         _liveJson(id: 'live-001', title: '午市火锅直播', status: 'live'),
       ],
     );
     await _pumpMonitor(tester, off);
-    await tester.ensureVisible(find.byKey(const Key('liveMonitorSpeakerCard')));
-    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 120));
     expect(find.byKey(const Key('liveMonitorSpeakerStaleWarn')), findsNothing);
     await _unmount(tester);
   });

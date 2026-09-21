@@ -47,8 +47,9 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   /// 弹幕日志轮询间隔
   static const _danmakuInterval = Duration(seconds: 3);
 
-  /// 「助播机出声」常开偏好键：直播进入时按该记忆自动恢复出声。
-  static const _speakerAlwaysOnKey = 'assistant_speaker_always_on';
+  /// R61：连续多少秒没取到音频就认为「声音没送出去」—— 与服务端 R53 心跳口径一致。
+  /// 只用于那一行红字，不做任何管理入口。
+  static const int _speakerStaleWarnSeconds = 30;
 
   /// 后台保活引导是否已展示过：仅首次启用出声时弹一次，不重复打扰。
   static const _keepAliveGuidedKey = 'assistant_keep_alive_guided';
@@ -85,12 +86,6 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
 
   /// 助播机出声控制器实例缓存：dispose 阶段 ref 已失效，需用本实例收口出声。
   AssistantSpeakerController? _speakerNotifier;
-
-  /// 助播机出声是否常开：来自本地偏好的内存镜像，避免直播中轮询反复读盘。
-  bool _speakerAlwaysOn = false;
-
-  /// 本地常开偏好是否已读取：仅首个直播态读取一次并缓存。
-  bool _speakerPrefLoaded = false;
 
   /// 测试弹幕输入框（直播中可用，模拟观众提问触发 AI 语音回复）
   final TextEditingController _testController = TextEditingController();
@@ -223,26 +218,26 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     }
   }
 
-  /// 直播中按用户「常开」偏好自动恢复助播出声：仅首个直播态读取一次本地
-  /// 偏好并缓存；开关由用户手动切换时同步写回偏好，本方法不覆盖用户选择。
+  /// R61：**出声自动拉起** —— 不再需要商家「开启」，只要本场在播就自动起。
+  ///
+  /// 「助播机」这个概念从界面上消失了，它就该是一段**看不见的保活**：
+  /// 装上、开播、有声音；切后台、锁屏也一直有。
+  /// 原先这里要先读一个本地「常开」偏好，等于把「要不要出声」这个问题
+  /// 推给商家 —— 而他根本没有能力判断，也不该关心。
   Future<void> _syncSpeakerAutoStart() async {
     if (ref.read(assistantSpeakerControllerProvider).enabled) {
       return;
     }
-    if (!_speakerPrefLoaded) {
-      final prefs = await SharedPreferences.getInstance();
-      if (!mounted) {
-        return;
-      }
-      _speakerPrefLoaded = true;
-      _speakerAlwaysOn = prefs.getBool(_speakerAlwaysOnKey) ?? false;
+    if (_monitor?.status != LiveStatus.live) {
+      return;
     }
-    if (_speakerAlwaysOn) {
-      final notifier = ref.read(assistantSpeakerControllerProvider.notifier);
-      if (!ref.read(assistantSpeakerControllerProvider).enabled) {
-        notifier.start(liveId: widget.liveId);
-      }
-    }
+    ref
+        .read(assistantSpeakerControllerProvider.notifier)
+        .start(liveId: widget.liveId);
+    // 保活引导仍保留一次：它讲的是**系统层的后台限制**，不是「要不要开出声」——
+    // 不告知的话，商家永远不知道该给 App 放行，声音就会在锁屏后被系统掐掉。
+    // 只弹一次、不阻断（原有实现里已有「已展示过就不再弹」的判断）。
+    unawaited(_maybeShowKeepAliveGuide());
   }
 
   /// 拉取弹幕日志：失败静默保留旧列表，不打断观看体验。
@@ -611,173 +606,49 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     );
   }
 
-  /// 助播机出声端开关卡（P1 手机线）：直播中可把本机当出声端，
-  /// 轮询远程出声队列并把 AI 语音经音频转接线送入开播手机。
+  /// R61：**出声状态** —— 平时什么都不显示。
+  ///
+  /// 「助播机」这个概念已经从界面上拿掉了：没有开关、没有「常开」记忆、没有换链接入口、
+  /// 也没有累计播报计数。商家装上 App、开播就该有声音；切后台、锁屏也一直有。
+  ///
+  /// **只在真的坏了的时候说话**：本场在播、但手机已经连续 N 秒没来取音频 ——
+  /// 这正是 2026-09-18「AI 独自讲了 15 分钟没人知道」那种情形。
+  /// 恢复正常后这一行自动消失（不需要点任何按钮）。
   Widget _buildAssistantSpeakerCard() {
-    final speaker = ref.watch(assistantSpeakerControllerProvider);
-    // R53：掉线告警要用监控快照里的心跳（页面持有的那份）
     final monitor = _monitor;
-    _speakerNotifier ??= ref.read(assistantSpeakerControllerProvider.notifier);
-    final enabled = speaker.enabled;
-    final accent = enabled ? AppColors.live : AppColors.nightTextFaint;
+    final seconds = monitor?.speakerSecondsSincePull;
+    final broken =
+        monitor != null &&
+        monitor.status == LiveStatus.live &&
+        seconds != null &&
+        seconds >= _speakerStaleWarnSeconds;
+    if (!broken) {
+      return const SizedBox.shrink();
+    }
     return Container(
-      key: const Key('liveMonitorSpeakerCard'),
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+      key: const Key('liveMonitorSpeakerStaleWarn'),
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: AppColors.nightCard,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppColors.nightStroke),
+        color: AppColors.danger.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.danger.withValues(alpha: 0.4)),
       ),
-      child: Column(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: enabled
-                      ? AppColors.live.withValues(alpha: 0.16)
-                      : AppColors.nightCardHi,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  Icons.speaker_phone_outlined,
-                  size: 20,
-                  color: accent,
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Text(
-                  '助播机出声（手机线）',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.nightText,
-                  ),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: accent.withValues(alpha: 0.16),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Text(
-                  _speakerStatusLabel(speaker),
-                  key: const Key('liveMonitorSpeakerState'),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: accent,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            '启用后本机轮询播报队列并出声，经音频转接线送入开播手机；'
-            '需服务端 LIVE_SPEAKER_OUTPUT=phone。开启后记忆为常开，'
-            '下次进入直播将自动启用；首次开启请按引导放行后台，'
-            '避免切后台 / 锁屏时被系统冻结而中断出声。',
-            style: TextStyle(
-              fontSize: 12,
-              color: AppColors.nightTextDim,
-              height: 1.45,
-            ),
-          ),
-          if (enabled && speaker.status == AssistantSpeakerStatus.error) ...[
-            const SizedBox(height: 6),
-            Text(
-              speaker.lastError ?? '连接异常',
-              style: const TextStyle(fontSize: 12, color: AppColors.danger),
-            ),
-          ],
-          // ★R53：助播机掉线告警 —— 「AI 在说，但声音送不出去」。
-          // 2026-09-18 实测：助播机被系统冻结后不再拉音频，服务端早有 warn 日志
-          // （loopCaster「疑似助播机未轮询」），但**商家看不到**，AI 独自讲了 15 分钟。
-          // 判据用「距上次拉取多少秒」，而不是「有没有拉过」—— 后者抓不到「拉了又停」。
-          // 只在**本机确实开着出声**且**场次在播**时提示，避免商家主动关掉时误报。
-          if (enabled &&
-              monitor != null &&
-              monitor.status == LiveStatus.live &&
-              (monitor.speakerSecondsSincePull ?? 0) >= 30) ...[
-            const SizedBox(height: 10),
-            Container(
-              key: const Key('liveMonitorSpeakerStaleWarn'),
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: AppColors.danger.withValues(alpha: 0.16),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Icon(Icons.error_outline, size: 15, color: AppColors.danger),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      '这台手机已经 ${monitor.speakerSecondsSincePull ?? 0} 秒没来取音频了 —— '
-                      'AI 还在说，但声音送不出去。请确认本机没被杀后台 / 锁屏冻结，'
-                      '并在系统设置里允许自启动。',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        height: 1.5,
-                        color: AppColors.nightText,
-                      ),
-                    ),
-                  ),
-                ],
+          const Icon(Icons.error_outline, size: 16, color: AppColors.danger),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '声音没送出去：AI 说了，但直播间听不到（已 $seconds 秒没取出音频）。'
+              '请检查这台手机的联网与后台限制。',
+              style: const TextStyle(
+                fontSize: 12,
+                height: 1.5,
+                color: AppColors.nightText,
               ),
             ),
-          ],
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              const Icon(
-                Icons.history,
-                size: 14,
-                color: AppColors.nightTextFaint,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                '累计播报 ${speaker.playedCount} 条',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: AppColors.nightTextFaint,
-                ),
-              ),
-              const Spacer(),
-              Switch(
-                key: const Key('liveMonitorSpeakerSwitch'),
-                value: enabled,
-                activeThumbColor: AppColors.live,
-                activeTrackColor: AppColors.live.withValues(alpha: 0.35),
-                onChanged: (value) async {
-                  // 常开记忆写回本地，再启停出声端
-                  final prefs = await SharedPreferences.getInstance();
-                  await prefs.setBool(_speakerAlwaysOnKey, value);
-                  _speakerAlwaysOn = value;
-                  _speakerPrefLoaded = true;
-                  final notifier = ref.read(
-                    assistantSpeakerControllerProvider.notifier,
-                  );
-                  if (value) {
-                    notifier.start(liveId: widget.liveId);
-                    // 首次启用出声时引导一次后台保活；不阻断开播
-                    await _maybeShowKeepAliveGuide();
-                  } else {
-                    notifier.stop();
-                  }
-                },
-              ),
-            ],
           ),
         ],
       ),
@@ -809,20 +680,6 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
       );
     } catch (_) {
       // 引导只是锦上添花：原生桥不可用 / 读写偏好失败时静默跳过，不阻断开播
-    }
-  }
-
-  /// 出声端状态文案：未启用 / 监听中 / 播报中 / 连接异常。
-  String _speakerStatusLabel(AssistantSpeakerState speaker) {
-    switch (speaker.status) {
-      case AssistantSpeakerStatus.idle:
-        return '未启用';
-      case AssistantSpeakerStatus.waiting:
-        return speaker.enabled ? '监听中' : '未启用';
-      case AssistantSpeakerStatus.playing:
-        return '播报中';
-      case AssistantSpeakerStatus.error:
-        return '连接异常';
     }
   }
 

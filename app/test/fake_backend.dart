@@ -585,6 +585,10 @@ class FakeBackend implements HttpClientAdapter {
     if (watchItem != null && options.method == 'DELETE') {
       return _stopDanmakuWatch(watchItem.group(1)!);
     }
+    // R61：待播清单（只读，不取走）—— 必须在 /next 之前判断，否则会被 endsWith 抢先
+    if (options.method == 'GET' && path.endsWith('/api/out/speech/pending')) {
+      return _pendingSpeechOut();
+    }
     if (options.method == 'GET' && path.endsWith('/api/out/speech/next')) {
       return _nextSpeechOut();
     }
@@ -1137,6 +1141,26 @@ class FakeBackend implements HttpClientAdapter {
       },
     );
   }
+
+  /// R61：待播清单（镜像服务端 /api/out/speech/pending）。
+  ///
+  /// 只读、**不取走** —— 与服务端语义一致（下载仍走 /next，由它原子取出）。
+  ResponseBody _pendingSpeechOut() {
+    if (failSpeechOut) {
+      return _serverError('出声队列服务暂不可用');
+    }
+    final items = <Map<String, dynamic>>[];
+    for (var index = 0; index < speechOut.length && index < _pendingBatchLimit; index += 1) {
+      items.add(<String, dynamic>{
+        'jobId': 'speech-mock-${(speechOutPulledCount + index + 1).toString().padLeft(3, '0')}',
+        'liveId': null,
+      });
+    }
+    return _jsonResponse(<String, dynamic>{'items': items, 'maxBatch': _pendingBatchLimit});
+  }
+
+  /// 与服务端 MAX_PENDING_BATCH 对齐（R61）
+  static const int _pendingBatchLimit = 10;
 
   /// 远程出声队列拉取（镜像服务端 /api/out/speech/next）：空队列 204；
   /// 有内容则交付队首 wav 字节并带 x-speech-job-id 头（交付即删除语义）。

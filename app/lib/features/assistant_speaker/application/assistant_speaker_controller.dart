@@ -139,6 +139,25 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   static const int _liveCheckEveryNPolls = 15;
   int _pollsSinceLiveCheck = 0;
 
+  /// R61：本地缓冲上限（条）—— 与清单接口的单次上限 10 一致。
+  static const int _bufferMaxItems = 10;
+
+  /// 播放循环空闲时等的信号：**可被唤醒**，而不是死等一个 Future.delayed。
+  ///
+  /// 为什么要这样：`future.delayed` 在停用/dispose 后仍会悬挂着，
+  /// 测试收尾会报 `timersPending`，真机上也是白占一个定时器。
+  /// 换成 Completer 之后，停用/销毁能立刻把循环叫醒退出。
+  Completer<void>? _idleGate;
+
+  /// R61：**本地缓冲**（待播 wav，按服务端入队顺序）。
+  ///
+  /// 为什么放内存而不是磁盘：规格 §11.2 已经明确「进程崩溃丢缓冲可接受」——
+  /// 那内存就完全够用，还省掉一整套文件生命周期管理。
+  final List<Uint8List> _buffer = <Uint8List>[];
+
+  /// 播放循环是否已在跑（同一时刻只允许一个）
+  bool _playLoopRunning = false;
+
   /// dispose 后不再触碰 state：在途轮询回来时直接返回（stop/dispose 竞态兜底）。
   bool _disposed = false;
 
@@ -153,9 +172,15 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
       status: AssistantSpeakerStatus.waiting,
       playedCount: state.playedCount,
     );
+    // R61：两个循环各司其职 ——
+    //   ① 定时器只负责**把缓冲填满**（一次问清单、批量下载）；
+    //   ② 播放循环自己从缓冲里取，**不等定时器**。
+    // 这样即使 App 切后台、定时器被系统限流到十几秒一次，
+    // 已经缓冲好的音频仍能连续播出去（原先拉和播是同一个循环，一起被拖慢）。
     _timer = Timer.periodic(_pollInterval, (_) => unawaited(pollOnce()));
     unawaited(_syncKeepAlive(true));
     unawaited(pollOnce());
+    unawaited(_playLoop());
   }
 
   /// 停用出声：停表、打断播放并回到 idle（幂等，页面收尾 / 直播结束时调用）。
@@ -169,6 +194,9 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     _timer?.cancel();
     _timer = null;
     _liveId = null;
+    // R61：缓冲一起清掉 —— 停用还继续播旧音频会更奇怪（播放循环靠 enabled 退出）
+    _buffer.clear();
+    _wakeIdle();
     state = AssistantSpeakerState.idle();
     unawaited(_player.stop());
     unawaited(_syncKeepAlive(false));
@@ -191,6 +219,110 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     }
   }
 
+  ///
+  /// R61：把本地缓冲尽量填满 —— 一次问清单，再按清单逐条下载。
+  ///
+  /// 为什么是「问清单 + 逐条下载」而不是「直接拉 N 条」：
+  /// 下载走的是 `/next`（服务端**原子取出**），所以清单只是「有几条」的快照，
+  /// 两条 App 同时拉也不会重复播。
+  Future<void> _fillBuffer() async {
+    if (_buffer.length >= _bufferMaxItems) {
+      return;
+    }
+    final pending = await _api.fetchPendingOutSpeech(liveId: _liveId);
+    if (pending.isEmpty) {
+      state = state.copyWith(
+        status: AssistantSpeakerStatus.waiting,
+        lastError: null,
+      );
+      return;
+    }
+    var fetched = 0;
+    while (_buffer.length < _bufferMaxItems && fetched < pending.length) {
+      final item = await _api.fetchNextOutSpeech(liveId: _liveId);
+      if (item == null) {
+        // 清单说还有，但已被别的取走 —— 本次到此为止
+        break;
+      }
+      _buffer.add(item.wavBytes);
+      fetched += 1;
+    }
+    // 有货了 → 把可能正在空闲等待的播放循环叫醒，别让它白等
+    _wakeIdle();
+    if (_disposed || !state.enabled) {
+      return;
+    }
+    state = state.copyWith(status: AssistantSpeakerStatus.waiting, lastError: null);
+  }
+
+  ///
+  /// 等待「有新音频」或「被叫醒停用」—— 见 [_idleGate] 的注释。
+  Future<void> _waitIdle() async {
+    final gate = Completer<void>();
+    _idleGate = gate;
+    await gate.future;
+    if (identical(_idleGate, gate)) {
+      _idleGate = null;
+    }
+  }
+
+  /// 叫醒空闲中的播放循环（停用 / dispose / 有新音频时都该调）
+  void _wakeIdle() {
+    final gate = _idleGate;
+    if (gate != null && !gate.isCompleted) {
+      gate.complete();
+    }
+  }
+
+  /// 从缓冲取一条播出去；缓冲空返回 false。
+  ///
+  /// 播放循环与每轮 tick（[pollOnce]）共用它 —— 只有一个出入口，
+  /// 而 `removeAt(0)` 是同步的，两边同时进来也不会重复播同一条。
+  Future<bool> _playOneFromBuffer() async {
+    if (_buffer.isEmpty) {
+      return false;
+    }
+    final bytes = _buffer.removeAt(0);
+    state = state.copyWith(status: AssistantSpeakerStatus.playing);
+    try {
+      await _player.play(bytes);
+    } catch (_) {
+      // 单条播放失败（文件损坏等）不该整体停：丢掉它继续下一条
+    }
+    if (_disposed || !state.enabled) {
+      return true;
+    }
+    state = state.copyWith(
+      status: AssistantSpeakerStatus.waiting,
+      playedCount: state.playedCount + 1,
+      lastError: null,
+    );
+    return true;
+  }
+
+  ///
+  /// R61：**播放循环** —— 自己从本地缓冲取，不等定时器。
+  ///
+  /// 关键：一条 wav 的播放时长由音频本身决定（几秒），循环的节奏因此是「音频速度」而不是
+  /// 「定时器速度」。哪怕 App 在后台、定时器被限流到十几秒一次，只要缓冲里有货就照播。
+  Future<void> _playLoop() async {
+    if (_playLoopRunning) {
+      return;
+    }
+    _playLoopRunning = true;
+    try {
+      while (!_disposed && state.enabled) {
+        if (_buffer.isEmpty) {
+          await _waitIdle();
+          continue;
+        }
+        await _playOneFromBuffer();
+      }
+    } finally {
+      _playLoopRunning = false;
+    }
+  }
+
   /// 执行一轮「拉取 → 播放」：空队列等待、有播报则串行播完再等下一条。
   /// 供定时器逐周期调用，也便于测试直接驱动单轮。
   Future<void> pollOnce() async {
@@ -208,28 +340,13 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
           return;
         }
       }
-      final item = await _api.fetchNextOutSpeech(liveId: _liveId);
-      if (_disposed || !state.enabled) {
-        return;
-      }
-      if (item == null) {
-        // 队列为空：保持监听，等待下一条播报
-        state = state.copyWith(
-          status: AssistantSpeakerStatus.waiting,
-          lastError: null,
-        );
-        return;
-      }
-      state = state.copyWith(status: AssistantSpeakerStatus.playing);
-      await _player.play(item.wavBytes);
-      if (_disposed || !state.enabled) {
-        return;
-      }
-      state = state.copyWith(
-        status: AssistantSpeakerStatus.waiting,
-        playedCount: state.playedCount + 1,
-        lastError: null,
-      );
+      // R61：这一轮负责**填满缓冲**，并顺手播一条。
+      //
+      // 注意与旧实现的区别：旧的是「拉一条 → 播一条 → 再拉」，**拉被限流时播放一起被拖慢**；
+      // 现在是「一次填一批 → 播一条」，剩下的由播放循环在 tick 之间继续播完 ——
+      // 所以定时器被限流到十几秒一次，缓冲里的音频照样能连续出去。
+      await _fillBuffer();
+      await _playOneFromBuffer();
     } on ApiException catch (error) {
       if (_disposed || !state.enabled) {
         return;
