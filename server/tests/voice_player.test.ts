@@ -99,6 +99,35 @@ it('多条回复按入队顺序串行播放，不并行出声', async () => {
   expect(player.pendingCount()).toBe(0);
 });
 
+// ---------- R61：排队条数按场次过滤 ----------
+// 2026-09-21 发现：liveSpeaker 的注释一直写着「带 liveId 时只算本场」，
+// 但实现（本机出声端 → 播放器）**从来没做**，无脑返回全局长度。
+// 后果：别场次的积压会把本场台本卡死 —— loopCaster 靠它判「出声链路是否空闲」，
+// 判成「一直忙」就会反复让位 30 秒然后放弃，表现为【静音】。
+it('R61：pendingCount 带 liveId 时只数该场次，不带才算全局', async () => {
+  const { calls, handles, executor } = makeRecordingExecutor();
+  const player = createVoicePlayer({ executor });
+
+  // A 场一条、B 场两条。第一条（A）立刻进入播放，但**仍在队列里** ——
+  // 这是对的：正在说话时这条链路本来就该被判为「忙」。
+  void player.enqueue('a1.wav', 'live-A');
+  void player.enqueue('b1.wav', 'live-B');
+  void player.enqueue('b2.wav', 'live-B');
+  await waitFor(() => calls.length === 1);
+  expect(player.pendingCount('live-A')).toBe(1);
+  expect(player.pendingCount('live-B')).toBe(2);
+  expect(player.pendingCount()).toBe(3);
+
+  // ★ 真正要验的那一刻：A 播完、B 开始播 —— A 场必须立刻变「空闲」，
+  //   哪怕 B 场还有积压。修复前这里恒等于全局长度，台本会被别场拖死。
+  handles[0]?.resolve();
+  await waitFor(() => calls.length === 2);
+  expect(player.pendingCount('live-A')).toBe(0);
+  expect(player.pendingCount('live-B')).toBe(2);
+
+  handles.forEach((handle) => handle.resolve());
+});
+
 it('stop 清空未播队列并打断当前播放，之后仍可继续入队', async () => {
   const { calls, handles, executor } = makeRecordingExecutor();
   const player = createVoicePlayer({ executor });

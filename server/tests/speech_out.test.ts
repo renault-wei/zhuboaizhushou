@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '../src/app';
 import { remoteSpeechQueue } from '../src/services/remoteSpeechQueue';
+import { MAX_PENDING_BATCH } from '../src/routes/speechOut';
 import {
   forgetSpeakerHeartbeat,
   secondsSinceSpeakerPull,
@@ -193,5 +194,49 @@ it('带 liveId 拉取会记一次心跳（供工作台显示「助播机掉线�
 
   forgetSpeakerHeartbeat(liveId);
   expect(secondsSinceSpeakerPull(liveId)).toBeNull();
+});
+
+// ---------- R61：待播清单（本地缓冲用） ----------
+// 设计规格 docs/superpowers/specs/2026-09-21-speaker-local-buffer-design.md
+function pullPending(token: string, liveId?: string) {
+  const suffix = liveId === undefined ? '' : `?liveId=${encodeURIComponent(liveId)}`;
+  return app.inject({
+    method: 'GET',
+    url: `/api/out/speech/pending${suffix}`,
+    headers: { authorization: `Bearer ${token}` },
+  });
+}
+
+it('R61：未带登录态问清单返回 401', async () => {
+  const res = await app.inject({ method: 'GET', url: '/api/out/speech/pending' });
+  expect(res.statusCode).toBe(401);
+});
+
+it('R61：空队列返回空清单与 maxBatch', async () => {
+  const res = await pullPending(makeToken());
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ items: [], maxBatch: MAX_PENDING_BATCH });
+});
+
+it('R61：清单按场次过滤，且单次不超过 maxBatch（只读，不取走）', async () => {
+  const liveA = `pend-a-${randomUUID()}`;
+  const liveB = `pend-b-${randomUUID()}`;
+  // A 场 12 条（超过 maxBatch），B 场 1 条
+  for (let index = 0; index < 12; index += 1) {
+    remoteSpeechQueue.push(await makeWavFile(), liveA);
+  }
+  remoteSpeechQueue.push(await makeWavFile(), liveB);
+
+  const resA = await pullPending(makeToken(), liveA);
+  const bodyA = resA.json() as { items: unknown[]; maxBatch: number };
+  expect(bodyA.items).toHaveLength(MAX_PENDING_BATCH);
+  expect(bodyA.maxBatch).toBe(MAX_PENDING_BATCH);
+
+  const resB = await pullPending(makeToken(), liveB);
+  expect((resB.json() as { items: unknown[] }).items).toHaveLength(1);
+
+  // ★ 关键：问清单【不取走】—— 队列条数一点没少
+  expect(remoteSpeechQueue.size(liveA)).toBe(12);
+  expect(remoteSpeechQueue.size(liveB)).toBe(1);
 });
 

@@ -163,9 +163,10 @@ class LocalDeviceSink implements SpeechSink {
     this.player.setMuted(muted);
   }
 
-  async play(wavPath: string, _liveId?: string): Promise<PlayOutcome> {
+  async play(wavPath: string, liveId?: string): Promise<PlayOutcome> {
     try {
-      return await this.player.enqueue(wavPath);
+      // R61：把场次透传给播放器（原先丢掉 → pendingCount 只能数全局）
+      return await this.player.enqueue(wavPath, liveId);
     } finally {
       // 无论 played / skipped / failed 都清理，避免临时 wav 堆积（远程 sink 改为收到回执后再删）
       await unlink(wavPath).catch(() => undefined);
@@ -176,8 +177,10 @@ class LocalDeviceSink implements SpeechSink {
     this.player.stop();
   }
 
-  pendingCount(_liveId?: string): number {
-    return this.player.pendingCount();
+  pendingCount(liveId?: string): number {
+    // R61：透传场次 —— 原先忽略它，导致**别场次的积压把本场台本卡死**。
+    // （注释一直写着「带 liveId 时只算本场」，但实现从来没做。）
+    return this.player.pendingCount(liveId);
   }
 }
 

@@ -100,16 +100,22 @@ export interface VoicePlayer {
   /** 当前是否静音（静音只拦新播放，播到一半的让其自然播完） */
   isMuted(): boolean;
   setMuted(muted: boolean): void;
-  /** 把一段 wav 加入播放队列；返回实际结果：played=播完 / skipped=被静音或打断 / failed=出错 */
-  enqueue(wavPath: string): Promise<PlayOutcome>;
+  /**
+   * 把一段 wav 加入播放队列；返回实际结果：played=播完 / skipped=被静音或打断 / failed=出错。
+   * 带 liveId 只为**记账**（供 pendingCount 按场次过滤）—— 播放顺序仍是全局 FIFO，
+   * 因为物理上只有一张声卡，多场并发时本来也只能顺序播。
+   */
+  enqueue(wavPath: string, liveId?: string): Promise<PlayOutcome>;
   /** 清空未播队列并打断当前播放（真人接管 / 一键静音用） */
   stop(): void;
-  /** 尚未播出的排队条数 */
-  pendingCount(): number;
+  /** 尚未播出的排队条数；带 liveId 时只数该场次（R61 修复：原先忽略场次） */
+  pendingCount(liveId?: string): number;
 }
 
 interface QueueJob {
   wavPath: string;
+  /** 归属场次：只用于 pendingCount 的按场过滤（播放顺序不受影响） */
+  liveId?: string;
   resolve: (outcome: PlayOutcome) => void;
 }
 
@@ -139,15 +145,20 @@ class DefaultVoicePlayer implements VoicePlayer {
     this.muted = muted;
   }
 
-  enqueue(wavPath: string): Promise<PlayOutcome> {
+  enqueue(wavPath: string, liveId?: string): Promise<PlayOutcome> {
     return new Promise<PlayOutcome>((resolve) => {
-      this.queue.push({ wavPath, resolve });
+      this.queue.push({ wavPath, liveId, resolve });
       void this.pump();
     });
   }
 
-  pendingCount(): number {
-    return this.queue.length;
+  pendingCount(liveId?: string): number {
+    if (liveId === undefined) {
+      return this.queue.length;
+    }
+    // R61：原先无脑返回全局长度 —— 台本用它判「出声链路是否空闲」，
+    // 于是**别场次的积压会把本场台本卡死**（loopCaster 的让位超时就是这么来的）。
+    return this.queue.reduce((total, job) => (job.liveId === liveId ? total + 1 : total), 0);
   }
 
   stop(): void {

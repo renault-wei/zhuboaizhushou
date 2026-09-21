@@ -20,6 +20,14 @@ export interface RemoteSpeechQueue {
   /** 尚未被拉取的条数；带 liveId 时只数该场次 */
   size(liveId?: string): number;
   /**
+   * **只读**清单（R61 本地缓冲用）：按入队顺序返回待播条目的浅拷贝，最多 limit 条。
+   *
+   * 为什么只要清单、不要字节：手机据此「先知道有几条、再去逐条下载」。
+   * 下载仍走 `/next`（原子取出）—— 于是**清单被看到 ≠ 已被取走**，
+   * 两条 App 同时拉也不会重复播（`take` 从数组里 splice，天然去重）。
+   */
+  list(liveId?: string, limit?: number): RemoteSpeechJob[];
+  /**
    * 取走一条交付：不带 liveId = 全局队首（旧单商家口径）；
    * 带 liveId = 该场次最先入队的一条（保持场次内 FIFO，且不动其它场次积压）。
    */
@@ -78,6 +86,13 @@ class MemoryRemoteSpeechQueue implements RemoteSpeechQueue {
       return this.jobs.length;
     }
     return this.jobs.reduce((total, job) => (job.liveId === liveId ? total + 1 : total), 0);
+  }
+
+  list(liveId?: string, limit = 10): RemoteSpeechJob[] {
+    const matched =
+      liveId === undefined ? this.jobs : this.jobs.filter((job) => job.liveId === liveId);
+    // 浅拷贝：调用方拿到的是快照，不能借它改动队列内部状态
+    return matched.slice(0, Math.max(0, limit)).map((job) => ({ ...job }));
   }
 
   take(liveId?: string): RemoteSpeechJob | undefined {
