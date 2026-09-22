@@ -13,6 +13,17 @@
 
 const lastPullAtMs = new Map<string, number>();
 
+/**
+ * ★★C：助播机**正在取第几条**（客户端持游标时的进度）✓
+ *
+ * 为什么需要：C 之后循环位置在客户端 ✗ —— 服务端 loopCaster 不再运行，
+ *   工作台原先读的 loopCaster.status().currentSeq 恒为 0，
+ *   界面会显示成「未绑定循环台本」✗（2026-09-22 切到 client 时发现）。
+ * 而「客户端点名叫第几条」这件事**服务端本来就知道** —— /item 的请求里带着 ✓
+ * 直接记下来即可，而且它比生产端位置更准：**那就是听众真正在听的第几条** ✓
+ */
+const lastSeqAt = new Map<string, { seq: number; total: number }>();
+
 function nowMs(): number {
   return Date.now();
 }
@@ -38,14 +49,27 @@ export function secondsSinceSpeakerPull(liveId: string, atMs: number = nowMs()):
   return elapsed < 0 ? 0 : elapsed;
 }
 
+/** 记一次「客户端要第几条」（/api/out/speech/item 每次调用都调）✓ */
+export function recordSpeakerSeq(liveId: string, seq: number, total: number): void {
+  lastSeqAt.set(liveId, { seq, total });
+}
+
+/** 本场最近一次「客户端要第几条」；从未取过返回 null ✓ */
+export function lastSpeakerProgress(liveId: string): { seq: number; total: number } | null {
+  const entry = lastSeqAt.get(liveId);
+  return entry === undefined ? null : { ...entry };
+}
+
 /** 开播 / 收尾时清掉本场记录（避免 Map 随场次数无界增长） */
 export function forgetSpeakerHeartbeat(liveId: string): void {
   lastPullAtMs.delete(liveId);
+  lastSeqAt.delete(liveId);
 }
 
 /** 全部清空（服务关停 / 测试收尾） */
 export function disposeSpeakerHeartbeat(): void {
   lastPullAtMs.clear();
+  lastSeqAt.clear();
 }
 
 /** 当前有记录的场次数（排障用） */

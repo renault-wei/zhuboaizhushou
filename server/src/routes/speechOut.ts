@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { remoteSpeechQueue } from '../services/remoteSpeechQueue';
-import { recordSpeakerPull } from '../services/speakerHeartbeat';
+import { recordSpeakerPull, recordSpeakerSeq } from '../services/speakerHeartbeat';
 // ★C：按序号取音频 / 取插播 —— 服务端从「循环的驱动者」退回「合成器」✓
 import {
   DEFAULT_ITEM_GAP_SECONDS,
@@ -198,6 +198,7 @@ export const speechOutRoutes: FastifyPluginAsync = async (app) => {
         .code(500)
         .send({ error: 'SPEECH_SYNTH_FAILED', message: '本条语音合成失败' });
     }
+    recordSpeakerSeq(liveId, seq, items.length);
     const jobId = remoteSpeechQueue.registerFile(wavPath);
     return reply.send({
       seq,

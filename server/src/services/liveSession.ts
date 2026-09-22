@@ -5,7 +5,8 @@ import { LiveError, toLive } from './live';
 import { loopCaster } from './loopCaster';
 import { statsOf, type LiveInteractionStats } from './interactionStats';
 import { pendingReplyCount } from './pendingReplies';
-import { secondsSinceSpeakerPull } from './speakerHeartbeat';
+import {
+  lastSpeakerProgress, secondsSinceSpeakerPull } from './speakerHeartbeat';
 import { listLiveReplies, type LiveReplyRecord } from './replyLedger';
 import type { Live, LiveRow, LiveStatus } from './live';
 
@@ -158,7 +159,12 @@ export async function getLiveMonitor(userId: string, id: string): Promise<LiveMo
   const rawCount = countRows[0]?.count ?? 0;
   const danmakuCount = typeof rawCount === 'number' ? rawCount : Number(rawCount);
   // M5：循环播报状态（loopCaster 为内存态；进程重启不自动恢复属已知限制）
+  //
+  // ★★C：client 模式下 loopCaster **根本不跑** ✗ —— 位置改读
+  //   「助播机报回来的游标」（/item 的 seq）✓ 那就是听众真正在听的第几条，
+  //   比生产端位置更准 ✓（否则界面会显示成「未绑定循环台本」✗）
   const loopStatus = row.status === 'live' ? loopCaster.status(id) : null;
+  const clientProgress = row.status === 'live' ? lastSpeakerProgress(id) : null;
   return {
     status: row.status,
     videoSourceUrl: row.videoSourceUrl,
@@ -167,9 +173,13 @@ export async function getLiveMonitor(userId: string, id: string): Promise<LiveMo
     endedAt: row.endedAt ? row.endedAt.toISOString() : null,
     durationSeconds: computeDurationSeconds(row),
     danmakuCount,
-    loopRunning: loopStatus?.running ?? false,
-    loopRound: loopStatus?.round ?? 0,
-    loopCurrentSeq: loopStatus?.currentSeq ?? 0,
+    loopRunning: loopStatus?.running ?? clientProgress !== null,
+    loopRound:
+      loopStatus?.round ??
+      (clientProgress && clientProgress.total > 0
+        ? Math.ceil(clientProgress.seq / clientProgress.total)
+        : 0),
+    loopCurrentSeq: loopStatus?.currentSeq ?? clientProgress?.seq ?? 0,
     // 未绑定循环台本：开播也只回弹幕，工作台给提示（Q2 正常流程不出现）
     loopMissing: row.status === 'live' && !row.loopScriptId,
     // R24：内存态回复台账（开播清空、结束保留；进程重启即丢属已知限制）
