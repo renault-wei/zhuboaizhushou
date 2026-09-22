@@ -346,6 +346,24 @@ export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveS
   };
 }
 
+/**
+ * R69：解析本次部署实际使用的合成器。
+ *
+ * 为什么要把这段抽出来：**预生成必须与开播用同一个合成器** ✗ ——
+ * 若预生成走了 A 引擎、开播走 B 引擎，缓存永远不命中，白预热一场 ✓
+ * （缓存键里有音色与语速，但没有「哪个引擎」，所以引擎必须全局唯一。）
+ */
+export function resolveLiveSynth(): LocalWavSynth {
+  if (env.liveSpeaker.ttsProvider === 'volc' && env.volcTTS.apiKey) {
+    return volcTtsSynth;
+  }
+  // 回落本机 SAPI 音色：与 createLiveSpeaker 的默认取值同源，避免两处漂移
+  return new WindowsLocalSpeechSynth({
+    voice: env.liveSpeaker.localTtsVoice ?? DEFAULT_LOCAL_TTS_VOICE,
+    rate: LOCAL_TTS_RATE,
+  });
+}
+
 // 全局单例：交互引擎 onReply 出口共用。
 // LIVE_TTS_PROVIDER=volc 且火山 key 已配置时整体切到 volcTtsSynth（volcTTS.ts 内部自己读环境变量）；
 // 其余情况（默认 local / 未配 key）回退本机 SAPI 音色。
