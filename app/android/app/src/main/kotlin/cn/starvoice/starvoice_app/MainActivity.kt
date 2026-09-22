@@ -271,12 +271,29 @@ class MainActivity : FlutterActivity() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             return
         }
+        // ★★R76 修复（2026-09-22 用户实测「一直提示权限问题」）：
+        //   本方法挂在方法通道的 start 上 ✗，而保活服务会因为 App 重启、
+        //   被系统回收后重建等原因**被反复拉起** ✓ ——
+        //   于是每拉一次就申请一次权限，用户看到的就是**反复弹权限框** ✓。
+        //
+        //   正确行为：**每次进程只问一次** ✓。
+        //   被拒了也**不要反复骚扰** ✗ —— 系统本身在拒绝两次之后就当作
+        //   「不再询问」✓，我们不该抢在它前面反复弹。
+        //   真被拒了也不影响出声：前台服务照常运行，只是通知不可见 ✓。
+        if (notificationPermissionAsked) {
+            return
+        }
         val granted = checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
-        if (!granted) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_REQUEST)
+        if (granted) {
+            return
         }
+        notificationPermissionAsked = true
+        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_REQUEST)
     }
+
+    /** ★R76：本进程是否已经问过通知权限 —— 只问一次，不反复弹 ✓ */
+    private var notificationPermissionAsked = false
 
     companion object {
         private const val KEEP_ALIVE_CHANNEL = "starvoice/keep_alive"

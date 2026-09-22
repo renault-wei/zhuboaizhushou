@@ -484,16 +484,27 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     _persistPendingUrls();
     _playing = true;
     state = state.copyWith(status: AssistantSpeakerStatus.playing);
-    try {
-      // **不 await** ✓ —— 推进权在 onComplete 事件手里（见上方注释）
-      unawaited(_player.playUrl(url));
-    } catch (_) {
-      // 发起就失败（极少见）：放闸并继续，绝不卡住链条 ✓
-      _playing = false;
-      if (!_disposed && state.enabled) {
-        unawaited(_advancePlayback());
-      }
-    }
+    // ★★R76 修复（2026-09-22 真机实测「又停住了、但取号照常」）：
+    //
+    // 这里原先是 `try { unawaited(playUrl(url)); } catch (_) { 放闸 }` ✗ ——
+    // `unawaited` 会把 Future 的**异步失败直接吞掉** ✗，catch 只接得住**同步**抛出的异常 ✓
+    // 而 `playUrl` 内部（player.stop / player.play）失败都是**异步**的 ✗
+    //   → `_playing` 永远停在 true ✗
+    //   → `_advancePlayback` 此后**永久早退** ✗
+    //   → `onComplete` 也不会来（播放压根没开始 ✓）
+    //   → 现象：**一条都不播，但轮询/取号照常** ✓（服务端看到的就是「音频 GET 恒为 0」）
+    //
+    // 正确写法：把错误处理**挂在 Future 上** ✓（而不是靠外层 try）
+    unawaited(
+      _player.playUrl(url).catchError((Object error) {
+        // 异步失败：放闸并继续下一条，绝不卡住链条 ✓
+        // （单条失败不该让整场静音 —— 服务端 TTL 过了的链接就会走到这里 ✓）
+        _playing = false;
+        if (!_disposed && state.enabled) {
+          unawaited(_advancePlayback());
+        }
+      }),
+    );
   }
 
   /// 执行一轮「拉取 → 播放」：空队列等待、有播报则串行播完再等下一条。
