@@ -592,6 +592,13 @@ class FakeBackend implements HttpClientAdapter {
     if (options.method == 'GET' && path.endsWith('/api/out/speech/next')) {
       return _nextSpeechOut();
     }
+    // ★R72：音频下载端点（原生播放器按 URL 来取）—— 必须在 /next 之后判断 ✗
+    final audioMatch = RegExp(
+      r'/api/out/speech/audio/([^/?]+)',
+    ).firstMatch(path);
+    if (options.method == 'GET' && audioMatch != null) {
+      return _speechAudioOut(audioMatch.group(1)!);
+    }
     // T11 推流 / 会话子路径：/api/lives/:id 下的子路径（video / prepare /
     // stream-status / start / end / monitor / danmaku）需先于单段正则匹配，
     // 避免被 /api/lives/:id 的 GET/PATCH/DELETE 规则吞掉。
@@ -1162,8 +1169,9 @@ class FakeBackend implements HttpClientAdapter {
   /// 与服务端 MAX_PENDING_BATCH 对齐（R61）
   static const int _pendingBatchLimit = 10;
 
-  /// 远程出声队列拉取（镜像服务端 /api/out/speech/next）：空队列 204；
-  /// 有内容则交付队首 wav 字节并带 x-speech-job-id 头（交付即删除语义）。
+  /// ★R72：远程出声队列**取号**（镜像服务端 /api/out/speech/next）：
+  /// 空队列 204；有内容则回 `{jobId, audioUrl}` —— **不回字节** ✗
+  /// 字节改由 `_speechAudioOut(jobId)`（对应 /api/out/speech/audio/:jobId）提供 ✓
   ResponseBody _nextSpeechOut() {
     if (failSpeechOut) {
       return _serverError('出声队列服务暂不可用');
@@ -1173,15 +1181,29 @@ class FakeBackend implements HttpClientAdapter {
     }
     final bytes = speechOut.removeAt(0);
     speechOutPulledCount += 1;
+    final jobId = 'speech-mock-${speechOutPulledCount.toString().padLeft(3, '0')}';
+    _speechAudio[jobId] = bytes;
+    return _jsonResponse(<String, dynamic>{
+      'jobId': jobId,
+      'liveId': null,
+      'audioUrl': '/api/out/speech/audio/$jobId',
+    });
+  }
+
+  /// R72：已发出的音频（jobId → 字节），对应服务端的 TTL 内可重复 GET ✓
+  final Map<String, Uint8List> _speechAudio = <String, Uint8List>{};
+
+  /// R72：音频下载端点（镜像 /api/out/speech/audio/:jobId）
+  ResponseBody _speechAudioOut(String jobId) {
+    final bytes = _speechAudio[jobId];
+    if (bytes == null) {
+      // 与服务端一致：过期 / 不存在都是 404 ✓
+      return _jsonResponse(<String, dynamic>{'error': 'SPEECH_AUDIO_NOT_FOUND'}, 404);
+    }
     return ResponseBody.fromBytes(
       bytes,
       200,
-      headers: <String, List<String>>{
-        'content-type': <String>['audio/wav'],
-        'x-speech-job-id': <String>[
-          'speech-mock-${speechOutPulledCount.toString().padLeft(3, '0')}',
-        ],
-      },
+      headers: <String, List<String>>{'content-type': <String>['audio/wav']},
     );
   }
 

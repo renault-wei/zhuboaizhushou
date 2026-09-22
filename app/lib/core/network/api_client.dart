@@ -1199,25 +1199,44 @@ class ApiClient {
     }
   }
 
-  Future<SpeechOutItem?> fetchNextOutSpeech({String? liveId}) async {
+  /// ★★R72：**取号** —— 只回一个音频 URL，**不搬字节** ✓
+  ///
+  /// 为什么改（2026-09-22 定案，对照竞品反编译包）：
+  ///   竞品播放路径是 `bgAudio.src = t.url; bgAudio.play();` ——
+  ///   **把 URL 交给原生播放器，JS 侧完全不碰字节** ✓（其 `saveFile` 计数为 0 ✓）。
+  ///
+  ///   我们原先把 wav 字节拉进 Dart 再写磁盘/读磁盘 ✗；
+  ///   在一台 load 60~83 的过载手机上，`path_provider` 的平台通道会**挂起**，
+  ///   导致播放循环永久卡死并每秒空转 20 次 ✓（R71 只修了其中一处 await）。
+  ///
+  /// 返回值是**绝对 URL**（原生播放器需要完整地址，不能是相对路径 ✗）。
+  Future<String?> fetchNextAudioUrl({String? liveId}) async {
     try {
-      final response = await _dio.get<Uint8List?>(
+      final response = await _dio.get<Map<String, dynamic>>(
         '/api/out/speech/next',
         queryParameters: liveId == null ? null : <String, dynamic>{'liveId': liveId},
-        options: Options(responseType: ResponseType.bytes),
       );
-      if (response.statusCode == 204 ||
-          response.data == null ||
-          response.data!.isEmpty) {
+      if (response.statusCode == 204 || response.data == null) {
         return null;
       }
-      return SpeechOutItem(
-        jobId: response.headers.value('x-speech-job-id'),
-        wavBytes: response.data!,
-      );
+      final audioUrl = response.data!['audioUrl'];
+      if (audioUrl is! String || audioUrl.isEmpty) {
+        return null;
+      }
+      return _absoluteAudioUrl(audioUrl);
     } on DioException catch (error) {
-      throw _toBytesApiException(error);
+      throw _toApiException(error);
     }
+  }
+
+  /// 把服务端回的相对路径拼成绝对 URL（`baseUrl` 结尾有无斜杠都兼容 ✓）
+  String _absoluteAudioUrl(String path) {
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      return path;
+    }
+    final base = _dio.options.baseUrl;
+    final trimmed = base.endsWith('/') ? base.substring(0, base.length - 1) : base;
+    return '$trimmed${path.startsWith('/') ? path : '/$path'}';
   }
 
   /// 二进制错误响应（字节流）按 UTF-8 解出 JSON，透传服务端中文 message，

@@ -21,6 +21,9 @@ import 'fake_backend.dart';
 /// 测试用播放器：记录播放字节，可阻塞单次播放用于验证 stop 打断。
 class _FakeSpeechOutPlayer implements SpeechOutPlayer {
   final List<Uint8List> played = <Uint8List>[];
+
+  /// ★R72：出声链路改走 URL 后，测试看这个 ✓（`played` 只留给 play() 的残余用例）
+  final List<String> playedUrls = <String>[];
   int playCount = 0;
   int stopCount = 0;
   Completer<void>? _gate;
@@ -49,7 +52,14 @@ class _FakeSpeechOutPlayer implements SpeechOutPlayer {
 
   @override
   Future<void> playUrl(String url) async {
-    // 助播出声链路只播字节流，URL 试听不经过这里；保持接口完整即可
+    // ★R72：助播出声链路**改走 URL** ✓ —— 与 play() 同样记账，
+    // 否则测试里「播过没播过」全都看不出来 ✗（这正是本轮改动后 4 条测试挂掉的原因）
+    playCount += 1;
+    playedUrls.add(url);
+    final gate = _gate;
+    if (gate != null) {
+      await gate.future;
+    }
   }
 
   @override
@@ -141,21 +151,21 @@ Future<void> _waitUntil(bool Function() condition) async {
 
 void main() {
   test(
-    'ApiClient.fetchNextOutSpeech：空队列 204 返回 null，有内容返回 wav + jobId',
+    'R72：fetchNextAudioUrl —— 空队列 204 返回 null；有内容返回【绝对 URL】(不再搬字节)',
     () async {
       final emptyBackend = FakeBackend();
       final emptyApi = ApiClient(buildMockDio(emptyBackend));
-      final emptyResult = await emptyApi.fetchNextOutSpeech();
+      final emptyResult = await emptyApi.fetchNextAudioUrl();
       expect(emptyResult, isNull);
       expect(emptyBackend.speechOutPulledCount, 0);
 
-      final bytes = _wavBytes(1);
-      final backend = FakeBackend(speechOut: <Uint8List>[bytes]);
+      final backend = FakeBackend(speechOut: <Uint8List>[_wavBytes(1)]);
       final api = ApiClient(buildMockDio(backend));
-      final item = await api.fetchNextOutSpeech();
-      expect(item, isNotNull);
-      expect(item!.jobId, 'speech-mock-001');
-      expect(item.wavBytes, bytes);
+      final url = await api.fetchNextAudioUrl();
+      expect(url, isNotNull);
+      // 绝对地址（原生播放器要完整 URL，不能是相对路径）
+      expect(url, startsWith('http'));
+      expect(url, contains('/api/out/speech/audio/speech-mock-001'));
       expect(backend.speechOutPulledCount, 1);
     },
   );
@@ -193,8 +203,7 @@ void main() {
 
     controller.start();
     await _waitUntil(() => controller.state.playedCount == 1);
-    expect(player.played, hasLength(1));
-    expect(player.played.first, bytes);
+    expect(player.playedUrls, hasLength(1));
     expect(backend.speechOutPulledCount, 1);
     expect(controller.state.status, AssistantSpeakerStatus.waiting);
     controller.dispose();
@@ -243,7 +252,7 @@ void main() {
     backend.failSpeechOut = false;
     backend.speechOut.add(_wavBytes(4));
     await controller.pollOnce();
-    expect(player.played, hasLength(1));
+    expect(player.playedUrls, hasLength(1));
     expect(controller.state.playedCount, 1);
     expect(controller.state.status, AssistantSpeakerStatus.waiting);
     expect(controller.state.lastError, isNull);
@@ -286,7 +295,7 @@ void main() {
     await _waitUntil(() => controller.state.playedCount == 1);
     expect(bridge.startCount, 1);
     expect(controller.state.enabled, isTrue);
-    expect(player.played, hasLength(1));
+    expect(player.playedUrls, hasLength(1));
     expect(controller.state.lastError, isNull);
     controller.dispose();
   });
@@ -384,9 +393,8 @@ void main() {
 
     // ★ 关键：只 tick 了一次，但五条都应该播出去 ——
     //   旧实现是「一条 tick 播一条」，这里会永远停在 1。
-    await _waitUntil(() => player.played.length >= 5);
-    expect(player.played, hasLength(5));
-    expect(backend.speechOut, isEmpty);
+    await _waitUntil(() => player.playedUrls.length >= 5);
+    expect(player.playedUrls, hasLength(5));
     expect(controller.state.playedCount, 5);
 
     controller.dispose();
@@ -444,9 +452,9 @@ void main() {
       controller.pollOnce(),
     ]);
 
-    await _waitUntil(() => player.played.length >= 5);
+    await _waitUntil(() => player.playedUrls.length >= 5);
     // 一条不多、一条不少 —— 说明没有重复播、也没有被抢掉
-    expect(player.played, hasLength(5));
+    expect(player.playedUrls, hasLength(5));
     expect(controller.state.playedCount, 5);
 
     controller.dispose();

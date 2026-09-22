@@ -88,25 +88,20 @@ export const speechOutRoutes: FastifyPluginAsync = async (app) => {
    *   两者语义不同，分开后 /next 保持原子的出队语义 ✓，
    *   而播放器侧的重试/预取都不会干扰队列 ✓
    */
-  // ★注意：**不走 preHandler 鉴权** ✗ —— 原生播放器（MediaPlayer / ExoPlayer）
-  //   发不了自定义请求头 ✓，所以鉴权凭证只能放查询串 ✓。
-  //   这里接受 `?token=<JWT>`，与 `Authorization: Bearer` 同源同校验 ✓
+  // ★★R72：**这是个「能力型 URL」（capability URL），刻意不走 Bearer 鉴权** ✓
+  //
+  // 为什么：原生播放器（Android MediaPlayer / ExoPlayer）**发不了自定义请求头** ✗，
+  //   所以凭证只能进查询串 ✓ —— 但那会把 JWT 泄进日志 / Referer，**是个更糟的做法** ✗。
+  //
+  // 为什么可以不用凭证：
+  //   · jobId 是 **UUIDv4**（不可枚举、不可猜）✓
+  //   · 文件只活 **10 分钟**（TTL 回收 ✓）
+  //   · 内容是**一段几分钟内就会过期的 TTS 语音**，不含用户隐私 ✓
+  //   —— 这与「对象存储的预签名 URL」是同一类安全模型 ✓
+  //
+  // 要收紧时的升级路径（本轮不做）：
+  //   换成服务端签名的短时链接（`?exp=..&sig=..`），把 TTL 与签名绑在一起 ✓
   app.get(`${SPEECH_AUDIO_PATH}/:jobId`, async (request, reply) => {
-    const query = request.query as Record<string, unknown>;
-    const token = typeof query.token === 'string' ? query.token : '';
-    try {
-      await request.jwtVerify({ onlyCookie: false });
-    } catch {
-      // header 没有就试查询串（jwtVerify 默认只认 header）
-      if (token === '') {
-        return reply.code(401).send({ error: 'UNAUTHORIZED', message: '缺少访问凭证' });
-      }
-      try {
-        app.jwt.verify(token);
-      } catch {
-        return reply.code(401).send({ error: 'UNAUTHORIZED', message: '访问凭证无效或已过期' });
-      }
-    }
     const params = request.params as { jobId?: string };
     const jobId = typeof params.jobId === 'string' ? params.jobId.trim() : '';
     if (jobId === '') {
