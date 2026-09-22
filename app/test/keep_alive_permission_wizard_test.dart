@@ -2,6 +2,8 @@
 /// 分步推进、按钮随授权状态切换「下一步 / 马上设置」、路径文案、状态行。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -208,6 +210,49 @@ void main() {
 
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getBool(keepAliveWizardDoneKey), isTrue);
+  });
+
+  testWidgets('R77：预检挂住也要出弹窗（平台通道会挂起，绝不能点了没反应）', (tester) async {
+    // 永不完成 —— 模拟真机上「平台通道既不返回也不抛错」✓（R72 实测过的形状）
+    final hanging = Completer<bool?>();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => Center(
+              child: TextButton(
+                key: const Key('openWizard'),
+                onPressed: () => showKeepAlivePermissionWizard(
+                  context,
+                  actions: KeepAlivePermissionActions(
+                    check: (step) => hanging.future,
+                    open: (step) async {},
+                  ),
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const Key('openWizard')));
+    // 超时到点之后**必须**出弹窗（没有超时的话这里会永远停在 0 个弹窗 ✗）
+    await tester.pump(
+      keepAliveProbeTimeout + const Duration(milliseconds: 300),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('keepAlivePermissionWizard')), findsOneWidget);
+    // 挂起按「未知」→ 4 步都还在（绝不误报成已放行 ✓）
+    expect(find.textContaining('第 1 / 4 步'), findsOneWidget);
+
+    // 弹窗自己那次复查（initState → _refresh）同样挂住 → 再推一轮让它的超时落地，
+    // 否则收尾会报「A Timer is still pending」✗（那只定时器属于 `Future.timeout`）
+    await tester.pump(
+      keepAliveProbeTimeout + const Duration(milliseconds: 300),
+    );
+    await tester.pumpAndSettle();
   });
 
   testWidgets('R77：查不到的步骤若查询抛错，按「未知」处理（不误报成已放行）', (tester) async {

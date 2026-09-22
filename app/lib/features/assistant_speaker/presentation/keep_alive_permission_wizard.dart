@@ -122,22 +122,51 @@ String wizardStepLabel(int index, int total) => '第 ${index + 1} / $total 步';
 /// 记一笔之后，下次再打开向导就不必让他白走一遍了 ✓
 const String keepAliveWizardDoneKey = 'assistant_keep_alive_wizard_done';
 
+/// ★R77 自查补：预检的**超时上限**。
+///
+/// 为什么必须有（2026-09-22 真机教训，同 R72 那条）：这些预检全都要**过平台通道**
+///   （KeepAliveBridge → MethodChannel，以及 SharedPreferences），
+///   而在一台过载手机上，平台通道会**挂起** —— 既不返回也不抛错 ✗。
+///   没有超时的话，用户点「权限与保活设置」的结果是**什么都不发生** ✗ ——
+///   正是最难查的一类故障（R69 的磁盘库存就是这么把整条出声链路挂死的 ✓）。
+///
+/// 超时的语义一律记作「**未知**」→ 该步照常列出来引导 ✓ ——
+///   宁可多让用户看一眼，也绝不把没放行的当成已放行 ✓
+const Duration keepAliveProbeTimeout = Duration(milliseconds: 1200);
+
 Future<bool> _loadWizardDone() async {
   try {
-    final prefs = await SharedPreferences.getInstance();
+    // ★R77 自查补：读偏好也走平台通道 → 同样带超时，否则向导永远不出现 ✗
+    final prefs = await SharedPreferences.getInstance()
+        .timeout(keepAliveProbeTimeout);
     return prefs.getBool(keepAliveWizardDoneKey) ?? false;
   } catch (_) {
-    // 读不到最多是下次多引导一遍，不影响出声 ✓
+    // 读不到（含超时）最多是下次多引导一遍，不影响出声 ✓
     return false;
   }
 }
 
 Future<void> _markWizardDone() async {
   try {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(keepAliveWizardDoneKey, true);
+    final prefs = await SharedPreferences.getInstance()
+        .timeout(keepAliveProbeTimeout);
+    await prefs
+        .setBool(keepAliveWizardDoneKey, true)
+        .timeout(keepAliveProbeTimeout);
   } catch (_) {
     // 同上：存不下不影响出声 ✓
+  }
+}
+
+/// 探一步：**失败与超时一律按「未知」** → 该步照常引导 ✓（绝不误报成已放行）
+Future<bool?> _probe(
+  KeepAlivePermissionActions actions,
+  KeepAlivePermissionStep step,
+) async {
+  try {
+    return await actions.check(step).timeout(keepAliveProbeTimeout);
+  } catch (_) {
+    return null;
   }
 }
 
@@ -150,25 +179,25 @@ Future<void> _markWizardDone() async {
 ///
 /// 判定口径：**只有 `true` 才算放行** ——
 ///   `false`（确实没给）与 `null`（系统不给查，如自启动）都还要引导 ✓
+/// ★R77 自查补：这些查询**并发**跑，且**每一步都带超时** ✓ ——
+///   · 串行：4 步各过一次平台通道，坏手机上最坏要等 4 倍 ✗
+///   · 无超时：通道一挂，弹窗**永远不出现**（点了没反应）✗
 Future<List<KeepAlivePermissionStep>> pendingKeepAlivePermissionSteps(
   KeepAlivePermissionActions actions, {
   bool autoStartConfirmed = false,
 }) async {
+  final steps = KeepAlivePermissionStep.values
+      .where(
+        // 自启动：系统查不到，只能认「用户曾走完过向导」这一笔 ✓
+        (step) =>
+            !(step == KeepAlivePermissionStep.autoStart && autoStartConfirmed),
+      )
+      .toList(growable: false);
+  final results = await Future.wait(steps.map((step) => _probe(actions, step)));
   final pending = <KeepAlivePermissionStep>[];
-  for (final step in KeepAlivePermissionStep.values) {
-    // 自启动：系统查不到，只能认「用户曾走完过向导」这一笔 ✓
-    if (step == KeepAlivePermissionStep.autoStart && autoStartConfirmed) {
-      continue;
-    }
-    bool? granted;
-    try {
-      granted = await actions.check(step);
-    } catch (_) {
-      // 查询失败按「未知」处理，不误报成已放行 ✓
-      granted = null;
-    }
-    if (granted != true) {
-      pending.add(step);
+  for (var index = 0; index < steps.length; index += 1) {
+    if (results[index] != true) {
+      pending.add(steps[index]);
     }
   }
   return pending;
@@ -256,13 +285,9 @@ class _WizardDialogState extends State<_WizardDialog> {
 
   Future<void> _refresh() async {
     setState(() => _checking = true);
-    bool? granted;
-    try {
-      granted = await widget.actions.check(_step);
-    } catch (_) {
-      // 查询失败按「未知」处理，不误报成未授权
-      granted = null;
-    }
+    // ★R77 自查补：同样带超时 —— 平台通道一挂，「检查中…」会永远转下去 ✗
+    //   （超时按「未知」处理 → 按钮回落成「去设置」，用户仍能往下走 ✓）
+    final granted = await _probe(widget.actions, _step);
     if (!mounted) {
       return;
     }
