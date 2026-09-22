@@ -91,6 +91,18 @@ export const env = {
     ttsProvider: optionalEnv('LIVE_TTS_PROVIDER') ?? 'local',
   },
 
+  /**
+   * ★★C：**循环位置由谁持有** —— `server`（默认）| `client`。
+   *
+   *   server：服务端 loopCaster 灌队列，客户端取队首（旧口径）
+   *   client：**客户端持游标**，按序号走 /api/out/speech/item 点名要货 ✓
+   *           服务端退回「合成器」：给 seq 换一段音频；插播走 /insertion 按需取
+   *
+   * 为什么默认 server：切到 client 需要**客户端已就位** ✗ ——
+   *   否则没人按序号取货，直播会没有台本声。开关化之后切 / 回滚都是一条命令 ✓
+   */
+  loopDriver: optionalEnv('LIVE_LOOP_DRIVER') === 'client' ? 'client' : 'server',
+
   // 火山引擎（豆包语音）TTS：G5 商用音色旁路（CosyVoice 降为备选）
   // 适配器已落地（volcTTS.ts），key 已接线：liveSpeaker 在 LIVE_TTS_PROVIDER=volc 且 key 非空时切换，
   // 其余情况回退本机 SAPI 保出声（火山模型服务开通前请保持默认 local）。

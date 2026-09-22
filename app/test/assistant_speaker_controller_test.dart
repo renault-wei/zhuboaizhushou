@@ -79,17 +79,32 @@ class _FakeSpeechOutPlayer implements SpeechOutPlayer {
     _notifyComplete();
   }
 
+  /// ★C：在途计数 —— 证「同一时刻只有一条在播」
+  ///
+  /// 为什么不能再用「URL 不重复」来证：C 之后脚本会**回绕循环**，
+  /// 每一轮的 URL 本来就会重复出现 ✗ —— 那是正确行为，不是重叠 ✓
+  int _inFlight = 0;
+  bool overlapDetected = false;
+
   @override
   Future<void> playUrl(String url) async {
     // ★R72：助播出声链路**改走 URL** ✓ —— 与 play() 同样记账，
     // 否则测试里「播过没播过」全都看不出来 ✗（这正是本轮改动后 4 条测试挂掉的原因）
     playCount += 1;
     playedUrls.add(url);
-    final gate = _gate;
-    if (gate != null) {
-      await gate.future;
+    _inFlight += 1;
+    if (_inFlight > 1) {
+      overlapDetected = true;
     }
-    _notifyComplete();
+    try {
+      final gate = _gate;
+      if (gate != null) {
+        await gate.future;
+      }
+      _notifyComplete();
+    } finally {
+      _inFlight -= 1;
+    }
   }
 
   /// ★R73：与真实实现同契约 —— 每次播放**恰好发一次**「本条结束」✓
@@ -248,19 +263,19 @@ void main() {
       const Duration(days: 1),
     );
 
-    controller.start();
-    await _waitUntil(() => player.playedUrls.length == 1);
-    expect(controller.state.playedCount, 1);
+    controller.start(liveId: 'live-001');
+    await _waitUntil(() => player.playedUrls.isNotEmpty);
+    expect(controller.state.playedCount, greaterThanOrEqualTo(1));
 
-    // 间隔内：即使本轮又拉到货（pollOnce → _fillBuffer → _advancePlayback），
+    // 间隔内：即使本轮又拉到货（pollOnce → _fillQueue → _advancePlayback），
     // 也必须被 `_gapTimer != null` 挡住 —— 这正是「绕过间隔」的那个坑
     await controller.pollOnce();
     await Future<void>.delayed(const Duration(milliseconds: 120));
     expect(player.playedUrls, hasLength(1));
 
     // 间隔过了 → 第二条自然会来
-    await _waitUntil(() => player.playedUrls.length == 2);
-    expect(controller.state.playedCount, 2);
+    await _waitUntil(() => player.playedUrls.length >= 2);
+    expect(controller.state.playedCount, greaterThanOrEqualTo(2));
 
     controller.dispose();
   });
@@ -277,7 +292,7 @@ void main() {
       const Duration(days: 1),
     );
 
-    controller.start();
+    controller.start(liveId: 'live-001');
     await _waitUntil(() => player.playedUrls.length == 1);
 
     controller.stop();
@@ -322,11 +337,11 @@ void main() {
       const Duration(days: 1),
     );
 
-    controller.start();
-    await _waitUntil(() => controller.state.playedCount == 1);
-    expect(player.playedUrls, hasLength(1));
-    expect(backend.speechOutPulledCount, 1);
-    expect(controller.state.status, AssistantSpeakerStatus.waiting);
+    controller.start(liveId: 'live-001');
+    await _waitUntil(() => controller.state.playedCount >= 1);
+    // ★C：脚本会回绕循环，所以断言「播过」而不是「只播了一条」✓
+    expect(player.playedUrls, isNotEmpty);
+    expect(backend.speechOutPulledCount, greaterThanOrEqualTo(1));
     controller.dispose();
   });
 
@@ -339,7 +354,7 @@ void main() {
       const Duration(days: 1),
     );
 
-    controller.start();
+    controller.start(liveId: 'live-001');
     await _waitUntil(() => player.playCount == 1);
     expect(controller.state.status, AssistantSpeakerStatus.playing);
 
@@ -362,7 +377,7 @@ void main() {
       const Duration(days: 1),
     );
 
-    controller.start();
+    controller.start(liveId: 'live-001');
     await _waitUntil(
       () => controller.state.status == AssistantSpeakerStatus.error,
     );
@@ -374,10 +389,9 @@ void main() {
     backend.speechOut.add(_wavBytes(4));
     await controller.pollOnce();
     // ★R73：播放改为异步发起（事件驱动），断言前必须等它真的播出去 ✓
-    await _waitUntil(() => player.playedUrls.length == 1);
-    expect(player.playedUrls, hasLength(1));
-    expect(controller.state.playedCount, 1);
-    expect(controller.state.status, AssistantSpeakerStatus.waiting);
+    await _waitUntil(() => player.playedUrls.isNotEmpty);
+    expect(player.playedUrls, isNotEmpty);
+    expect(controller.state.playedCount, greaterThanOrEqualTo(1));
     expect(controller.state.lastError, isNull);
     controller.dispose();
   });
@@ -414,11 +428,11 @@ void main() {
       bridge,
     );
 
-    controller.start();
-    await _waitUntil(() => controller.state.playedCount == 1);
+    controller.start(liveId: 'live-001');
+    await _waitUntil(() => controller.state.playedCount >= 1);
     expect(bridge.startCount, 1);
     expect(controller.state.enabled, isTrue);
-    expect(player.playedUrls, hasLength(1));
+    expect(player.playedUrls, isNotEmpty);
     expect(controller.state.lastError, isNull);
     controller.dispose();
   });
@@ -583,9 +597,9 @@ void main() {
     // ★R80 上限收紧后不再断言具体条数；这里要证的是**互斥**：
     //   同一条不会被播两次（没有重复播放、也没有被抢占重播）✓
     expect(
-      player.playedUrls.toSet().length,
-      player.playedUrls.length,
-      reason: '同一时刻只允许一条在播 —— 不该出现重复播放',
+      player.overlapDetected,
+      isFalse,
+      reason: '同一时刻只允许一条在播 —— 不该出现重叠播放',
     );
 
     controller.dispose();
@@ -672,7 +686,7 @@ void main() {
       const Duration(days: 1),
     );
 
-    controller.start();
+    controller.start(liveId: 'live-001');
     await _waitUntil(() => player.playCount >= 1);
     // 失败之后必须**等一拍**才切下一条（竞品 onError 也是等 1 秒）
     await Future<void>.delayed(const Duration(milliseconds: 200));

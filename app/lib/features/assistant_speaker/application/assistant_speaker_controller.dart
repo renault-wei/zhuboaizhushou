@@ -176,6 +176,17 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   ///  onComplete 一到就立刻播下一条，听感就是「循环过快、没有等待」✓）
   final List<SpeechAudioJob> _pending = <SpeechAudioJob>[];
 
+  /// ★★C：**台本游标**（从 1 开始）—— 循环位置现在归客户端 ✓
+  ///
+  /// 与旧口径的根本区别：以前「第几条」由服务端生产端决定 ✗，
+  /// 客户端只是把灌进来的队首取走；于是显示的位置 ≠ 听众的位置，
+  /// 插播也只能排在生产端当时的队尾 ✓
+  /// 现在**客户端点名叫第 _seq 条**（对照竞品：makeAudio 的请求体带 xuhao ✓）：
+  ///   · 取到一条台本 → _seq 加 1（**在取到时就推进**，避免重复取同一条 ✓）
+  ///   · 取到越界（409）→ 回绕到 1（竞品用 last_audio_xuhao 回绕，同义 ✓）
+  ///   · 插播**不推进**它 ✓（插播不占台本的位置）
+  int _seq = 1;
+
   // 【历史】R69~R71 曾在此处引入一个**磁盘库存**（SpeechOutStore），
   //   用于「播完不丢、后台拉不动时用本地存货顶着播」。
   //   它在 2026-09-22 被整套删除，原因是**架构错位** ✗：
@@ -253,6 +264,8 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
       return;
     }
     _liveId = liveId;
+    // ★C：新一次开播从第 1 条开始；**本场中断恢复**时由 _restorePendingUrls 把游标带回来 ✓
+    _seq = 1;
     // ★R68：把「本次出声属于哪个场次」落到本地 ——
     // 应用级监督者（SpeakerSupervisor）靠它跨页面、跨进程重启把出声拉回来 ✓
     unawaited(_rememberLiveId(liveId));
@@ -304,8 +317,11 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     // ★R78：连**场次**一起存 —— 恢复时必须能判断「这还是本场的货吗」✗
     //   对照竞品：它的 store_audio / audioArray 是**这一轮**的库存，
     //   从不把上一轮的残句当本场待播 ✓
+    // ★C：连**游标**一起存 —— 本场中断恢复时能接着从第 seq 条播，
+    //   而不是把本地那两条重播一遍 ✓（比 R80 之前的口径又准了一层）
     final snapshot = jsonEncode(<String, Object?>{
       'liveId': _liveId,
+      'seq': _seq,
       'items': _pending.map((job) => job.toJson()).toList(growable: false),
     });
     unawaited(() async {
@@ -347,6 +363,11 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
       if (decoded is! Map || decoded['liveId']?.toString() != _liveId) {
         await prefs.remove(_pendingUrlsKey);
         return;
+      }
+      // ★C：游标一并带回来（同一个场次的续播）✓
+      final restoredSeq = decoded['seq'];
+      if (restoredSeq is int && restoredSeq >= 1) {
+        _seq = restoredSeq;
       }
       final items = decoded['items'];
       if (items is! List) {
@@ -443,38 +464,67 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   }
 
   ///
-  /// R61：把本地缓冲尽量填满 —— 一次问清单，再按清单逐条下载。
+  /// ★★C：**按序号补货** —— 循环位置在客户端了 ✓
   ///
-  /// 为什么是「问清单 + 逐条下载」而不是「直接拉 N 条」：
-  /// 下载走的是 `/next`（服务端**原子取出**），所以清单只是「有几条」的快照，
-  /// 两条 App 同时拉也不会重复播。
-  Future<void> _fillBuffer() async {
+  /// 与旧 _fillBuffer（问清单 → 逐条 /next 取**队首**）的根本区别：
+  ///   旧：服务端灌队列、客户端取队首 ✗ ——「第几条」由**生产端**决定，
+  ///       于是显示的位置 ≠ 听众的位置，插播也只能排在生产端当时的队尾 ✓
+  ///   新：**客户端点名叫第 _seq 条** ✓ —— 位置归自己，插播插到下一条 ✓
+  ///
+  /// 顺序固定为：**先问插播，没有才取台本** ✓
+  ///   （竞品 nextsuia() 也是先看插播队列 suiyyin_fu、再看主循环 audioArray ✓）
+  Future<void> _fillQueue() async {
     if (_pending.length >= _bufferMaxItems) {
       return;
     }
-    final pending = await _api.fetchPendingOutSpeech(liveId: _liveId);
-    if (pending.isEmpty) {
+    final liveId = _liveId;
+    if (liveId == null) {
+      // 没有场次就无从「按序号要货」——回到监听态等着 ✓
       state = state.copyWith(
         status: AssistantSpeakerStatus.waiting,
         lastError: null,
       );
       return;
     }
-    var fetched = 0;
-    while (_pending.length < _bufferMaxItems && fetched < pending.length) {
-      // ★R72：只取 URL，**不取字节** ✓ —— 字节由原生播放器拉
-      // ★R77：连同「本条播完后的间隔」一起带回来 ✓
-      final job = await _api.fetchNextSpeechJob(liveId: _liveId);
-      if (job == null) {
-        // 清单说还有，但已被别的取走 / 已过期 —— 本次到此为止
-        break;
-      }
-      _pending.add(job);
-      fetched += 1;
-    }
-    if (fetched > 0) {
+
+    // ① 插播优先：放到**队首**，且不动游标 ✓
+    final insertion = await _api.fetchSpeechInsertion(liveId: liveId);
+    if (insertion != null) {
+      _pending.insert(0, insertion);
       _persistPendingUrls();
+      unawaited(_advancePlayback());
+      return;
     }
+
+    // ② 台本：按游标点名要货
+    final result = await _api.fetchSpeechItem(liveId: liveId, seq: _seq);
+    if (result.outOfRange) {
+      // 走到本场台本末尾 → 回绕到第 1 条（一轮结束，与竞品 last_audio_xuhao 回绕同义）✓
+      _seq = 1;
+      _persistPendingUrls();
+      return;
+    }
+    if (result.noScript) {
+      // 本场没绑台本 → 只播插播，不是错误 ✓
+      state = state.copyWith(
+        status: AssistantSpeakerStatus.waiting,
+        lastError: null,
+      );
+      return;
+    }
+    final job = result.job;
+    if (job == null) {
+      state = state.copyWith(
+        status: AssistantSpeakerStatus.waiting,
+        lastError: null,
+      );
+      return;
+    }
+    _pending.add(job);
+    // ★在**取到**时就推进游标 —— 否则这条还在本地队列里时，
+    //   下一次补货会把同一条再要一遍 ✗（越界即回绕，天然不会取重复 ✓）
+    _seq += 1;
+    _persistPendingUrls();
     // 有货了 → 主动推进一条 ✓
     // （事件驱动下没有「空闲等待中的循环」可叫醒 ✗ —— 旧实现靠 _wakeIdle 唤醒它）
     unawaited(_advancePlayback());
@@ -526,6 +576,10 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
       // ★★R77：**先等本条自己的间隔，再播下一条** ✓
       //   （竞品：`onEnded` → `setTimeout(Endlater, n)`，见 app-service.js:5679）
       _scheduleNextAfterGap();
+      // ★C：播完**立刻补一次货** —— 插播（AI 回复）要「接得住」，
+      //   不该等下一次 1 秒轮询才被发现 ✓（竞品是服务端 socket 推，
+      //   我们靠这一下把发现延迟压到最小 ✓）
+      unawaited(pollOnce());
     });
     unawaited(_advancePlayback());
   }
@@ -605,6 +659,10 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
         //   听感就是「音频过快」✓（2026-09-22 用户实测）
         _currentGapSeconds = _failedPlayGapSeconds;
         _scheduleNextAfterGap();
+        // ★C 自查补：失败也要**补货** —— 否则本地队列空了就再也没人填 ✗
+        //   （旧模型下 _fillBuffer 一次拉 2 条，失败后手里还剩一条；
+        //     C 之后一次只取一条，失败这条就是队列的最后一条 ✓）
+        unawaited(pollOnce());
       }),
     );
   }
@@ -631,7 +689,7 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
       // 注意与旧实现的区别：旧的是「拉一条 → 播一条 → 再拉」，**拉被限流时播放一起被拖慢**；
       // 现在是「一次填一批 → 播一条」，剩下的由播放循环在 tick 之间继续播完 ——
       // 所以定时器被限流到十几秒一次，缓冲里的音频照样能连续出去。
-      await _fillBuffer();
+      await _fillQueue();
       // ★R73：**只发起、不等待** ✓ —— 推进由 onComplete 事件负责
       // （旧实现这里 await 播放，于是「轮询」与「播放循环」成了两个驱动源 ✗）
       unawaited(_advancePlayback());

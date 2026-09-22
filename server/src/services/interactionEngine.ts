@@ -7,6 +7,7 @@ import type { LiveStatus } from './live';
 import { replyProvider, type GenerateReplyInput } from './reply';
 import { classifyDanmaku, isWorthReplying } from './danmakuQuality';
 import { buildBuiltinFaq, matchFaq } from './faq';
+import { env } from '../config/env';
 import { loopCaster } from './loopCaster';
 import { enqueuePendingReply } from './pendingReplies';
 import {
@@ -523,7 +524,11 @@ export const interactionEngine = createInteractionEngine({
     // R42：台本在跑 → 回复**入队**，由台本在句间空档逐条放出。
     // 这是「节奏」的硬保障：一个空档最多放一条，台本不会被无限让位挤停
     // （旧机制是「直接抢播 + 台本无超时让位」，回复音频长于回复间隔时会把台本饿死）。
-    if (loopCaster.status(reply.liveId)?.running === true) {
+    // ★★C：client 模式下 loopCaster 不跑 ✗ ——
+    //   若还按「台本在跑才入队」，回复会走 liveSpeaker.speak 直接进远程队列，
+    //   而 C 之后客户端**不再读那个队列** → 回复直接丢失 ✗
+    //   所以 client 模式下**一律入队**，由客户端每次空档走 /insertion 取走 ✓
+    if (env.loopDriver === 'client' || loopCaster.status(reply.liveId)?.running === true) {
       enqueuePendingReply({
         liveId: reply.liveId,
         text: reply.text,

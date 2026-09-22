@@ -38,8 +38,50 @@ class SpeechPendingItem {
 ///   台本里那点间隔被队列完全吸收，用户永远听不到 ✓
 /// 竞品 xcai1618 把间隔放在**播放端**（`bgAudio.onEnded` → `setTimeout(Endlater, n)`），
 /// 我们据此把服务端的 `gapAfterSeconds` 随条目一路下发到这里 ✓
+/// ★★C：条目的**种类** —— 循环台本 / 弹幕回复 / 氛围语。
+///
+/// 为什么必须显式带上：C 之后循环位置归客户端（游标 `seq`）✓，
+///   而**插播不占台本的序号** ✗ —— 客户端必须能判断「这条播完要不要推进游标」✓
+/// 对照竞品：它也是分开的 —— 主循环 `audioArray` / 插播 `suiyyin_fu`、`suiyyin_zhu`，
+///   `nextsuia()` 先看插播、再看主循环 ✓
+enum SpeechJobKind {
+  /// 循环台本句（播完 → 游标 +1）
+  script,
+  /// 弹幕回复插播（播完 → 游标不动）
+  reply,
+  /// 氛围语插播（播完 → 游标不动）
+  atmosphere,
+}
+
+/// ★C：按序号取音频的结果（三态）✓
+class SpeechItemResult {
+  const SpeechItemResult({this.job, this.outOfRange = false, this.noScript = false});
+
+  /// 取到了 ✓
+  final SpeechAudioJob? job;
+
+  /// 序号超出本场台本（服务端 409 SEQ_OUT_OF_RANGE）→ 客户端回绕到第 1 条 ✓
+  final bool outOfRange;
+
+  /// 本场未绑定循环台本（409 LOOP_SCRIPT_REQUIRED）→ 只播插播，不是错误 ✓
+  final bool noScript;
+}
+
+/// 解析种类名：未知 / 缺失按 script 处理（旧格式里只有台本条目 ✓）
+SpeechJobKind speechJobKindFromName(String? name) {
+  return switch (name) {
+    'reply' => SpeechJobKind.reply,
+    'atmosphere' => SpeechJobKind.atmosphere,
+    _ => SpeechJobKind.script,
+  };
+}
+
 class SpeechAudioJob {
-  const SpeechAudioJob({required this.url, this.gapAfterSeconds = 0});
+  const SpeechAudioJob({
+    required this.url,
+    this.gapAfterSeconds = 0,
+    this.kind = SpeechJobKind.script,
+  });
 
   /// 音频的**绝对 URL**（原生播放器直接 GET，Dart 侧不搬字节 ✓）
   final String url;
@@ -47,9 +89,13 @@ class SpeechAudioJob {
   /// 本条播完之后要等的秒数（0 = 不等，立刻播下一条）
   final double gapAfterSeconds;
 
+  /// ★C：条目种类 —— 决定「播完要不要推进台本游标」✓
+  final SpeechJobKind kind;
+
   Map<String, Object?> toJson() => <String, Object?>{
     'url': url,
     'gap': gapAfterSeconds,
+    'kind': kind.name,
   };
 
   /// 解析一条。**兼容 R74 的旧格式**（纯 URL 字符串 → 按 gap=0 处理 ✓）——
@@ -67,6 +113,7 @@ class SpeechAudioJob {
       return SpeechAudioJob(
         url: url,
         gapAfterSeconds: gap is num ? gap.toDouble() : 0,
+        kind: speechJobKindFromName(raw['kind']?.toString()),
       );
     }
     return null;

@@ -15,6 +15,7 @@ import { autoEndScheduler } from './autoEnd';
 import { interactionEngine } from './interactionEngine';
 import { type Live, saveLiveDanmakuSource } from './live';
 import { liveCollector } from './liveCollector';
+import { env } from '../config/env';
 import { settleLiveSession } from './liveBilling';
 import { endLive } from './liveSession';
 import { captureLiveSpeech, forgetLiveSpeech } from './liveVoice';
@@ -48,7 +49,18 @@ export async function bringUpLiveSession(
   // 清在**开播**这一侧而不是收尾那一侧：D2 的语义完全不受影响 ✓
   remoteSpeechQueue.clear(live.id);
   // 循环台本 Runner（未绑定台本 → 快照为空自动退出，只回弹幕）
-  loopCaster.start(live.id);
+  //
+  // ★★C：LIVE_LOOP_DRIVER=client 时**根本不启动它** ✓ ——
+  //   C 之后循环位置在客户端（按序号取货），服务端再灌队列就没人取了 ✗
+  //   （队列会涨到硬上界然后白淘汰）。插播改由 /api/out/speech/insertion 按需提供，
+  //   氛围语的频控记账也在那条路由里做 ✓ 所以 client 模式下 loopCaster 可以整体不开 ✓
+  if (env.loopDriver === 'client') {
+    console.info(
+      `[liveRuntime] 场次 ${live.id} 循环由客户端驱动（LIVE_LOOP_DRIVER=client），不启动 loopCaster`,
+    );
+  } else {
+    loopCaster.start(live.id);
+  }
   // 氛围语快照（空档插播取词用；无氛围语 → 空快照，不影响循环）
   atmosphereScheduler.start(live.id);
   // 弹幕采集：以**库里存的源**为准（用户拍板 D4：原始链接优先，房间号兜底）

@@ -1235,6 +1235,71 @@ class ApiClient {
     }
   }
 
+  /// ★★C：**按序号取音频** —— 循环位置在客户端，点名叫第 seq 条 ✓
+  ///
+  /// 对照竞品：它的 `makeAudio` 请求体带着 `xuhao`（要第几条），序号同样是客户端点名 ✓
+  Future<SpeechItemResult> fetchSpeechItem({
+    required String liveId,
+    required int seq,
+  }) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/api/out/speech/item',
+        queryParameters: <String, dynamic>{'liveId': liveId, 'seq': seq},
+      );
+      final audioUrl = response.data?['audioUrl'];
+      if (audioUrl is! String || audioUrl.isEmpty) {
+        return const SpeechItemResult();
+      }
+      final gap = response.data?['gapAfterSeconds'];
+      return SpeechItemResult(
+        job: SpeechAudioJob(
+          url: _absoluteAudioUrl(audioUrl),
+          gapAfterSeconds: gap is num ? gap.toDouble() : 0,
+        ),
+      );
+    } on DioException catch (error) {
+      final api = _toApiException(error);
+      // 走到台本末尾 → 回绕（竞品的 last_audio_xuhao 回绕是同一个意思）✓
+      if (api.code == 'SEQ_OUT_OF_RANGE') {
+        return const SpeechItemResult(outOfRange: true);
+      }
+      // 本场没绑台本 → 只播插播，不是错误 ✓
+      if (api.code == 'LOOP_SCRIPT_REQUIRED') {
+        return const SpeechItemResult(noScript: true);
+      }
+      throw api;
+    }
+  }
+
+  /// ★★C：**取一条插播**（AI 回复 / 氛围语）；没有就 null ✓
+  ///
+  /// C 之后服务端不知道「什么时候是空档」✗ —— 改成客户端每次空档来要一条 ✓
+  /// （竞品是服务端 socket 推 suiaRes / suiafuRes；我们轮询，语义等价 ✓）
+  Future<SpeechAudioJob?> fetchSpeechInsertion({required String liveId}) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/api/out/speech/insertion',
+        queryParameters: <String, dynamic>{'liveId': liveId},
+      );
+      if (response.statusCode == 204 || response.data == null) {
+        return null;
+      }
+      final audioUrl = response.data!['audioUrl'];
+      if (audioUrl is! String || audioUrl.isEmpty) {
+        return null;
+      }
+      final gap = response.data!['gapAfterSeconds'];
+      return SpeechAudioJob(
+        url: _absoluteAudioUrl(audioUrl),
+        gapAfterSeconds: gap is num ? gap.toDouble() : 0,
+        kind: speechJobKindFromName(response.data!['kind']?.toString()),
+      );
+    } on DioException catch (error) {
+      throw _toApiException(error);
+    }
+  }
+
   /// 把服务端回的相对路径拼成绝对 URL（`baseUrl` 结尾有无斜杠都兼容 ✓）
   String _absoluteAudioUrl(String path) {
     if (path.startsWith('http://') || path.startsWith('https://')) {

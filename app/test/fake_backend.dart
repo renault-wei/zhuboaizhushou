@@ -597,6 +597,13 @@ class FakeBackend implements HttpClientAdapter {
     if (options.method == 'GET' && path.endsWith('/api/out/speech/next')) {
       return _nextSpeechOut();
     }
+    // ★C：按序号取音频 / 取插播（与真服务端同形状）
+    if (options.method == 'GET' && path.endsWith('/api/out/speech/item')) {
+      return _speechItemOut(options);
+    }
+    if (options.method == 'GET' && path.endsWith('/api/out/speech/insertion')) {
+      return _speechInsertionOut();
+    }
     // ★R72：音频下载端点（原生播放器按 URL 来取）—— 必须在 /next 之后判断 ✗
     final audioMatch = RegExp(
       r'/api/out/speech/audio/([^/?]+)',
@@ -1199,6 +1206,73 @@ class FakeBackend implements HttpClientAdapter {
 
   /// R72：已发出的音频（jobId → 字节），对应服务端的 TTL 内可重复 GET ✓
   final Map<String, Uint8List> _speechAudio = <String, Uint8List>{};
+
+  /// ★C：待取**插播**（AI 回复 / 氛围语）—— 测试直接往里塞 ✓
+  /// 每条形如 {'kind': 'reply'|'atmosphere', 'text': '...', 'bytes': Uint8List}
+  final List<Map<String, dynamic>> speechInsertions = <Map<String, dynamic>>[];
+  int _insertionSeq = 0;
+
+  /// ★C：镜像服务端 /api/out/speech/item —— **按序号给货、可重复取**（不是出队 ✗），
+  /// 越界回 409 + total（客户端据此回绕到第 1 条 ✓）
+  ResponseBody _speechItemOut(RequestOptions options) {
+    if (failSpeechOut) {
+      return _serverError('出声队列服务暂不可用');
+    }
+    final seq = int.tryParse(options.queryParameters['seq']?.toString() ?? '');
+    if (seq == null || seq < 1) {
+      return _jsonResponse(<String, dynamic>{
+        'error': 'SEQ_INVALID',
+        'message': '序号需为从 1 开始的整数',
+      }, 400);
+    }
+    final total = speechOut.length;
+    if (total == 0) {
+      return _jsonResponse(<String, dynamic>{
+        'error': 'LOOP_SCRIPT_REQUIRED',
+        'message': '本场未绑定循环台本',
+      }, 409);
+    }
+    if (seq > total) {
+      return _jsonResponse(<String, dynamic>{
+        'error': 'SEQ_OUT_OF_RANGE',
+        'message': '第 $seq 条超出本场台本（共 $total 条）',
+        'total': total,
+      }, 409);
+    }
+    speechOutPulledCount += 1;
+    final jobId = 'speech-mock-${seq.toString().padLeft(3, '0')}';
+    _speechAudio[jobId] = speechOut[seq - 1];
+    return _jsonResponse(<String, dynamic>{
+      'seq': seq,
+      'total': total,
+      'text': '第 $seq 条',
+      'audioUrl': '/api/out/speech/audio/$jobId',
+      'gapAfterSeconds': speechOutGapSeconds,
+    });
+  }
+
+  /// ★C：镜像服务端 /api/out/speech/insertion —— 有插播给一条，没有 204 ✓
+  ResponseBody _speechInsertionOut() {
+    if (failSpeechOut) {
+      return _serverError('出声队列服务暂不可用');
+    }
+    if (speechInsertions.isEmpty) {
+      return ResponseBody.fromString('', 204);
+    }
+    final next = speechInsertions.removeAt(0);
+    _insertionSeq += 1;
+    final jobId = 'speech-ins-${_insertionSeq.toString().padLeft(3, '0')}';
+    final bytes = next['bytes'];
+    if (bytes is Uint8List) {
+      _speechAudio[jobId] = bytes;
+    }
+    return _jsonResponse(<String, dynamic>{
+      'kind': next['kind']?.toString() ?? 'reply',
+      'text': next['text']?.toString() ?? '',
+      'audioUrl': '/api/out/speech/audio/$jobId',
+      'gapAfterSeconds': 0,
+    });
+  }
 
   /// R72：音频下载端点（镜像 /api/out/speech/audio/:jobId）
   ResponseBody _speechAudioOut(String jobId) {
