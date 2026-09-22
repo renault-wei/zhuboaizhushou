@@ -27,6 +27,8 @@ import { forgetSpeakerHeartbeat } from '../services/speakerHeartbeat';
 import { clearLiveReplies } from '../services/replyLedger';
 import { AUTO_END_MAX_MINUTES, AUTO_END_MIN_MINUTES } from '../services/liveSettings';
 import { clampLiveSpeechRate } from '../services/liveVoice';
+// R69：开播前语音预生成（火山抽风不再等于直播间静音）
+import { prewarmLiveSpeech } from '../services/speechPrewarm';
 
 // 直播状态全集：用于列表 ?status= 过滤校验（与服务端 live_status 枚举一致）
 const LIVE_STATUSES: LiveStatus[] = ['idle', 'processing', 'ready', 'live', 'ended', 'failed'];
@@ -546,9 +548,47 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // 一键开播：ready → live（T13 状态机流转 + 记录 startedAt；不接 RTMP，推流留 T12）
+  /**
+   * R69：开播前语音预生成（独立端点）。
+   *
+   * 为什么单独给一个端点：前端要在「开始直播」之前**显示准备进度** ✓，
+   * 而不是让商家点一下、然后干等几十秒不知道在干什么 ✗。
+   *
+   * 幂等：命中缓存的句子直接跳过，所以重复调用很廉价 ✓。
+   */
+  app.post('/api/lives/:id/prewarm', { preHandler: app.authenticate }, async (request, reply) => {
+    const { id } = request.params as LiveIdParams;
+    const owned = await getLiveById(request.user.userId, id);
+    if (!owned) {
+      return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
+    }
+    return prewarmLiveSpeech(id);
+  });
+
   app.post('/api/lives/:id/start', { preHandler: app.authenticate }, async (request, reply) => {
     const { id } = request.params as LiveIdParams;
+    const body = (request.body ?? {}) as { force?: boolean };
     try {
+      // ★R69：**开播前把本场台本的语音全部备好**。
+      //
+      // 这一句就是 R69 的核心防线：
+      //   原先台本「说一句 → 实时合成一句」，火山每次抽风都直接变成「直播间没声音」✗
+      //   （2026-09-22 凌晨 80 条 45000030，整晚零音频）。
+      //   现在开播前一次性备好，开播期间 speak 命中缓存、**一次都不调火山** ✓。
+      //
+      // 失败就**拦住开播**（除非显式 force）—— 这个默认是刻意的：
+      //   让商家在「点开播」这一步就被拦住，远好过在直播间里才发现没声音 ✗。
+      const prewarm = await prewarmLiveSpeech(id);
+      if (prewarm.failed.length > 0 && body.force !== true) {
+        return reply.code(409).send({
+          error: 'SPEECH_PREWARM_FAILED',
+          message:
+            `有 ${prewarm.failed.length} 句语音没能准备好（共 ${prewarm.total} 句），` +
+            '现在开播会出现没有声音的情况。请检查语音服务后重试，或选择「仍然开播」。',
+          prewarm,
+        });
+      }
+
       const live = await startLive(request.user.userId, id);
       if (!live) {
         return reply.code(404).send({ error: 'LIVE_NOT_FOUND', message: '开播配置不存在' });
@@ -568,7 +608,8 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       // R53：助播机心跳也从头计 —— 否则上一场的心跳会让本场的「掉线告警」判错
       forgetSpeakerHeartbeat(live.id);
       // R26/R59：定时关播的登记已进 `bringUpLiveSession`（开播与重启恢复共用）
-      return { live };
+      // R69：把预热结果一并回给前端，便于「备了多少句 / 命中多少」显示出来
+      return { live, prewarm };
     } catch (err) {
       if (err instanceof LiveError) {
         return reply.code(statusCodeOf(err.code)).send({ error: err.code, message: err.message });
