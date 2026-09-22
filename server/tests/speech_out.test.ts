@@ -292,7 +292,7 @@ it('R77：远程 sink 把间隔一并入队（speak → sink.play(wav, liveId, g
 // 水位：前瞻（节奏）与硬上界（防线）必须分开，否则队列会一直钉在硬上界 ——
 // 台本永远在灌几分钟后的台词、队列持续淘汰最旧的条目，而助播机永远在念很久以前的话 ✗
 it('R77：播放前瞻远小于硬上界（生产端由消费速度反压，不是灌满才停）', () => {
-  expect(MAX_REMOTE_SPEECH_LOOKAHEAD_PER_LIVE).toBe(3);
+  expect(MAX_REMOTE_SPEECH_LOOKAHEAD_PER_LIVE).toBe(2);
   expect(MAX_REMOTE_SPEECH_LOOKAHEAD_PER_LIVE).toBeLessThan(
     MAX_REMOTE_SPEECH_JOBS_PER_LIVE,
   );

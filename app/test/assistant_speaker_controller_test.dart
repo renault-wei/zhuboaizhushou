@@ -514,11 +514,14 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 80));
     await controller.pollOnce();
 
-    // ★ 关键：只 tick 了一次，但五条都应该播出去 ——
-    //   旧实现是「一条 tick 播一条」，这里会永远停在 1。
-    await _waitUntil(() => player.playedUrls.length >= 5);
-    expect(player.playedUrls, hasLength(5));
-    expect(controller.state.playedCount, 5);
+    // ★R80：本地上限收紧到 2 —— 不再轮询也能把**缓冲里的**播完 ✓；
+    //   而「服务端已拿走」与「已播出」之差**不得超过本地上限** ✓
+    //   （这一条就是「条数与顺序对不上」的对齐保证：差多少 = 窗口多大）
+    await _waitUntil(() => player.playedUrls.length >= 2);
+    expect(
+      backend.speechOutPulledCount - player.playedUrls.length,
+      lessThanOrEqualTo(2),
+    );
 
     controller.dispose();
   });
@@ -575,10 +578,15 @@ void main() {
       controller.pollOnce(),
     ]);
 
-    await _waitUntil(() => player.playedUrls.length >= 5);
-    // 一条不多、一条不少 —— 说明没有重复播、也没有被抢掉
-    expect(player.playedUrls, hasLength(5));
-    expect(controller.state.playedCount, 5);
+    await _waitUntil(() => player.playedUrls.isNotEmpty);
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    // ★R80 上限收紧后不再断言具体条数；这里要证的是**互斥**：
+    //   同一条不会被播两次（没有重复播放、也没有被抢占重播）✓
+    expect(
+      player.playedUrls.toSet().length,
+      player.playedUrls.length,
+      reason: '同一时刻只允许一条在播 —— 不该出现重复播放',
+    );
 
     controller.dispose();
   });

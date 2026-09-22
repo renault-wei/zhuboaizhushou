@@ -143,8 +143,20 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   static const int _liveCheckEveryNPolls = 15;
   int _pollsSinceLiveCheck = 0;
 
-  /// R61：本地缓冲上限（条）—— 与清单接口的单次上限 10 一致。
-  static const int _bufferMaxItems = 10;
+  /// ★R80：本地缓冲上限（条）。
+  ///
+  /// R61 原为 10（与清单接口单次上限一致），真机实测暴露了结构问题 ✗：
+  ///   取货节奏（一次最多 10 条）与播放节奏（1 条 / 8 秒）**解耦** ——
+  ///   客户端长期压着「服务端认为已交付、听众还没听到」的条目，
+  ///   两边队列的**条数与进度必然对不上** ✓
+  ///   实测 30 分钟：/next 28 次、/audio 18 次 → **10 条取走却从未播出**；
+  ///   另有 2 条过服务端 TTL(10min) 被跳过 ✓
+  ///   一旦冻结 / 关播 / 重启，这批就变成**跳过**或**重复** ✓
+  ///
+  /// 对照竞品：它的 `appMaxAudio` 就是卡这个的 ——
+  ///   `if (!(audioArray.length > appMaxAudio) || e)` —— **够用就不再多要** ✓
+  /// 压到 2 之后，「取走但不播」的窗口从 ~78 秒缩到 ~16 秒（远小于 TTL）✓
+  static const int _bufferMaxItems = 2;
 
   /// ★R69：**本地库存**（磁盘）—— 替代原先的纯内存缓冲。
   ///
