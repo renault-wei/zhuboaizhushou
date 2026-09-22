@@ -196,10 +196,12 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   /// ★R63：**播放互斥** —— 同一时刻只允许一条音频在播。
   ///
   /// 为什么必须有（2026-09-22 用户实测「直播间打开时部分语音一起播放」）：
-  /// `_playOneFromBuffer()` 有**两个调用方** —— 每秒的定时器 tick（`pollOnce`）
-  /// 与播放循环。两者互不知情，于是每秒都去 `player.play(...)`，
-  /// **前一句还没播完就被切掉重放**，听上去就是几句叠在一起 ✗。
-  /// 加了这道闸之后：谁先取到谁播，另一个直接跳过，等下一轮。
+  /// 当时有两个驱动源（每秒的定时器 tick 与播放循环）互不知情，
+  /// 于是每秒都去 `player.play(...)`，**前一句还没播完就被切掉重放** ✗。
+  ///
+  /// R73 之后驱动源已收敛为一个事件流 ✓，但**这道闸仍然必要**：
+  ///   `_advancePlayback` 的调用点有 6 处（恢复 / 填缓冲 / 事件 / 启动 / 兜底 / 轮询）✗，
+  ///   互斥保证「同一时刻只有一条在途」，是那些调用点能安全重复调用的前提 ✓
   bool _playing = false;
 
   // R63 记录一次**抄歪了**的尝试（写给未来的我）：
@@ -256,12 +258,27 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   ///   · URL 过期（服务端 TTL 10 分钟）时播放器报错 → 按单条失败跳过 ✓
   static const String _pendingUrlsKey = 'assistant_speaker_pending_urls';
 
+  /// 持久化代际：**只允许最新一代的快照落盘** ✓
+  ///
+  /// 为什么需要（R74 自查发现）：本方法是 fire-and-forget ✓，多次调用会并发写 ✗，
+  /// 而异步写完的顺序不保证与发起顺序一致 ✓。
+  /// 最坏情况：`stop()` 清空队列后写「空列表」✓，
+  /// 但一个更早发出的写入**后完成**✗ → 落盘的是旧的非空列表 ✗
+  /// → 下次开播把**用户已经放弃的音频复活** ✗（正是本机制想防的事 ✓）
+  int _persistGeneration = 0;
+
   /// 把当前待播队列写回本地（fire-and-forget ✓，绝不 await ✗）
   void _persistPendingUrls() {
+    final generation = ++_persistGeneration;
     final snapshot = jsonEncode(_audioUrls);
     unawaited(() async {
       try {
         final prefs = await SharedPreferences.getInstance();
+        // 落盘前再比一次：本代若已过时就直接放弃 ✗
+        // （这一步把「旧快照覆盖新状态」挡在门外 ✓）
+        if (generation != _persistGeneration) {
+          return;
+        }
         await prefs.setString(_pendingUrlsKey, snapshot);
       } catch (_) {
         // 存不下不影响出声 ✓
@@ -316,6 +333,14 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     // ★R73：取消事件订阅并复位标志 ✗
     //   少了复位，下次开播时 `_startPlayDriver` 会因为「已在跑」直接返回 ✓
     //   → 出声再也起不来，而且没有任何报错（极难查 ✗）
+    //
+    // ⚠️ **顺序依赖**（R74 自查确认，改这里之前先读）：
+    //   `cancel()` 是异步的 ✗，而下面 `_player.stop()` 会触发一次 `onComplete` ✓，
+    //   所以事件处理器**可能仍被调用一次** ✓。
+    //   之所以安全，是因为上面已经把状态置为 idle ✓ ——
+    //   处理器进不去 `if (_disposed || !state.enabled) return;` 之后的逻辑 ✓，
+    //   既不会错误累加计数，也不会重新起播 ✓
+    //   若未来把 `state = idle` 挪到本行之后，这个安全性就没了 ✗
     unawaited(_completeSub?.cancel());
     _completeSub = null;
     _playLoopRunning = false;
