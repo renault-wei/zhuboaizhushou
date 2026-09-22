@@ -11,6 +11,8 @@ import { getLiveSpeech, loadLiveTtsCacheContext } from './liveVoice';
 import type { AtmosphereCategory, AtmosphereInsertion } from './atmosphere';
 import { atmosphereScheduler } from './atmosphereScheduler';
 import { takePendingReply } from './pendingReplies';
+// R70：判「链路忙」要用**队列上界**（不是「非空」）—— 见 defaultIsBusy 的注释
+import { MAX_REMOTE_SPEECH_JOBS_PER_LIVE } from './remoteSpeechQueue';
 
 // 循环台本播出引擎（M4，P-循环台本 & P-播出里程碑 §8）：
 // 开播（ready→live）后按台本顺序循环口播产品/团购券；与弹幕回复共用 liveSpeaker 全局出声链路，
@@ -144,7 +146,25 @@ function defaultSleep(ms: number): Promise<void> {
 
 /** 默认忙闲：读当前出声链路未播出排队条数（按场次过滤，避免被别场次积压拖着走） */
 function defaultIsBusy(liveId: string): boolean {
-  return speechLinePendingCount(liveId) > 0;
+  // ★★R70 彻底修复（2026-09-22）：
+  //
+  // 原先这里是 `speechLinePendingCount(liveId) > 0` ——
+  // 「队列里有【任何一条】」就算链路忙 ✗。
+  //
+  // 这个判据在 **20 秒存活期**时代是对的 ✓：那时队列只在该句「刚说完还没被取走」的
+  // 几秒内有货，有货即异常 ✓
+  //
+  // 但 R69 把存活期放宽到 **10 分钟**、并引入「App 本地囤货」之后，语义**反了** ✗：
+  //   队列有货 = **设计本来就该如此**（货正等着被囤走）✓
+  //   于是 isBusy 恒真 → 台本每句白等 30 秒 ✗
+  //   → 一轮 20 句拖成 10 分钟 ✗ → **队列只攒到 5 条就再也进不了新货** ✗
+  //   → **本地囤货永远囤不满**（R69 的设计意图被这一行废掉）✓
+  //
+  // 正确的判据是「**队列满**」而不是「队列非空」——
+  // 这是**背压**（back-pressure），不是故障 ✓：
+  //   没满 → 照常入队，让 App 尽快把货囤到本地 ✓
+  //   满了 → 等一下（此时台本会跳过等待、照播，多余条目由队列上界淘汰最旧的 ✓）
+  return speechLinePendingCount(liveId) >= MAX_REMOTE_SPEECH_JOBS_PER_LIVE;
 }
 
 /**
@@ -387,18 +407,26 @@ async function runLoop(
           break;
         }
         state.currentSeq = index + 1;
-        // 空档避让：出声链路忙（回复排队 / 远程积压）→ 小步轮询，不在播放间隙插队。
+        // 空档避让：出声队列**已满** → 小步轮询，不在播放间隙插队。
         //
-        // ⚠️ 但**不能无限等**（2026-09-17 修）：手机线用的是远程队列，助播机一旦停止轮询
-        // （App 被杀 / 断网），队列永远排不空 → isBusy 恒真 → **台本会卡死在这里**，
-        // 连同待播回复一起永远播不出去。超过 maxYieldMs 就放弃让位继续推进，并告警留痕。
+        // ⚠️ 注意判据是「满」而不是「非空」（R70 修，见 defaultIsBusy 的注释）——
+        // R69 之后「队列里有货」是**正常状态**（等 App 囤走）✓，只有**满**才是背压 ✓。
+        //
+        // ⚠️ 并且**不能无限等**（2026-09-17 修）：助播机一旦停止轮询
+        // （App 被杀 / 断网），队列排不空 → 台本会卡在这里。
+        // 超过 maxYieldMs 就放弃等待继续推进，并告警留痕（此时照播，不跳过该句 ✓）。
         // 用「轮询次数」而不是墙钟：sleep 步长固定，两者等价，且测试可用假时钟确定性复现。
         polls = 0;
         while (!state.cancelled && options.isBusy(liveId)) {
           polls += 1;
           if (polls > maxYieldPolls) {
+            // R70：文案改成中性 —— 旧文案写「疑似助播机未轮询」，
+            // 但实测 App 一直在拉（14 次/分 ✓），那是**假警报** ✗。
+            // 现在这句只在「队列真的满」时出现，含义是**正常背压**，不是故障 ✓。
+            // 带上具体数字，便于判断是助播机慢还是队列上界太小 ✓
             console.warn(
-              `[loopCaster] 场次 ${liveId} 出声链路持续繁忙超过 ${maxYieldMs}ms（疑似助播机未轮询），放弃本次让位继续播报`,
+              `[loopCaster] 场次 ${liveId} 出声队列已满（${speechLinePendingCount(liveId)} 条 / 上界 ${MAX_REMOTE_SPEECH_JOBS_PER_LIVE}），` +
+                `等待 ${maxYieldMs}ms 仍未回落，本次照播（多余条目由队列淘汰最旧的）`,
             );
             break;
           }
