@@ -22,6 +22,23 @@ import 'package:starvoice_app/features/assistant_speaker/application/speech_out_
 import 'fake_backend.dart';
 
 /// 测试用播放器：记录播放字节，可阻塞单次播放用于验证 stop 打断。
+/// ★R78：可让前 N 次播放失败 —— 验证「失败也等一拍」（照竞品 `onError → setTimeout(1e3)`）。
+class _FailingSpeechOutPlayer extends _FakeSpeechOutPlayer {
+  _FailingSpeechOutPlayer({required this.failTimes});
+
+  int failTimes;
+
+  @override
+  Future<void> playUrl(String url) async {
+    if (failTimes > 0) {
+      failTimes -= 1;
+      playCount += 1; // 记一次「尝试」，但不算播成功
+      throw StateError('链接已过期');
+    }
+    return super.playUrl(url);
+  }
+}
+
 class _FakeSpeechOutPlayer implements SpeechOutPlayer {
   final List<Uint8List> played = <Uint8List>[];
 
@@ -570,10 +587,15 @@ void main() {
   // 对照竞品：它用 store_audio + JSON 把队列存下来，切后台/断线/重启后队列还在。
   // 我们此前队列一出进程就没了；与 R69 那套「磁盘库存」的区别是——
   // **存的是几十字节的 URL 字符串，不是音频字节**，所以不会把 I/O 引进热路径。
-  test('R74：开播时恢复上次没播完的待播队列（恢复的是 URL，不是字节）', () async {
+  test('R74/R78：开播时恢复**本场**没播完的待播队列（恢复的是 URL，不是字节）', () async {
     const restoredUrl = 'https://example.test/audio/restored.wav';
     SharedPreferences.setMockInitialValues(<String, Object>{
-      'assistant_speaker_pending_urls': jsonEncode(<String>[restoredUrl]),
+      'assistant_speaker_pending_urls': jsonEncode(<String, Object?>{
+        'liveId': 'live-001',
+        'items': <Object?>[
+          <String, Object?>{'url': restoredUrl, 'gap': 1.0},
+        ],
+      }),
     });
 
     final backend = FakeBackend();
@@ -591,6 +613,65 @@ void main() {
     await _waitUntil(() => player.playedUrls.isNotEmpty);
     expect(player.playedUrls.first, restoredUrl);
 
+    controller.dispose();
+  });
+
+  // ---------- R78：开播必须从**本场**第一条开始 ----------
+  // 2026-09-22 用户实测「开播后不是从第一个音频开始」：
+  // 上一场被杀的 App 在本地存着 10 条没播完的 URL，
+  // 开播时被无条件 insertAll(0, …) 插到队首 → 从上一场的中途开始播 ✗
+  // 对照竞品：它的本地库存是**这一轮**的（开播按 xuhao 从 0 重新要货）✓
+  test('R78：上一场的残句不会被恢复（场次对不上就整队丢弃）', () async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'assistant_speaker_pending_urls': jsonEncode(<String, Object?>{
+        'liveId': 'live-OLD',
+        'items': <Object?>[
+          <String, Object?>{
+            'url': 'https://example.test/audio/stale.wav',
+            'gap': 1.0,
+          },
+        ],
+      }),
+    });
+
+    final player = _FakeSpeechOutPlayer();
+    final controller = AssistantSpeakerController(
+      ApiClient(buildMockDio(FakeBackend())),
+      player,
+      const Duration(days: 1),
+    );
+
+    controller.start(liveId: 'live-NEW');
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    // 服务端队列是空的 → 一条都不该播（那条是上一场的 ✗）
+    expect(player.playedUrls, isEmpty);
+
+    // 旧格式（R74~R77 的纯字符串，没有场次信息）同样必须丢弃 ✓
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('assistant_speaker_pending_urls'), isNull);
+
+    controller.dispose();
+  });
+
+  test('R78：单条播放失败后**等一拍**再切下一条，不再零延迟连冲', () async {
+    final backend = FakeBackend(
+      speechOut: <Uint8List>[_wavBytes(1), _wavBytes(2), _wavBytes(3)],
+    );
+    final player = _FailingSpeechOutPlayer(failTimes: 1);
+    final controller = AssistantSpeakerController(
+      ApiClient(buildMockDio(backend)),
+      player,
+      const Duration(days: 1),
+    );
+
+    controller.start();
+    await _waitUntil(() => player.playCount >= 1);
+    // 失败之后必须**等一拍**才切下一条（竞品 onError 也是等 1 秒）
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    expect(player.playCount, 1, reason: '失败后不该零延迟连冲');
+
+    // 1 秒之后自然轮到下一条（并且它成功播出去了）
+    await _waitUntil(() => player.playedUrls.isNotEmpty);
     controller.dispose();
   });
 }

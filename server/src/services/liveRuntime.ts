@@ -20,6 +20,7 @@ import { endLive } from './liveSession';
 import { captureLiveSpeech, forgetLiveSpeech } from './liveVoice';
 import { loopCaster } from './loopCaster';
 import { clearPendingReplies } from './pendingReplies';
+import { remoteSpeechQueue } from './remoteSpeechQueue';
 import { forgetSpeakerHeartbeat } from './speakerHeartbeat';
 
 /** 只告警不抛出 —— 拉起失败绝不能阻断开播，也绝不能阻断服务启动 */
@@ -38,6 +39,14 @@ export async function bringUpLiveSession(
 ): Promise<void> {
   // 音色口径统一：冻结本场音色 / 语速快照（循环台本句与弹幕回复共用同一份）
   await captureLiveSpeech(live.id);
+  // ★R78：开播 / 重启恢复时，先把本场**上一轮残留**的待播音频倒掉 ✓
+  //
+  // 对照竞品：它开播时按 `xuhao` 从 0 重新要货，**从不复用上一轮的库存** ✓
+  // 我们此前「收尾不清队」（D2 是有意的 —— 让本场最后一句还能播完 ✓），
+  // 但**同一场次再次开播**时，那些残留会被当成待播继续交付 ✗
+  //   → 助播机开播后不是从第一条开始 ✓（2026-09-22 用户实测）
+  // 清在**开播**这一侧而不是收尾那一侧：D2 的语义完全不受影响 ✓
+  remoteSpeechQueue.clear(live.id);
   // 循环台本 Runner（未绑定台本 → 快照为空自动退出，只回弹幕）
   loopCaster.start(live.id);
   // 氛围语快照（空档插播取词用；无氛围语 → 空快照，不影响循环）

@@ -209,6 +209,9 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   /// 正在播那条的「播完后间隔」（秒）—— 由 [_advancePlayback] 发起时记下 ✓
   double _currentGapSeconds = 0;
 
+  /// ★R78：单条**播放失败**后的等待（秒）—— 照竞品 `onError → setTimeout(…, 1e3)` ✓
+  static const double _failedPlayGapSeconds = 1;
+
   /// ★R63：**播放互斥** —— 同一时刻只允许一条音频在播。
   ///
   /// 为什么必须有（2026-09-22 用户实测「直播间打开时部分语音一起播放」）：
@@ -286,9 +289,13 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   /// 把当前待播队列写回本地（fire-and-forget ✓，绝不 await ✗）
   void _persistPendingUrls() {
     final generation = ++_persistGeneration;
-    final snapshot = jsonEncode(
-      _pending.map((job) => job.toJson()).toList(growable: false),
-    );
+    // ★R78：连**场次**一起存 —— 恢复时必须能判断「这还是本场的货吗」✗
+    //   对照竞品：它的 store_audio / audioArray 是**这一轮**的库存，
+    //   从不把上一轮的残句当本场待播 ✓
+    final snapshot = jsonEncode(<String, Object?>{
+      'liveId': _liveId,
+      'items': _pending.map((job) => job.toJson()).toList(growable: false),
+    });
     unawaited(() async {
       try {
         final prefs = await SharedPreferences.getInstance();
@@ -313,15 +320,28 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
         return;
       }
       final decoded = jsonDecode(raw);
-      if (decoded is! List) {
-        return;
-      }
       if (_disposed || !state.enabled) {
         return;
       }
+      // ★★R78：**只恢复本场次**的待播队列 ✓
+      //
+      // 对照竞品：它的本地库存是**这一轮**的（开播按 xuhao 从 0 重新要货）✓；
+      // 我们此前不看场次就把上一场的残句 `insertAll(0, …)` 插到队首 ✗
+      //   → 开播后从上一场的中途开始播 ✓
+      //     （2026-09-22 用户实测「开播后不是从第一个音频开始」）
+      //
+      // 判据：存下来的 liveId 与本次不一致 / 是 R74~R77 的旧格式（无场次信息）
+      //       → 一律丢弃 ✓（宁可从本场第一条重新开始，也不播来路不明的残句）
+      if (decoded is! Map || decoded['liveId']?.toString() != _liveId) {
+        await prefs.remove(_pendingUrlsKey);
+        return;
+      }
+      final items = decoded['items'];
+      if (items is! List) {
+        return;
+      }
       // 只补进当前队列**前面** —— 恢复的应当是「还没播的」那部分 ✓
-      // ★R77：现在存的是 {url, gap} 对象；fromJson 同时兼容 R74 的纯字符串旧格式 ✓
-      final restored = decoded
+      final restored = items
           .map(SpeechAudioJob.fromJson)
           .whereType<SpeechAudioJob>()
           .toList(growable: false);
@@ -564,11 +584,15 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
         // 异步失败：放闸并继续下一条，绝不卡住链条 ✓
         // （单条失败不该让整场静音 —— 服务端 TTL 过了的链接就会走到这里 ✓）
         _playing = false;
-        // ★R77：这条压根没播成 → 不补间隔，立刻放下一条 ✓
-        _currentGapSeconds = 0;
-        if (!_disposed && state.enabled) {
-          unawaited(_advancePlayback());
+        if (_disposed || !state.enabled) {
+          return;
         }
+        // ★★R78：**失败也等一拍**（照竞品：`onError → setTimeout(…, 1e3)`）✓
+        //   R77 我在这里写的是「不补间隔、立刻放下一条」✗ ——
+        //   于是失效链接（TTL 过了的旧 URL）会被**零延迟连冲**，
+        //   听感就是「音频过快」✓（2026-09-22 用户实测）
+        _currentGapSeconds = _failedPlayGapSeconds;
+        _scheduleNextAfterGap();
       }),
     );
   }
