@@ -125,8 +125,27 @@ class AudioplayersSpeechOutPlayer implements SpeechOutPlayer {
     // R58：**并行出声** —— 两个播放器（助播 + 试听）都走这里，一处设置全覆盖。
     await player.setAudioContext(buildParallelAudioContext());
     _player = player;
+    // ★★R75 修复（2026-09-22 真机实测「音频被截断、没读完就播下一条」）：
+    //
+    // 这里原先写的是 `if (state != PlayerState.playing)` ✗ ——
+    // 「任何非 playing」都被当成「本条播完了」✓。
+    //
+    // 而 `_playSource` 的第一件事是 `await player.stop()`（换源前先停旧的 ✓），
+    // 于是每次播放的真实时序是：
+    //     stop()   → 状态变 stopped → 【立刻发一次 onComplete】✗（这时还没开始播）
+    //                             → 同时把代际占掉 ✗
+     //     play()   → playing …… completed → 真正的完成事件被代际守卫吞掉 ✗
+    // 净效果：上层在音频**刚开始播**的瞬间就被告知「播完了」✗ → 立刻切下一条 ✓
+    //
+    // 这也解释了更早之前用户报的「几句语音一起播」——
+    // await 版的播放同样会因为这个假完成而提前返回，而去播下一条 ✗
+    //
+    // 正确做法：**只认 completed** ✓
+    //   其余情况（解码失败 / 播放器被重置 / 平台不回调）交给下面两个兜底：
+    //     · 看门狗超时（本文件末尾的 Timer）✓
+    //     · 显式 stop()（_completeFinished 由 stop 路径调用）✓
     _stateSub = player.onPlayerStateChanged.listen((state) {
-      if (state != PlayerState.playing) {
+      if (state == PlayerState.completed) {
         _completeFinished();
       }
     });
