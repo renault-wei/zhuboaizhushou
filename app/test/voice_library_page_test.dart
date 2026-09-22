@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -15,6 +17,10 @@ import 'fake_backend.dart';
 
 /// 试听假播放器：不碰真实音频通道，记录播放次数与最后一次字节。
 class _RecordingSpeechOutPlayer implements SpeechOutPlayer {
+  /// ★R73：播放结束事件流 —— 本文件不测驱动，给一个空流即可 ✓
+  @override
+  Stream<void> get onComplete => const Stream<void>.empty();
+
   final List<Uint8List> played = <Uint8List>[];
   final List<String> playedUrls = <String>[];
 

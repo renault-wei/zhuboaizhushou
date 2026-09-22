@@ -4,6 +4,7 @@
 /// （直播中帧会持续刷新），统一用固定时长的 pump 并在收尾卸载页面取消定时器。
 library;
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -23,6 +24,10 @@ import 'fake_backend.dart';
 
 /// 出声卡测试用假播放器：不碰真实音频通道，仅记录启停。
 class _FakeSpeechOutPlayer implements SpeechOutPlayer {
+  /// ★R73：播放结束事件流 —— 本文件不测驱动，给一个空流即可 ✓
+  @override
+  Stream<void> get onComplete => const Stream<void>.empty();
+
   @override
   Future<void> play(Uint8List wavBytes) async {}
 

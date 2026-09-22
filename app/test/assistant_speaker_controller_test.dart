@@ -24,6 +24,14 @@ class _FakeSpeechOutPlayer implements SpeechOutPlayer {
 
   /// ★R72：出声链路改走 URL 后，测试看这个 ✓（`played` 只留给 play() 的残余用例）
   final List<String> playedUrls = <String>[];
+
+  /// ★R73：播放结束事件流（推）—— 与真实实现同契约：
+  /// 每次播放**恰好发一次**（正常 / 被 stop 打断 都发）✓
+  final StreamController<void> _completeController =
+      StreamController<void>.broadcast();
+
+  @override
+  Stream<void> get onComplete => _completeController.stream;
   int playCount = 0;
   int stopCount = 0;
   Completer<void>? _gate;

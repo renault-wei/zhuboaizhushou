@@ -88,6 +88,18 @@ class AudioplayersSpeechOutPlayer implements SpeechOutPlayer {
   Completer<void>? _finished;
   bool _disposed = false;
 
+  /// ★R73：播放结束事件流 —— 每次播放**恰好发一次**
+  /// （正常播完 / 看门狗超时 / 播放失败 / 被打断 都发 ✓）。
+  /// 这是「推」的那一半：上层据此推进下一条，**不再 await 一个 future** ✓
+  final StreamController<void> _completeController =
+      StreamController<void>.broadcast();
+
+  /// 已发过事件的代际（防同一次播放重发）
+  int _emittedGeneration = -1;
+
+  @override
+  Stream<void> get onComplete => _completeController.stream;
+
   /// 代际计数：串行化「播放 / 停止 / 重建」，让在途回调失效（对照竞品 `bgAudioGeneration`）。
   int _generation = 0;
 
@@ -125,6 +137,14 @@ class AudioplayersSpeechOutPlayer implements SpeechOutPlayer {
     final completer = _finished;
     if (completer != null && !completer.isCompleted) {
       completer.complete();
+    }
+    // ★R73：同时把「本条结束」推给上层 ✓
+    // 不重不漏：同一次播放代际只发一次（否则上层会重复推进 ✗）
+    if (_emittedGeneration != _generation) {
+      _emittedGeneration = _generation;
+      if (!_completeController.isClosed) {
+        _completeController.add(null);
+      }
     }
   }
 
