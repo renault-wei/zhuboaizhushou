@@ -9,6 +9,7 @@ import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/core/platform/keep_alive_bridge.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../data/speech_out_store.dart';
 import 'speaker_supervisor.dart';
 import 'speech_out_player.dart';
 
@@ -144,6 +145,26 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   /// R61：本地缓冲上限（条）—— 与清单接口的单次上限 10 一致。
   static const int _bufferMaxItems = 10;
 
+  /// ★R69：**本地库存**（磁盘）—— 替代原先的纯内存缓冲。
+  ///
+  /// 关键差别：**播完不丢** ✓。
+  /// 这样本地会自然攒下一整轮台本，后台拉取被降频时也有货可播 ✓
+  /// （这正是 R69 不需要服务端「提前入队」的原因：库存本身就是深队列 ✓）。
+  /// 可注入：测试可传替身（磁盘不可用时 store 内部有内存兜底，不会丢音频 ✓）。
+  SpeechOutStore _store = SpeechOutStore();
+
+  /// ★R69：库存「已就绪」的门闩。
+  ///
+  /// 存在的理由是一个**真实竞态**：`start()` 里 `_prepareStore`（会 init + 清理，
+  /// 其中 init 会 `_items.clear()` 后重建索引）与首次 `pollOnce`（会往里写）
+  /// 是并发跑的 ✗ —— 清理可能把刚存进去的条目清掉，表现就是「拉到了却不播」✓
+  /// 所以读写库存前一律先等它 ✓
+  Future<void>? _storeReady;
+
+  /// 测试注入本地库存（生产不调用）
+  @visibleForTesting
+  set store(SpeechOutStore value) => _store = value;
+
   /// 播放循环空闲时等的信号：**可被唤醒**，而不是死等一个 Future.delayed。
   ///
   /// 为什么要这样：`future.delayed` 在停用/dispose 后仍会悬挂着，
@@ -204,6 +225,8 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     // 这样即使 App 切后台、定时器被系统限流到十几秒一次，
     // 已经缓冲好的音频仍能连续播出去（原先拉和播是同一个循环，一起被拖慢）。
     _timer = Timer.periodic(_pollInterval, (_) => unawaited(pollOnce()));
+    // ★R69：开播先加载本地库存并清一次 —— 清了才有空间囤新一轮 ✓
+    _storeReady = _prepareStore(liveId);
     unawaited(_syncKeepAlive(true));
     unawaited(pollOnce());
     unawaited(_playLoop());
@@ -228,6 +251,26 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     state = AssistantSpeakerState.idle();
     unawaited(_player.stop());
     unawaited(_syncKeepAlive(false));
+  }
+
+  /// ★R69：加载本地库存 + 清理（规格 §4.4）。
+  ///
+  /// 触发时机：开播时（此处）+ 每次 App 启动（监督者那边）✓
+  /// 清理是有代价的（读目录 + 若干 stat），所以不挂在 1 秒轮询上 ✗。
+  Future<void> _prepareStore(String? liveId) async {
+    try {
+      await _store.init();
+      await _store.cleanUp(activeLiveId: liveId);
+      if (_store.lastDroppedUnplayed > 0) {
+        // 规格 §4.4 第④条：**只有达到硬上限才允许删未播** ✓
+        // 这行日志是那条红线的观测点 —— 出现它说明上限定小了，或拉取长期异常 ✓
+        debugPrint(
+          '[speaker] 本地库存达上限，丢弃了 ${_store.lastDroppedUnplayed} 条未播音频',
+        );
+      }
+    } catch (_) {
+      // 库存准备失败不影响出声（退回「拉一条播一条」）
+    }
   }
 
   /// 记下 / 忘掉「在播的场次」，供应用级监督者读取（R68）。
@@ -269,7 +312,8 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   /// 下载走的是 `/next`（服务端**原子取出**），所以清单只是「有几条」的快照，
   /// 两条 App 同时拉也不会重复播。
   Future<void> _fillBuffer() async {
-    if (_buffer.length >= _bufferMaxItems) {
+    await _storeReady;
+    if (_store.length >= _bufferMaxItems) {
       return;
     }
     final pending = await _api.fetchPendingOutSpeech(liveId: _liveId);
@@ -281,13 +325,24 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
       return;
     }
     var fetched = 0;
-    while (_buffer.length < _bufferMaxItems && fetched < pending.length) {
+    while (_store.length < _bufferMaxItems && fetched < pending.length) {
       final item = await _api.fetchNextOutSpeech(liveId: _liveId);
       if (item == null) {
         // 清单说还有，但已被别的取走 —— 本次到此为止
         break;
       }
-      _buffer.add(item.wavBytes);
+      // ★R69：落盘保留（不是塞进内存数组）—— 播完也不丢 ✓
+      // jobId 从清单快照里取，落盘后按它做已播标记与清理 ✓
+      final jobId = pending[fetched].jobId;
+      final saved = await _store.put(
+        jobId: jobId,
+        liveId: _liveId,
+        bytes: item.wavBytes,
+      );
+      if (!saved) {
+        // 连内存兜底都失败（极罕见）：本条直接放弃，绝不因此卡住链路 ✓
+        break;
+      }
       fetched += 1;
     }
     // 有货了 → 把可能正在空闲等待的播放循环叫醒，别让它白等
@@ -324,7 +379,12 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   Future<bool> _playOneFromBuffer() async {
     // ★R63：在途互斥 —— 有音频正在播就什么都不做。
     // 少了这一句，定时器 tick 与播放循环会互相抢播放器，把前一句切碎重放。
-    if (_playing || _buffer.isEmpty || _disposed) {
+    if (_playing || _disposed) {
+      return false;
+    }
+    await _storeReady;
+    final next = _store.peekNext(liveId: _liveId);
+    if (next == null) {
       return false;
     }
     _playing = true;
@@ -343,7 +403,12 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     //
     // 现在整个函数体都在 try 里，`finally` 覆盖一切路径（含上面两句抛出的情况）。
     try {
-      final bytes = _buffer.removeAt(0);
+      final bytes = await _store.read(next);
+      if (bytes == null) {
+        // 文件已丢（被系统清了 / 索引与磁盘不一致）：丢掉这条，不卡链路 ✓
+        await _store.markPlayed(next);
+        return false;
+      }
       if (_disposed || !state.enabled) {
         return false;
       }
@@ -353,6 +418,9 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
       } catch (_) {
         // 单条播放失败（文件损坏等）不该整体停：丢掉它继续下一条
       }
+      // ★R69：播完打标记，**但不删除** ✓ ——
+      // 删除统一交给 cleanUp（保留一段时间便于复查，也避免「服务端已删、这边也删」✗）
+      await _store.markPlayed(next);
       if (_disposed || !state.enabled) {
         return true;
       }
@@ -379,7 +447,8 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     _playLoopRunning = true;
     try {
       while (!_disposed && state.enabled) {
-        if (_buffer.isEmpty) {
+        await _storeReady;
+        if (_store.peekNext(liveId: _liveId) == null) {
           await _waitIdle();
           continue;
         }
