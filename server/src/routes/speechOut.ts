@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { createReadStream } from 'node:fs';
-import { remoteSpeechQueue } from '../services/remoteSpeechQueue';
+import { isValidSpeechJobId, remoteSpeechQueue } from '../services/remoteSpeechQueue';
 import { recordSpeakerPull, recordSpeakerSeq } from '../services/speakerHeartbeat';
 // ★C：按序号取音频 / 取插播 —— 服务端从「循环的驱动者」退回「合成器」✓
 import {
@@ -120,6 +120,13 @@ export const speechOutRoutes: FastifyPluginAsync = async (app) => {
     const jobId = typeof params.jobId === 'string' ? params.jobId.trim() : '';
     if (jobId === '') {
       return reply.code(400).send({ error: 'SPEECH_JOB_ID_REQUIRED', message: '缺少音频标识' });
+    }
+    // ★★C：jobId 会被拼进文件路径（findPath 的兜底分支）→ **必须先卡死形状** ✗
+    //   否则 `../../etc/passwd` 这类就能穿越出去 ✓
+    if (!isValidSpeechJobId(jobId)) {
+      return reply
+        .code(404)
+        .send({ error: 'SPEECH_AUDIO_NOT_FOUND', message: '该条语音已过期或不存在' });
     }
     const wavPath = remoteSpeechQueue.findPath(jobId);
     if (!wavPath) {

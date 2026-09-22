@@ -1,5 +1,35 @@
 import { randomUUID } from 'node:crypto';
+import { copyFileSync, existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+/**
+ * ★★C：按 jobId **可推导**的稳定路径 —— 不依赖任何内存状态 ✓
+ *
+ * 为什么需要（2026-09-22 真机「突然没声音」）：
+ *   下面那张 `files` 表是**内存态** ✗ —— 服务一重启，之前发出去的 URL
+ *   全成死链，而播放器对着 404 会**死重试**（实测同一 URL 连取 13 次）✗，
+ *   客户端要等看门狗（68s）才恢复 → 听感就是「突然没声」✓
+ *
+ * 前缀沿用 `starvoice-`，于是既有的孤儿回收（speechOutSweeper，按 **30 分钟**年龄
+ * 扫 `starvoice-*.wav`）会自动清理它 ✓ —— 不用再养第二套回收逻辑 ✓
+ * （30 分钟 > 10 分钟 TTL，不会误杀在途文件 ✓）
+ */
+function stableSpeechPath(jobId: string): string {
+  return join(tmpdir(), `starvoice-${jobId}.wav`);
+}
+
+/**
+ * jobId 必须是 UUID 形状 —— 它是**路径的一段**，形状不卡死就能穿越目录 ✗
+ * （findPath 的兜底分支会把 jobId 拼进路径 ✓）
+ */
+const JOB_ID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+export function isValidSpeechJobId(jobId: string): boolean {
+  return JOB_ID_PATTERN.test(jobId);
+}
 
 // P1 手机线：远程出声队列（出声端下沉到助播机）。
 // AI 大脑（本服务）合成好 wav 后不再本地播放，而是交给「远程出声队列」；
@@ -209,12 +239,26 @@ class MemoryRemoteSpeechQueue implements RemoteSpeechQueue {
    */
   findPath(jobId: string): string | undefined {
     this.pruneStale();
-    return this.files.get(jobId)?.wavPath;
+    const known = this.files.get(jobId)?.wavPath;
+    if (known !== undefined) {
+      return known;
+    }
+    // ★★C：内存表里没有（典型情况：服务重启过）→ 退回按 jobId 推导的稳定路径 ✓
+    //   这就是「重启不再把在途 URL 打成死链」的那一下 ✓
+    const derived = stableSpeechPath(jobId);
+    return existsSync(derived) ? derived : undefined;
   }
 
   registerFile(wavPath: string): string {
     const id = randomUUID();
     this.files.set(id, { wavPath, createdAt: Date.now() });
+    // ★★C：再落一份**按 jobId 可推导**的副本 —— 于是 /audio/:jobId 不再依赖内存表 ✓
+    //   （服务重启后依然取得到；复制失败就退回老行为，不阻断交付 ✓）
+    try {
+      copyFileSync(wavPath, stableSpeechPath(id));
+    } catch {
+      // 复制失败（磁盘满 / 权限）不阻断交付 —— 退化成「只认内存表」的旧行为 ✓
+    }
     return id;
   }
 

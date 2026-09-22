@@ -16,6 +16,8 @@ import {
   secondsSinceSpeakerPull,
 } from '../src/services/speakerHeartbeat';
 import { createRemoteSpeechSink } from '../src/services/remoteSpeechSink';
+import { createRemoteSpeechQueue } from '../src/services/remoteSpeechQueue';
+import { readFile } from 'node:fs/promises';
 
 // P1 手机线：远程出声端轮询拉取接口集成测试。
 // 用假 wav 文件 + 直接向远程队列塞数据，验证「入队 → 拉取 → 流式返回 → 交付后删除」，
@@ -296,6 +298,33 @@ it('R77：播放前瞻远小于硬上界（生产端由消费速度反压，不�
   expect(MAX_REMOTE_SPEECH_LOOKAHEAD_PER_LIVE).toBeLessThan(
     MAX_REMOTE_SPEECH_JOBS_PER_LIVE,
   );
+});
+
+// ---------- R-C2：**服务重启不再把在途 URL 打成死链** ----------
+// 2026-09-22 真机「突然没声音」：files 表是内存态，重启即清空 →
+// 之前发出去的 URL 全 404，而播放器对着 404 死重试（同一 URL 连取 13 次）✗
+it('R-C2：registerFile 登记过的 URL 在**服务重启后**依然可取（不依赖内存表）', async () => {
+  const wavPath = await makeWavFile();
+  await writeFile(wavPath, 'R-C2-survives-restart');
+  const before = createRemoteSpeechQueue();
+  const jobId = before.registerFile(wavPath);
+
+  // 新的队列实例 = 重启后那份「空的内存表」✓
+  const after = createRemoteSpeechQueue();
+  const resolved = after.findPath(jobId);
+  expect(resolved).toBeTruthy();
+  expect(await readFile(resolved as string, 'utf8')).toBe('R-C2-survives-restart');
+});
+
+it('R-C2：jobId 形状不合法（路径穿越）直接 404，不去碰文件系统', async () => {
+  for (const bad of ['..%2F..%2Fetc%2Fpasswd', 'not-a-uuid', '../../etc/passwd']) {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/out/speech/audio/${bad}`,
+      headers: { authorization: `Bearer ${makeToken()}` },
+    });
+    expect(res.statusCode).toBe(404);
+  }
 });
 
 // ---------- R-C：C 的两条新通道（客户端持游标：按序号取货 + 空档取插播） ----------
