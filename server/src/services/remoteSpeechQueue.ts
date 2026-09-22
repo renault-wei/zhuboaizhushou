@@ -36,6 +36,16 @@ export interface RemoteSpeechQueue {
   take(liveId?: string): RemoteSpeechJob | undefined;
   /** 清空未拉取队列；带 liveId 时只清该场次（真人接管 / 一键静音扩展点） */
   clear(liveId?: string): void;
+  /**
+   * ★R72：按 jobId 找音频文件路径（供**受鉴权的下载端点**使用）。
+   *
+   * 为什么需要独立于队列：URL 模式下「App 拿到 URL」与「App 真正去 GET」
+   * 是**两个时刻** ✗ —— 条目很可能已经 `take` 出队了 ✓，
+   * 但文件还在磁盘上等着被取 ✓。
+   * 所以路径登记不能跟着队列条目的生死走 ✗，要按**时间**（TTL）回收 ✓
+   * —— 与 R63 的过期口径同源，由 [pruneStale] 一并清理 ✓。
+   */
+  findPath(jobId: string): string | undefined;
 }
 
 /**
@@ -86,32 +96,31 @@ export const MAX_REMOTE_SPEECH_AGE_MS = 10 * 60 * 1000;
 class MemoryRemoteSpeechQueue implements RemoteSpeechQueue {
   private readonly jobs: RemoteSpeechJob[] = [];
 
+  /** ★R72：jobId → { 文件路径, 入队时刻 }。独立于队列条目，只按 TTL 回收 ✓ */
+  private readonly files = new Map<string, { wavPath: string; createdAt: number }>();
+
   /** 淘汰回调：让调用方有机会清理被丢掉那条的 wav 文件（否则临时目录会堆垃圾） */
   constructor(private readonly onEvict?: (job: RemoteSpeechJob) => void) {}
 
   push(wavPath: string, liveId?: string): string {
     const id = randomUUID();
-    this.jobs.push({ id, wavPath, liveId, createdAt: Date.now() });
+    const createdAt = Date.now();
+    this.jobs.push({ id, wavPath, liveId, createdAt });
+    this.files.set(id, { wavPath, createdAt });
     if (liveId !== undefined) {
       while (this.size(liveId) > MAX_REMOTE_SPEECH_JOBS_PER_LIVE) {
         const index = this.jobs.findIndex((job) => job.liveId === liveId);
         if (index < 0) {
           break;
         }
-        const [evicted] = this.jobs.splice(index, 1);
-        if (evicted) {
-          // 淘汰是尽力而为：清理回调（删 wav）失败**不该把入队搞挂** ——
-          // 队列的职责是保管任务，文件清理是附带收益。
-          try {
-            this.onEvict?.(evicted);
-          } catch (err) {
-            console.warn(
-              `[remoteSpeechQueue] 淘汰任务时清理失败（忽略）：${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            );
-          }
-        }
+        // ★R72：**这里只出队、不删文件** ✗
+        //
+        // URL 模式下「App 拿到 URL」与「App 真正去 GET」是两个时刻：
+        // 条目被挤出队列 ≠ 文件没人要了 ✓。若在这里删，刚发出去的 URL 会变成死链 ✗。
+        //
+        // 文件删除权**统一归 TTL**（pruneStale 里的 files 回收 ✓）——
+        // 那条路径与「App 有多久没来取」同口径，是唯一安全的判据 ✓
+        this.jobs.splice(index, 1);
       }
     }
     return id;
@@ -154,8 +163,20 @@ class MemoryRemoteSpeechQueue implements RemoteSpeechQueue {
    * 每个对外方法入口都调一次 —— 队列是内存里的短数组，这个开销可以忽略，
    * 而「任何一次读写都看不到陈旧条目」这个性质很重要。
    */
+  findPath(jobId: string): string | undefined {
+    this.pruneStale();
+    return this.files.get(jobId)?.wavPath;
+  }
+
   private pruneStale(): void {
     const now = Date.now();
+    // ★R72：路径登记按同一 TTL 回收 —— URL 模式下的文件删除权在这里（不在交付时）✓
+    for (const [id, entry] of this.files) {
+      if (now - entry.createdAt > MAX_REMOTE_SPEECH_AGE_MS) {
+        this.files.delete(id);
+        this.onEvict?.({ id, wavPath: entry.wavPath, createdAt: entry.createdAt });
+      }
+    }
     for (let index = this.jobs.length - 1; index >= 0; index -= 1) {
       const job = this.jobs[index];
       if (job && now - job.createdAt > MAX_REMOTE_SPEECH_AGE_MS) {

@@ -18,10 +18,14 @@ describe('R36 远程出声队列上界', () => {
 
     expect(queue.size('live-a')).toBe(MAX_REMOTE_SPEECH_JOBS_PER_LIVE);
     expect(queue.size('live-b')).toBe(1);
-    // 被淘汰的是最旧的那 3 条，并且**回调通知了调用方**（用于删 wav 文件）
-    expect(evicted).toEqual(['/tmp/a-1.wav', '/tmp/a-2.wav', '/tmp/a-3.wav']);
-    // 队首应该已经是第 4 条（1~3 被挤掉）
+    // ★R72：条数上限淘汰**只出队、不删文件** ✗
+    //   URL 模式下「App 拿到 URL」与「App 真正去 GET」是两个时刻，
+    //   在这里删会把刚发出去的 URL 变成死链 ✓ —— 删除权统一归 TTL
+    expect(evicted).toEqual([]);
+    // 队首应该已经是第 4 条（1~3 被挤出队列），且**文件仍在**
     expect(queue.take('live-a')?.wavPath).toBe('/tmp/a-4.wav');
+    expect(queue.findPath('a-1')).toBeUndefined(); // 登记表按 id 索引，不是文件名
+    expect(queue.findPath('')).toBeUndefined();
   });
 
   it('淘汰回调抛错不影响入队', () => {

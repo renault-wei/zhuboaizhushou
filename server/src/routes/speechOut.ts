@@ -1,6 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { createReadStream } from 'node:fs';
-import { unlink } from 'node:fs/promises';
 import { remoteSpeechQueue } from '../services/remoteSpeechQueue';
 import { recordSpeakerPull } from '../services/speakerHeartbeat';
 
@@ -46,6 +45,25 @@ export const speechOutRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ items, maxBatch: MAX_PENDING_BATCH });
   });
 
+  /**
+   * ★★R72：**取一条 —— 但只回 URL，不回字节**。
+   *
+   * 为什么改（2026-09-22 定案，对照竞品反编译包）：
+   *   原实现把 wav 字节流回给 App，App 再用 Dart 写磁盘/读磁盘。
+   *   而竞品 `app-service.js` 的播放路径是：
+   *       bgAudio.src = t.url; bgAudio.play();
+   *   —— **把 URL 直接交给原生播放器，JS 侧完全不碰字节** ✓
+   *   （它的 `saveFile` / `getFileSystemManager` 计数都是 0 ✓）
+   *
+   *   我们的做法把「HTTP 拉取 + 写磁盘 + 读磁盘」全塞进了 Dart 热路径 ✗；
+   *   在一台 load 60~83 的过载手机上，`path_provider` 的平台通道会**挂起** ✓，
+   *   于是播放循环永久卡死、每秒空转 20 次 ✗（R71 只修了其中一处 await）。
+   *
+   * 本端点的语义变化：
+   *   · 返回值从「wav 字节流」变成 `{ jobId, audioUrl }` ✓
+   *   · **不再在交付时删文件** ✗ —— App 是稍后才去 GET 那个 URL 的，
+   *     删早了就是死链 ✓；删除权统一归 TTL（见 remoteSpeechQueue 的 files 回收 ✓）
+   */
   app.get('/api/out/speech/next', { preHandler: app.authenticate }, async (request, reply) => {
     const liveId = readLiveIdQuery(request.query);
     if (liveId) {
@@ -55,18 +73,61 @@ export const speechOutRoutes: FastifyPluginAsync = async (app) => {
     if (!job) {
       return reply.code(204).send();
     }
-    const stream = createReadStream(job.wavPath);
-    // 流式返回完成后删除临时文件：交付即清理（无重试；回执 / 重试随二期客户端补上）
-    stream.on('close', () => {
-      void unlink(job.wavPath).catch(() => undefined);
+    return reply.send({
+      jobId: job.id,
+      liveId: job.liveId ?? null,
+      audioUrl: `${SPEECH_AUDIO_PATH}/${job.id}`,
     });
+  });
+
+  /**
+   * ★R72：**受鉴权的音频下载端点** —— 原生播放器直接 GET 它 ✓
+   *
+   * 为什么单独一个端点而不是复用 /next：
+   *   /next 是「取号」（会出队 ✓），这里是「取货」（可重复 GET ✓）。
+   *   两者语义不同，分开后 /next 保持原子的出队语义 ✓，
+   *   而播放器侧的重试/预取都不会干扰队列 ✓
+   */
+  // ★注意：**不走 preHandler 鉴权** ✗ —— 原生播放器（MediaPlayer / ExoPlayer）
+  //   发不了自定义请求头 ✓，所以鉴权凭证只能放查询串 ✓。
+  //   这里接受 `?token=<JWT>`，与 `Authorization: Bearer` 同源同校验 ✓
+  app.get(`${SPEECH_AUDIO_PATH}/:jobId`, async (request, reply) => {
+    const query = request.query as Record<string, unknown>;
+    const token = typeof query.token === 'string' ? query.token : '';
+    try {
+      await request.jwtVerify({ onlyCookie: false });
+    } catch {
+      // header 没有就试查询串（jwtVerify 默认只认 header）
+      if (token === '') {
+        return reply.code(401).send({ error: 'UNAUTHORIZED', message: '缺少访问凭证' });
+      }
+      try {
+        app.jwt.verify(token);
+      } catch {
+        return reply.code(401).send({ error: 'UNAUTHORIZED', message: '访问凭证无效或已过期' });
+      }
+    }
+    const params = request.params as { jobId?: string };
+    const jobId = typeof params.jobId === 'string' ? params.jobId.trim() : '';
+    if (jobId === '') {
+      return reply.code(400).send({ error: 'SPEECH_JOB_ID_REQUIRED', message: '缺少音频标识' });
+    }
+    const wavPath = remoteSpeechQueue.findPath(jobId);
+    if (!wavPath) {
+      // 过期被回收 / 从未存在：都是 404，客户端按「这条没了」跳过即可 ✓
+      return reply
+        .code(404)
+        .send({ error: 'SPEECH_AUDIO_NOT_FOUND', message: '该条语音已过期或不存在' });
+    }
     return reply
-      .header('x-speech-job-id', job.id)
       .header('cache-control', 'no-store')
       .type('audio/wav')
-      .send(stream);
+      .send(createReadStream(wavPath));
   });
 };
+
+/** R72：音频下载端点的路径前缀（与 /next 返回的 audioUrl 必须一致） */
+export const SPEECH_AUDIO_PATH = '/api/out/speech/audio';
 
 /** 读取可选 liveId 查询参数：非字符串 / 空白按「不限场次」处理 */
 function readLiveIdQuery(query: unknown): string | undefined {
