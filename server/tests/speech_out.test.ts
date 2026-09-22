@@ -298,3 +298,60 @@ it('R77：播放前瞻远小于硬上界（生产端由消费速度反压，不�
   );
 });
 
+// ---------- R-C：C 的两条新通道（客户端持游标：按序号取货 + 空档取插播） ----------
+// 对照竞品：它的 makeAudio 请求体带 xuhao（要第几条），序号由**客户端**点名 ✓
+// 我们此前是生产端灌队列、客户端取队首 —— 位置归生产端，于是显示的位置 ≠ 听众的位置 ✗
+
+it('R-C：registerFile 登记的文件可通过 /audio/:jobId 取到（与 push 共用同一套回收）', async () => {
+  const wavPath = await makeWavFile();
+  await writeFile(wavPath, 'R-C-on-demand-bytes');
+  const jobId = remoteSpeechQueue.registerFile(wavPath);
+  // 不进交付队列 —— C 之后客户端是「点名要货」，不再从队列里取走 ✓
+  expect(remoteSpeechQueue.size()).toBe(0);
+  expect(remoteSpeechQueue.findPath(jobId)).toBe(wavPath);
+
+  const audio = await app.inject({
+    method: 'GET',
+    url: `/api/out/speech/audio/${jobId}`,
+    headers: { authorization: `Bearer ${makeToken()}` },
+  });
+  expect(audio.statusCode).toBe(200);
+  expect(audio.rawPayload.toString('utf8')).toBe('R-C-on-demand-bytes');
+});
+
+it('R-C：/item 未带登录态 401；缺 liveId / seq 或 seq 非正整数一律 400', async () => {
+  const anonymous = await app.inject({
+    method: 'GET',
+    url: '/api/out/speech/item?liveId=x&seq=1',
+  });
+  expect(anonymous.statusCode).toBe(401);
+
+  const token = makeToken();
+  const headers = { authorization: `Bearer ${token}` };
+  const noLive = await app.inject({ method: 'GET', url: '/api/out/speech/item?seq=1', headers });
+  expect(noLive.statusCode).toBe(400);
+  const noSeq = await app.inject({ method: 'GET', url: '/api/out/speech/item?liveId=x', headers });
+  expect(noSeq.statusCode).toBe(400);
+  const zeroSeq = await app.inject({
+    method: 'GET',
+    url: '/api/out/speech/item?liveId=x&seq=0',
+    headers,
+  });
+  expect(zeroSeq.statusCode).toBe(400);
+});
+
+it('R-C：/insertion 未带登录态 401；缺 liveId 400', async () => {
+  const anonymous = await app.inject({
+    method: 'GET',
+    url: '/api/out/speech/insertion?liveId=x',
+  });
+  expect(anonymous.statusCode).toBe(401);
+
+  const missing = await app.inject({
+    method: 'GET',
+    url: '/api/out/speech/insertion',
+    headers: { authorization: `Bearer ${makeToken()}` },
+  });
+  expect(missing.statusCode).toBe(400);
+});
+

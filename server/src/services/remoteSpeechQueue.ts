@@ -61,6 +61,14 @@ export interface RemoteSpeechQueue {
    * —— 与 R63 的过期口径同源，由 [pruneStale] 一并清理 ✓。
    */
   findPath(jobId: string): string | undefined;
+  /**
+   * ★C：**登记一个待取音频**，返回 jobId —— 不进入交付队列，只进 TTL 回收表 ✓
+   *
+   * 为什么需要：C 之后客户端**按序号要货**（不再从队列里"取走"）✗，
+   * 但音频文件的生命周期仍要有人管 —— 复用同一张 files 表与同一条 TTL 口径 ✓
+   * （URL 给出去之后，App 可能几秒后才来 GET；删早了就是死链 ✗）
+   */
+  registerFile(wavPath: string): string;
 }
 
 /**
@@ -202,6 +210,12 @@ class MemoryRemoteSpeechQueue implements RemoteSpeechQueue {
   findPath(jobId: string): string | undefined {
     this.pruneStale();
     return this.files.get(jobId)?.wavPath;
+  }
+
+  registerFile(wavPath: string): string {
+    const id = randomUUID();
+    this.files.set(id, { wavPath, createdAt: Date.now() });
+    return id;
   }
 
   private pruneStale(): void {

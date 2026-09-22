@@ -2,6 +2,17 @@ import type { FastifyPluginAsync } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { remoteSpeechQueue } from '../services/remoteSpeechQueue';
 import { recordSpeakerPull } from '../services/speakerHeartbeat';
+// ★C：按序号取音频 / 取插播 —— 服务端从「循环的驱动者」退回「合成器」✓
+import {
+  DEFAULT_ITEM_GAP_SECONDS,
+  loadBoundLoopItems,
+  type LoopCastItem,
+} from '../services/loopCaster';
+import { synthesizeSpeechFile } from '../services/liveSpeaker';
+import { getLiveSpeech, loadLiveTtsCacheContext } from '../services/liveVoice';
+import { takePendingReply } from '../services/pendingReplies';
+import { atmosphereScheduler } from '../services/atmosphereScheduler';
+import type { AtmosphereInsertion } from '../services/atmosphere';
 
 // P1 手机线：远程出声端轮询拉取接口（助播机 App / 二期客户端消费）。
 // 语义：一次 GET = 交付队首一条 wav（拉取成功即视为已出声），流式返回后删除临时文件；
@@ -121,6 +132,144 @@ export const speechOutRoutes: FastifyPluginAsync = async (app) => {
       .header('cache-control', 'no-store')
       .type('audio/wav')
       .send(createReadStream(wavPath));
+  });
+
+  /**
+   * ★★C：**按序号取音频** —— 客户端持游标、按台本顺序点名要货 ✓
+   *
+   * 与 /next 的根本区别（这就是 C 的全部要害）：
+   *   /next          生产端灌队列、客户端取队首 ✗
+   *                  → 「第几条」由**生产端**决定，显示的位置 ≠ 听众的位置 ✗
+   *   /item?seq=N    **客户端点名要第 N 条** ✓
+   *                  → 「第几条」归**客户端**，服务端只负责「给这段文本一段音频」✓
+   *
+   * 对照竞品（app-service.js 的 sendtxtAudio → POST makeAudio）：
+   *   它的请求体里就带着 `xuhao`（要第几条）与 `daudio`（当前水位），
+   *   序号同样是**客户端点名**的 ✓；开播时显式要 0..6 把开头铺满 ✓
+   *
+   * 合成走 synthesizeSpeechFile —— **命中 R69 的预生成缓存就一次都不碰火山** ✓
+   * （开播前已把整本台本备好，所以直播期间正常都是命中）
+   */
+  app.get('/api/out/speech/item', { preHandler: app.authenticate }, async (request, reply) => {
+    const liveId = readLiveIdQuery(request.query);
+    if (!liveId) {
+      return reply.code(400).send({ error: 'LIVE_ID_REQUIRED', message: '缺少场次标识' });
+    }
+    const rawSeq = (request.query as Record<string, unknown>).seq;
+    const seq = typeof rawSeq === 'string' ? Number.parseInt(rawSeq, 10) : Number.NaN;
+    if (!Number.isInteger(seq) || seq < 1) {
+      return reply.code(400).send({ error: 'SEQ_INVALID', message: '序号需为从 1 开始的整数' });
+    }
+    recordSpeakerPull(liveId);
+
+    let items: LoopCastItem[] | null;
+    try {
+      items = await loadBoundLoopItems(liveId);
+    } catch {
+      return reply
+        .code(500)
+        .send({ error: 'LOOP_SCRIPT_LOAD_FAILED', message: '台本读取失败' });
+    }
+    if (!items || items.length === 0) {
+      return reply
+        .code(409)
+        .send({ error: 'LOOP_SCRIPT_REQUIRED', message: '本场未绑定循环台本' });
+    }
+    if (seq > items.length) {
+      // 客户端据此回绕到第 1 条（竞品用 last_audio_xuhao 回绕，同一个意思）✓
+      return reply.code(409).send({
+        error: 'SEQ_OUT_OF_RANGE',
+        message: `第 ${seq} 条超出本场台本（共 ${items.length} 条）`,
+        total: items.length,
+      });
+    }
+    const item = items[seq - 1];
+    if (!item) {
+      return reply.code(400).send({ error: 'SEQ_INVALID', message: '序号无效' });
+    }
+
+    const overrides = await getLiveSpeech(liveId).catch(() => null);
+    const cache = (await loadLiveTtsCacheContext(liveId).catch(() => null)) ?? undefined;
+    let wavPath: string;
+    try {
+      wavPath = await synthesizeSpeechFile(item.text, overrides ?? undefined, cache);
+    } catch {
+      return reply
+        .code(500)
+        .send({ error: 'SPEECH_SYNTH_FAILED', message: '本条语音合成失败' });
+    }
+    const jobId = remoteSpeechQueue.registerFile(wavPath);
+    return reply.send({
+      seq,
+      total: items.length,
+      text: item.text,
+      audioUrl: `${SPEECH_AUDIO_PATH}/${jobId}`,
+      gapAfterSeconds: item.gapAfterSeconds ?? DEFAULT_ITEM_GAP_SECONDS,
+    });
+  });
+
+  /**
+   * ★★C：**取一条插播**（AI 回复优先，其次氛围语）；没有就 204 ✓
+   *
+   * 为什么需要它：C 之后循环位置在客户端，服务端**不知道「什么时候是空档」** ✗ ——
+   *   所以改成**客户端每次空档来要一条** ✓
+   *   （竞品是服务端用 socket 推 suiaRes / suiafuRes；我们用轮询，语义等价 ✓）
+   *
+   * 优先级照旧：**回复 > 氛围语**（观众的真问题比暖场词重要）✓；
+   * 氛围语仍由 atmosphereScheduler.pickDue 自己控频次 —— 没到期就返回 null，
+   * 不会因为「客户端来问」就多插 ✓
+   */
+  app.get('/api/out/speech/insertion', { preHandler: app.authenticate }, async (request, reply) => {
+    const liveId = readLiveIdQuery(request.query);
+    if (!liveId) {
+      return reply.code(400).send({ error: 'LIVE_ID_REQUIRED', message: '缺少场次标识' });
+    }
+    recordSpeakerPull(liveId);
+
+    // ① 弹幕回复优先（取出来就算用掉 —— 与 loopCaster.tryInsertReply 同口径）
+    let text: string | null = null;
+    let kind: 'reply' | 'atmosphere' = 'reply';
+    try {
+      text = takePendingReply(liveId)?.text ?? null;
+    } catch {
+      text = null;
+    }
+    // ② 没有回复 → 看氛围语到期没（到点才给）
+    let insertion: AtmosphereInsertion | null = null;
+    if (text === null) {
+      kind = 'atmosphere';
+      try {
+        insertion = atmosphereScheduler.pickDue(liveId, Date.now());
+      } catch {
+        insertion = null;
+      }
+      text = insertion?.text ?? null;
+    }
+    if (text === null) {
+      return reply.code(204).send();
+    }
+
+    const overrides = await getLiveSpeech(liveId).catch(() => null);
+    const cache = (await loadLiveTtsCacheContext(liveId).catch(() => null)) ?? undefined;
+    let wavPath: string;
+    try {
+      wavPath = await synthesizeSpeechFile(text, overrides ?? undefined, cache);
+    } catch {
+      return reply
+        .code(500)
+        .send({ error: 'SPEECH_SYNTH_FAILED', message: '插播语音合成失败' });
+    }
+    if (insertion) {
+      atmosphereScheduler.markSpoken(liveId, insertion.category, Date.now());
+    }
+    const jobId = remoteSpeechQueue.registerFile(wavPath);
+    return reply.send({
+      kind,
+      text,
+      audioUrl: `${SPEECH_AUDIO_PATH}/${jobId}`,
+      // 插播不额外停顿：回复要「接得住」，停一拍反而怪 ✓
+      gapAfterSeconds: 0,
+    });
   });
 };
 

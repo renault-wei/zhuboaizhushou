@@ -274,6 +274,39 @@ export interface CreateLiveSpeakerOptions {
   remoteOutput?: boolean;
 }
 
+/**
+ * ★C：**只合成并落盘**，不入队、不播放 —— 供「按序号取音频」按需取货 ✓
+ *
+ * 与 createLiveSpeaker 的合成段**完全同源**（查缓存 → 合成 → 落缓存），
+ * 抽出来是为了让 C（客户端持游标、按序号要货）复用同一条合成路径 ——
+ * 于是 R69 的防线**依然成立**：命中缓存时这里一次都不碰火山 ✓
+ * （开播前已预生成整本台本，直播期间按序号取到的全是缓存命中 ✓）
+ *
+ * **失败时上抛**（不吞）—— 让 speak 原有的 catch 继续把原因带出来、
+ * 让路由各自翻译成 500，两边语义都不用改 ✓
+ */
+export async function synthesizeSpeechFile(
+  text: string,
+  overrides?: SpeechOverrides,
+  cache?: TtsCacheContext,
+  synth: LocalWavSynth = resolveLiveSynth(),
+): Promise<string> {
+  if (cache) {
+    const hit = await findCachedTtsAudio({ ...cache, text }).catch(() => null);
+    if (hit) {
+      return hit.audioPath;
+    }
+  }
+  const synthesized = await synth.synthesize(text, overrides);
+  // miss 合成成功后落缓存；写失败只告警，不阻断本次取货 ✓
+  if (cache) {
+    await storeCachedTtsAudio({ ...cache, text }, synthesized.wavPath).catch(
+      () => null,
+    );
+  }
+  return synthesized.wavPath;
+}
+
 /** 出口工厂：生产用真实本机合成 + 真实播放器；测试可注入替身 */
 export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveSpeaker {
   const platform = options.platform ?? process.platform;
@@ -311,25 +344,10 @@ export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveS
         //   这是「开播前预生成」能生效的前提：预热跑过之后，
         //   开播期间一次都不调外部 TTS —— 火山抽风 / 额度用尽都伤不到直播 ✓
         //   （2026-09-22 凌晨那次 80 条 45000030、整晚零音频，正是缺了这一步 ✗）
-        let wavPath: string | null = null;
-        if (cache) {
-          const hit = await findCachedTtsAudio({ ...cache, text }).catch(
-            () => null,
-          );
-          if (hit) {
-            wavPath = hit.audioPath;
-          }
-        }
-        if (wavPath === null) {
-          const synthesized = await synth.synthesize(text, overrides);
-          wavPath = synthesized.wavPath;
-          // miss 合成成功后落缓存；写失败只告警，绝不阻断本次出声 ✓
-          if (cache) {
-            await storeCachedTtsAudio({ ...cache, text }, wavPath).catch(
-              () => null,
-            );
-          }
-        }
+        // ★C：合成段抽成 synthesizeSpeechFile —— 「按序号取音频」复用同一条路径 ✓
+        //   缓存语义完全不变：命中就一次都不碰火山 ✓（R69 的预生成防线仍然成立）
+        // 失败会抛 → 落到下面的 catch，reason=synthesize_failed 且带上原因 ✓
+        const wavPath = await synthesizeSpeechFile(text, overrides, cache, synth);
         sinkReached = true;
         const outcome = await sink.play(wavPath, liveId, gapAfterSeconds);
         if (outcome === 'played') {
