@@ -30,3 +30,46 @@ class SpeechPendingItem {
   final String? liveId;
 }
 
+/// ★R77：`GET /api/out/speech/next` 取号的结果 —— 一个音频 URL + **本条播完后的间隔**。
+///
+/// 为什么间隔要跟着 URL 一起回来（2026-09-22 真机实测「循环过快、似乎没有等待」）：
+///   服务端台本以 ~1 秒/条 入队（远程 sink 是入队即返回），而音频本身有 4.9~9.7 秒；
+///   我们的播放端原先**一秒不歇**（`onComplete` → 立刻播下一条）✗，
+///   台本里那点间隔被队列完全吸收，用户永远听不到 ✓
+/// 竞品 xcai1618 把间隔放在**播放端**（`bgAudio.onEnded` → `setTimeout(Endlater, n)`），
+/// 我们据此把服务端的 `gapAfterSeconds` 随条目一路下发到这里 ✓
+class SpeechAudioJob {
+  const SpeechAudioJob({required this.url, this.gapAfterSeconds = 0});
+
+  /// 音频的**绝对 URL**（原生播放器直接 GET，Dart 侧不搬字节 ✓）
+  final String url;
+
+  /// 本条播完之后要等的秒数（0 = 不等，立刻播下一条）
+  final double gapAfterSeconds;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'url': url,
+    'gap': gapAfterSeconds,
+  };
+
+  /// 解析一条。**兼容 R74 的旧格式**（纯 URL 字符串 → 按 gap=0 处理 ✓）——
+  /// 用户手机上可能还存着升级前写下的待播队列，不能因为换了格式就把它丢掉 ✗
+  static SpeechAudioJob? fromJson(Object? raw) {
+    if (raw is String) {
+      return raw.isEmpty ? null : SpeechAudioJob(url: raw);
+    }
+    if (raw is Map) {
+      final url = raw['url']?.toString() ?? '';
+      if (url.isEmpty) {
+        return null;
+      }
+      final gap = raw['gap'];
+      return SpeechAudioJob(
+        url: url,
+        gapAfterSeconds: gap is num ? gap.toDouble() : 0,
+      );
+    }
+    return null;
+  }
+}
+

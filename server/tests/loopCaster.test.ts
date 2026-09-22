@@ -700,4 +700,41 @@ describe('M10-A3 loopCaster 空档插播氛围语', () => {
     await waitRunnerGone(caster, LIVE_ID);
     expect(spoken).toEqual(['只有循环句。']);
   });
+
+  // ---------- R77：间隔随条目走到【播放端】 ----------
+  // 2026-09-22 真机实测「语音队列循环过快、似乎没有等待」：
+  //   间隔原先**只在生产端**（本文件里那句 await sleep(gap)）✗，
+  //   而远程 speak 是**入队即返回** —— 台本 ~1 秒/条 灌进队列，
+  //   播放端却要 6.8 秒才念完一条 → 队列灌满、播放端背靠背念，
+  //   台本里那点间隔被队列吸收干净 ✓
+  // 修法：间隔跟着**这句**一起交给出声链路（远程链路由它下发到播放端）✓
+  it('R77：每句的间隔（条目值 ?? 全局默认）随 speak 一起交给出声链路', async () => {
+    const items: LoopCastItem[] = [
+      { text: '第一句。', gapAfterSeconds: null },
+      { text: '第二句。', gapAfterSeconds: 3.5 },
+    ];
+    const gaps: Array<number | undefined> = [];
+    const caster = createLoopCaster({
+      itemGapSeconds: 1,
+      loopRestSeconds: 5,
+      loadItems: async () => items,
+      isBusy: () => false,
+      speak: async (_text, _overrides, _liveId, gapAfterSeconds) => {
+        gaps.push(gapAfterSeconds);
+        return { spoken: true, reason: 'spoken' };
+      },
+      sleep: async () => {
+        // 两句都说过就收工，不必等整轮跑完
+        if (gaps.length >= 2) {
+          caster.stop(LIVE_ID);
+        }
+      },
+    });
+
+    caster.start(LIVE_ID);
+    await waitRunnerGone(caster, LIVE_ID);
+
+    // 第一条没配 → 回落全局默认 1；第二条自带 3.5 → 原样透传
+    expect(gaps.slice(0, 2)).toEqual([1, 3.5]);
+  });
 });

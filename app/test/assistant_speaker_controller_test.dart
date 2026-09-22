@@ -12,6 +12,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:starvoice_app/features/assistant_speaker/data/audioplayers_speech_out_player.dart';
 
+import 'package:starvoice_app/core/models/speech_out_item.dart';
 import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/core/platform/keep_alive_bridge.dart';
 import 'package:starvoice_app/features/assistant_speaker/application/assistant_speaker_controller.dart';
@@ -170,24 +171,108 @@ Future<void> _waitUntil(bool Function() condition) async {
 
 void main() {
   test(
-    'R72：fetchNextAudioUrl —— 空队列 204 返回 null；有内容返回【绝对 URL】(不再搬字节)',
+    'R77：fetchNextSpeechJob —— 空队列 204 返回 null；有内容返回【绝对 URL + 播完后间隔】',
     () async {
       final emptyBackend = FakeBackend();
       final emptyApi = ApiClient(buildMockDio(emptyBackend));
-      final emptyResult = await emptyApi.fetchNextAudioUrl();
+      final emptyResult = await emptyApi.fetchNextSpeechJob();
       expect(emptyResult, isNull);
       expect(emptyBackend.speechOutPulledCount, 0);
 
-      final backend = FakeBackend(speechOut: <Uint8List>[_wavBytes(1)]);
+      final backend = FakeBackend(
+        speechOut: <Uint8List>[_wavBytes(1)],
+        speechOutGapSeconds: 1,
+      );
       final api = ApiClient(buildMockDio(backend));
-      final url = await api.fetchNextAudioUrl();
-      expect(url, isNotNull);
+      final job = await api.fetchNextSpeechJob();
+      expect(job, isNotNull);
       // 绝对地址（原生播放器要完整 URL，不能是相对路径）
-      expect(url, startsWith('http'));
-      expect(url, contains('/api/out/speech/audio/speech-mock-001'));
+      expect(job!.url, startsWith('http'));
+      expect(job.url, contains('/api/out/speech/audio/speech-mock-001'));
+      // ★R77：间隔随条目一起回来 —— 播放端据此在两条之间等待
+      expect(job.gapAfterSeconds, 1);
       expect(backend.speechOutPulledCount, 1);
     },
   );
+
+  test('R77：SpeechAudioJob 序列化往返；并兼容 R74 的旧纯字符串格式', () {
+    const job = SpeechAudioJob(url: 'https://x.test/a.wav', gapAfterSeconds: 1.5);
+    final restored = SpeechAudioJob.fromJson(jsonDecode(jsonEncode(job.toJson())));
+    expect(restored, isNotNull);
+    expect(restored!.url, 'https://x.test/a.wav');
+    expect(restored.gapAfterSeconds, 1.5);
+
+    // R74 旧格式：纯 URL 字符串 → gap 视作 0（升级不丢用户手机上已存的队列）
+    final legacy = SpeechAudioJob.fromJson('https://x.test/b.wav');
+    expect(legacy, isNotNull);
+    expect(legacy!.url, 'https://x.test/b.wav');
+    expect(legacy.gapAfterSeconds, 0);
+
+    // 垃圾输入不炸、也不产出半条
+    expect(SpeechAudioJob.fromJson(42), isNull);
+    expect(SpeechAudioJob.fromJson(<String, Object?>{}), isNull);
+    expect(SpeechAudioJob.fromJson(''), isNull);
+  });
+
+  // ---------- R77：条间间隔在【播放端】（对照竞品 bgAudio.onEnded + setTimeout） ----------
+  // 2026-09-22 真机实测：服务端台本 ~1 秒/条 入队，音频本身 4.9~9.7 秒，
+  // 而播放端 onComplete 一到就立刻播下一条 —— 台本里的间隔被队列吸干净，
+  // 用户听到的是「语音队列循环过快、似乎没有等待」。
+  test('R77：播完一条后等 gapAfterSeconds 才播下一条；等待中拉货也不抢跑', () async {
+    final backend = FakeBackend(
+      speechOut: <Uint8List>[_wavBytes(1), _wavBytes(2)],
+      speechOutGapSeconds: 0.3,
+    );
+    final api = ApiClient(buildMockDio(backend));
+    final player = _FakeSpeechOutPlayer();
+    final controller = AssistantSpeakerController(
+      api,
+      player,
+      const Duration(days: 1),
+    );
+
+    controller.start();
+    await _waitUntil(() => player.playedUrls.length == 1);
+    expect(controller.state.playedCount, 1);
+
+    // 间隔内：即使本轮又拉到货（pollOnce → _fillBuffer → _advancePlayback），
+    // 也必须被 `_gapTimer != null` 挡住 —— 这正是「绕过间隔」的那个坑
+    await controller.pollOnce();
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(player.playedUrls, hasLength(1));
+
+    // 间隔过了 → 第二条自然会来
+    await _waitUntil(() => player.playedUrls.length == 2);
+    expect(controller.state.playedCount, 2);
+
+    controller.dispose();
+  });
+
+  test('R77：stop() 取消「两条之间」的等待，不会再推进下一条', () async {
+    final backend = FakeBackend(
+      speechOut: <Uint8List>[_wavBytes(1), _wavBytes(2)],
+      speechOutGapSeconds: 5,
+    );
+    final player = _FakeSpeechOutPlayer();
+    final controller = AssistantSpeakerController(
+      ApiClient(buildMockDio(backend)),
+      player,
+      const Duration(days: 1),
+    );
+
+    controller.start();
+    await _waitUntil(() => player.playedUrls.length == 1);
+
+    controller.stop();
+    expect(controller.state.enabled, isFalse);
+    // stop 会把状态清成 idle（playedCount 一并归零），所以计数看播放器而不是 state ✓
+    expect(controller.state.status, AssistantSpeakerStatus.idle);
+    // 5 秒的间隔计时器若没被取消，这里会看到第二条冒出来
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(player.playedUrls, hasLength(1));
+
+    controller.dispose();
+  });
 
   test('start 空队列进入监听态；stop 取消轮询回到未启用', () async {
     final controller = AssistantSpeakerController(

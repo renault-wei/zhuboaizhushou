@@ -16,7 +16,8 @@ import { recordSpeakerPull } from '../services/speakerHeartbeat';
  * ★R61：单次清单上限。
  *
  * 手机据此分批拉 —— 一次问「最多 10 条」，避免一场积压几十条时
- * 一口气拉爆带宽与内存（队列本身的上界是 MAX_REMOTE_SPEECH_JOBS_PER_LIVE = 20）。
+ * 一口气拉爆带宽与内存（队列本身的**硬上界**是 MAX_REMOTE_SPEECH_JOBS_PER_LIVE = 60；
+ * **节奏水位**是 MAX_REMOTE_SPEECH_LOOKAHEAD_PER_LIVE = 3，见 remoteSpeechQueue）。
  */
 export const MAX_PENDING_BATCH = 10;
 
@@ -77,6 +78,8 @@ export const speechOutRoutes: FastifyPluginAsync = async (app) => {
       jobId: job.id,
       liveId: job.liveId ?? null,
       audioUrl: `${SPEECH_AUDIO_PATH}/${job.id}`,
+      // ★R77：本条播完后的间隔秒数 —— 助播机在**播放端**等待它（见 remoteSpeechQueue）
+      gapAfterSeconds: job.gapAfterSeconds,
     });
   });
 

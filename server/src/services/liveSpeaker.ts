@@ -161,8 +161,12 @@ export interface SpeechSink {
   /** 当前是否静音（静音只拦新播放，播到一半让其自然播完） */
   isMuted(): boolean;
   setMuted(muted: boolean): void;
-  /** 播放一段 wav：播放权与文件清理权都移交给 sink，播完 / 跳过 / 失败都由 sink 收尾 */
-  play(wavPath: string, liveId?: string): Promise<PlayOutcome>;
+  /**
+   * 播放一段 wav：播放权与文件清理权都移交给 sink，播完 / 跳过 / 失败都由 sink 收尾。
+   * ★R77：gapAfterSeconds = 这条**播完之后**的间隔（远程 sink 会把它随条目下发给助播机，
+   * 由播放端等待；本地 sink 忽略它 —— 本机链路里间隔本来就由 loopCaster 的 sleep 承担）。
+   */
+  play(wavPath: string, liveId?: string, gapAfterSeconds?: number): Promise<PlayOutcome>;
   /** 清空未播队列并打断当前播放（真人接管 / 一键静音） */
   stop(): void;
   /** 尚未播出的排队条数；带 liveId 时只数该场次的积压（多场隔离口径） */
@@ -249,6 +253,7 @@ export interface LiveSpeaker {
     overrides?: SpeechOverrides,
     liveId?: string,
     cache?: TtsCacheContext,
+    gapAfterSeconds?: number,
   ): Promise<SpeakResult>;
 }
 
@@ -291,6 +296,7 @@ export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveS
       overrides?: SpeechOverrides,
       liveId?: string,
       cache?: TtsCacheContext,
+      gapAfterSeconds?: number,
     ): Promise<SpeakResult> {
       if (!enabled) {
         return { spoken: false, reason: 'disabled' };
@@ -325,7 +331,7 @@ export function createLiveSpeaker(options: CreateLiveSpeakerOptions = {}): LiveS
           }
         }
         sinkReached = true;
-        const outcome = await sink.play(wavPath, liveId);
+        const outcome = await sink.play(wavPath, liveId, gapAfterSeconds);
         if (outcome === 'played') {
           return { spoken: true, reason: 'spoken' };
         }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:starvoice_app/core/platform/keep_alive_bridge.dart';
 import 'package:starvoice_app/core/theme/app_colors.dart';
@@ -109,31 +110,130 @@ KeepAlivePermissionActions buildPermissionActions(KeepAliveBridge bridge) {
   );
 }
 
-/// 权限向导标题行：`第 N / 4 步 · 步骤名`。
-String wizardStepLabel(int index) => '第 ${index + 1} / ${KeepAlivePermissionStep.values.length} 步';
+/// 权限向导标题行：`第 N / M 步`（M = **本次实际要走的步数**，不再恒为 4 ✓）。
+///
+/// ★R77：只列真的缺的那几步之后，步数就不是固定 4 了 ——
+/// 还硬写 `values.length` 会让用户看到「第 1 / 4 步」却只有一步可走 ✗
+String wizardStepLabel(int index, int total) => '第 ${index + 1} / $total 步';
+/// ★R77：用户走完过一次向导的痕迹。
+///
+/// 为什么需要：自启动那道闸**系统不允许应用查询**（见下方 check 返回 null），
+/// 于是「放行没放行」只有用户自己知道 ✓。
+/// 记一笔之后，下次再打开向导就不必让他白走一遍了 ✓
+const String keepAliveWizardDoneKey = 'assistant_keep_alive_wizard_done';
+
+Future<bool> _loadWizardDone() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(keepAliveWizardDoneKey) ?? false;
+  } catch (_) {
+    // 读不到最多是下次多引导一遍，不影响出声 ✓
+    return false;
+  }
+}
+
+Future<void> _markWizardDone() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(keepAliveWizardDoneKey, true);
+  } catch (_) {
+    // 同上：存不下不影响出声 ✓
+  }
+}
+
+/// ★R77：**只列真的缺**的那几步。
+///
+/// 为什么（2026-09-22 用户实测「权限只需要配置一次，还是不断弹出权限配置提示」）：
+///   原先不管三七二十一，4 步从头走到尾 ✗ ——
+///   对已经放行过的用户来说，每次打开都像「又在弹权限提示」✓
+///   现在先实测一遍：明确的绿不列、只列缺的 ✓
+///
+/// 判定口径：**只有 `true` 才算放行** ——
+///   `false`（确实没给）与 `null`（系统不给查，如自启动）都还要引导 ✓
+Future<List<KeepAlivePermissionStep>> pendingKeepAlivePermissionSteps(
+  KeepAlivePermissionActions actions, {
+  bool autoStartConfirmed = false,
+}) async {
+  final pending = <KeepAlivePermissionStep>[];
+  for (final step in KeepAlivePermissionStep.values) {
+    // 自启动：系统查不到，只能认「用户曾走完过向导」这一笔 ✓
+    if (step == KeepAlivePermissionStep.autoStart && autoStartConfirmed) {
+      continue;
+    }
+    bool? granted;
+    try {
+      granted = await actions.check(step);
+    } catch (_) {
+      // 查询失败按「未知」处理，不误报成已放行 ✓
+      granted = null;
+    }
+    if (granted != true) {
+      pending.add(step);
+    }
+  }
+  return pending;
+}
+
 /// 权限向导弹窗（对照竞品的分步引导）。
 ///
 /// 每一步的按钮文案**随授权状态切换**：
 ///   已放行 → 「下一步」；未放行 → 「马上设置」（＝竞品的 `quanbutton`）。
 /// 每一步都给出**系统里的中文路径**，而不是笼统的「去设置里找」✗。
 ///
-/// 返回 true 表示用户走完了最后一步（调用方据此记录「已引导」）。
+/// ★R77：进门先实测 —— **只把真的缺的摆出来** ✓；
+///   全绿就一句话收场，不再让用户白点 4 次 ✓（这就是「只需要配置一次」）
+///
+/// 返回 true 表示「该放行的都放行了」（用户走完了最后一步，或本来就全绿）。
 Future<bool> showKeepAlivePermissionWizard(
   BuildContext context, {
   required KeepAlivePermissionActions actions,
 }) async {
+  final steps = await pendingKeepAlivePermissionSteps(
+    actions,
+    autoStartConfirmed: await _loadWizardDone(),
+  );
+  if (!context.mounted) {
+    return false;
+  }
+  if (steps.isEmpty) {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('keepAlivePermissionAllGranted'),
+        title: const Text('权限已就绪'),
+        content: const Text(
+          '后台运行需要的权限都已经放行，锁屏和切到后台都不会被系统掐掉。'
+          '以后不用再设置了。',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+    return true;
+  }
   final granted = await showDialog<bool>(
     context: context,
     barrierDismissible: true,
-    builder: (dialogContext) => _WizardDialog(actions: actions),
+    builder: (dialogContext) => _WizardDialog(actions: actions, steps: steps),
   );
-  return granted ?? false;
+  final completed = granted ?? false;
+  if (completed) {
+    await _markWizardDone();
+  }
+  return completed;
 }
 
 class _WizardDialog extends StatefulWidget {
-  const _WizardDialog({required this.actions});
+  const _WizardDialog({required this.actions, required this.steps});
 
   final KeepAlivePermissionActions actions;
+
+  /// ★R77：**只含实测缺**的步骤 —— 已放行的不再让用户白点一遍 ✓
+  final List<KeepAlivePermissionStep> steps;
 
   @override
   State<_WizardDialog> createState() => _WizardDialogState();
@@ -145,7 +245,8 @@ class _WizardDialogState extends State<_WizardDialog> {
   bool? _granted;
   bool _checking = true;
 
-  KeepAlivePermissionStep get _step => KeepAlivePermissionStep.values[_index];
+  /// ★R77：步骤清单来自外部（只含缺的那几步），不再恒为 4 步 ✓
+  KeepAlivePermissionStep get _step => widget.steps[_index];
 
   @override
   void initState() {
@@ -185,7 +286,7 @@ class _WizardDialogState extends State<_WizardDialog> {
   }
 
   void _next() {
-    if (_index >= KeepAlivePermissionStep.values.length - 1) {
+    if (_index >= widget.steps.length - 1) {
       Navigator.of(context).pop(true);
       return;
     }
@@ -199,12 +300,12 @@ class _WizardDialogState extends State<_WizardDialog> {
   @override
   Widget build(BuildContext context) {
     final spec = _specs[_step]!;
-    final isLast = _index >= KeepAlivePermissionStep.values.length - 1;
+    final isLast = _index >= widget.steps.length - 1;
     // 只有「明确已放行」才升级成「下一步」；未知与未授权都留在「马上设置」
     final satisfied = _granted == true;
     return AlertDialog(
       key: const Key('keepAlivePermissionWizard'),
-      title: Text('开启直播间前的权限设置 · ${wizardStepLabel(_index)}'),
+      title: Text('后台运行权限设置 · ${wizardStepLabel(_index, widget.steps.length)}'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -233,6 +334,17 @@ class _WizardDialogState extends State<_WizardDialog> {
           onPressed: _checking ? null : (satisfied ? _next : _open),
           child: Text(satisfied ? (isLast ? '完成' : '下一步') : spec.actionLabel),
         ),
+        // ★★R77：最后一步若**系统不给查**（自启动那道闸），只能由用户自己确认 ✓
+        //
+        // 为什么必须留这个出口：没有它，向导**永远走不完** ✗ ——
+        //   自启动查不到 → 这一步永远是「缺的」→ 每次打开都还在弹 ✓
+        //   这正是用户抱怨的「权限只需要配置一次，还是不断弹出」✓
+        if (isLast && _granted == null)
+          TextButton(
+            key: const Key('keepAliveWizardDone'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('已完成设置'),
+          ),
       ],
     );
   }

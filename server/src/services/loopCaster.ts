@@ -12,7 +12,10 @@ import type { AtmosphereCategory, AtmosphereInsertion } from './atmosphere';
 import { atmosphereScheduler } from './atmosphereScheduler';
 import { takePendingReply } from './pendingReplies';
 // R70：判「链路忙」要用**队列上界**（不是「非空」）—— 见 defaultIsBusy 的注释
-import { MAX_REMOTE_SPEECH_JOBS_PER_LIVE } from './remoteSpeechQueue';
+import {
+  MAX_REMOTE_SPEECH_JOBS_PER_LIVE,
+  MAX_REMOTE_SPEECH_LOOKAHEAD_PER_LIVE,
+} from './remoteSpeechQueue';
 
 // 循环台本播出引擎（M4，P-循环台本 & P-播出里程碑 §8）：
 // 开播（ready→live）后按台本顺序循环口播产品/团购券；与弹幕回复共用 liveSpeaker 全局出声链路，
@@ -59,6 +62,7 @@ export interface LoopCasterOptions {
     text: string,
     overrides?: SpeechOverrides,
     liveId?: string,
+    gapAfterSeconds?: number,
   ): Promise<{ spoken: boolean; reason?: string }>;
   /**
    * 读当前场次绑定的循环台本：开播时读一次，运行中每轮开头重读（改绑下一轮生效）；
@@ -127,14 +131,22 @@ interface RunnerState {
 
 // ---------- 默认实现 ----------
 
-/** 默认出声：全局 liveSpeaker（本地播完 resolve / 远程入队即返回），带本场音色覆盖与场次归属 */
+/** 默认出声：全局 liveSpeaker（本地播完 resolve / 远程入队即返回），带本场音色覆盖与场次归属。
+ *
+ * ⚠️ 形参顺序与 [LoopCasterOptions.speak] 的**前缀约定**（R77）：
+ *   注入接口只有 (text, overrides, liveId, gapAfterSeconds) 四个 ✓ ——
+ *   隐藏的 `cache` 排在**最后**，于是「少参数的替身」自动可赋给它 ✓
+ *   （若把 cache 放第 4 位，注入的 4 参函数就会与 gap 撞位 ✗）
+ *   而 liveSpeaker.speak 的公开顺序是 (text, overrides, liveId, cache, gapAfterSeconds)，
+ *   所以这里要**换位**再传 ✓ */
 function defaultSpeak(
   text: string,
   overrides?: SpeechOverrides,
   liveId?: string,
+  gapAfterSeconds?: number,
   cache?: TtsCacheContext,
 ): Promise<{ spoken: boolean; reason?: string }> {
-  return liveSpeaker.speak(text, overrides, liveId, cache);
+  return liveSpeaker.speak(text, overrides, liveId, cache, gapAfterSeconds);
 }
 
 /** 默认睡眠：真实 setTimeout */
@@ -164,7 +176,15 @@ function defaultIsBusy(liveId: string): boolean {
   // 这是**背压**（back-pressure），不是故障 ✓：
   //   没满 → 照常入队，让 App 尽快把货囤到本地 ✓
   //   满了 → 等一下（此时台本会跳过等待、照播，多余条目由队列上界淘汰最旧的 ✓）
-  return speechLinePendingCount(liveId) >= MAX_REMOTE_SPEECH_JOBS_PER_LIVE;
+  //
+  // ★★R77 修正水位（2026-09-22 真机实测「循环过快、似乎没有等待」）：
+  //   R70 的「满 = 60」是在「间隔只在生产端」的前提下定的 ✗。
+  //   间隔下放到播放端之后，生产端 ~1 秒/条、播放端 ~7.8 秒/条 ——
+  //   若仍以 60 为水位，队列会一直钉在硬上界：台本永远在灌 7 分钟后的台词，
+  //   队列持续淘汰最旧的条目，而助播机永远在念很久以前的话 ✗。
+  //   改成「前瞻」水位（3 条）后，生产端由**消费速度**自然反压 ✓ ——
+  //   这也正是我们想要的节奏：台本跟着助播机的嘴走，而不是跟着自己的 sleep 走 ✓
+  return speechLinePendingCount(liveId) >= MAX_REMOTE_SPEECH_LOOKAHEAD_PER_LIVE;
 }
 
 /**
@@ -220,16 +240,19 @@ async function speakSafely(
     text: string,
     overrides?: SpeechOverrides,
     liveId?: string,
+    gapAfterSeconds?: number,
     cache?: TtsCacheContext,
   ) => Promise<{ spoken: boolean; reason?: string }>,
   liveId: string,
   text: string,
   overrides: SpeechOverrides | null,
+  gapAfterSeconds: number,
 ): Promise<boolean> {
   try {
     // ★R69：把缓存上下文交给合成层 —— 命中缓存时【完全不碰火山】✓
     const cache = await resolveCacheContext(liveId);
-    const result = await speak(text, overrides ?? undefined, liveId, cache);
+    // ★R77：间隔随条目下发到播放端（详见 remoteSpeechQueue 的 gapAfterSeconds 注释）
+    const result = await speak(text, overrides ?? undefined, liveId, gapAfterSeconds, cache);
     if (!result.spoken) {
       console.info(
         `[loopCaster] 场次 ${liveId} 循环句未出声（${result.reason ?? 'unknown'}），继续下一句`,
@@ -263,6 +286,7 @@ async function tryInsertReply(
   liveId: string,
   options: ResolvedLoopDeps,
   overrides: SpeechOverrides | null,
+  gapAfterSeconds: number,
 ): Promise<boolean> {
   // ⚠️ 这里**不能**用 isBusy 当门槛（2026-09-17 修）：
   // 手机线用的是 remoteSpeechSink，它的 play 是「**入队即返回**」（不等播放）——
@@ -287,13 +311,14 @@ async function tryInsertReply(
     return false;
   }
   // 取出来就播；出声失败即丢弃（队列有上界，不会因此堆积）
-  return await speakSafely(options.speak, liveId, text, overrides);
+  return await speakSafely(options.speak, liveId, text, overrides, gapAfterSeconds);
 }
 
 async function tryInsertAtmosphere(
   liveId: string,
   options: ResolvedLoopDeps,
   overrides: SpeechOverrides | null,
+  gapAfterSeconds: number,
 ): Promise<void> {
   // 同样的坑（2026-09-17 一并修）：远程 sink「入队即返回」→ isBusy 恒为真 →
   // 氛围语在手机线上**从来没被插播过**。频次由 atmosphereScheduler.pickDue 自己控，
@@ -312,7 +337,13 @@ async function tryInsertAtmosphere(
   if (!insertion) {
     return;
   }
-  const spoken = await speakSafely(options.speak, liveId, insertion.text, overrides);
+  const spoken = await speakSafely(
+    options.speak,
+    liveId,
+    insertion.text,
+    overrides,
+    gapAfterSeconds,
+  );
   if (spoken) {
     options.markAtmosphereSpoken(liveId, insertion.category, options.now());
   }
@@ -407,10 +438,12 @@ async function runLoop(
           break;
         }
         state.currentSeq = index + 1;
-        // 空档避让：出声队列**已满** → 小步轮询，不在播放间隙插队。
+        // 空档避让：队列里的**前瞻已满**（已经有几条排在前面等着播）→ 小步轮询，不在播放间隙插队。
         //
-        // ⚠️ 注意判据是「满」而不是「非空」（R70 修，见 defaultIsBusy 的注释）——
-        // R69 之后「队列里有货」是**正常状态**（等 App 囤走）✓，只有**满**才是背压 ✓。
+        // ⚠️ 判据是「前瞻满」而不是「非空」，也不是「撞硬上界」（R70 定方向，R77 定水位）——
+        // R69 之后「队列里有货」是**正常状态**（等 App 囤走）✓；
+        // R77 之后消费端按「音频时长 + 条间间隔」慢慢取 ✓，
+        // 所以「已有 3 条等着播」就是该停下来的信号（详见 defaultIsBusy 的注释）。
         //
         // ⚠️ 并且**不能无限等**（2026-09-17 修）：助播机一旦停止轮询
         // （App 被杀 / 断网），队列排不空 → 台本会卡在这里。
@@ -420,13 +453,12 @@ async function runLoop(
         while (!state.cancelled && options.isBusy(liveId)) {
           polls += 1;
           if (polls > maxYieldPolls) {
-            // R70：文案改成中性 —— 旧文案写「疑似助播机未轮询」，
-            // 但实测 App 一直在拉（14 次/分 ✓），那是**假警报** ✗。
-            // 现在这句只在「队列真的满」时出现，含义是**正常背压**，不是故障 ✓。
-            // 带上具体数字，便于判断是助播机慢还是队列上界太小 ✓
+            // R70：文案改成中性 —— 旧文案写「疑似助播机未轮询」，但实测 App 一直在拉，
+            // 那是**假警报** ✗。正常情况下前瞻水位会自然回落，走到这里只可能是助播机没在取货。
+            // R77：带上三个数字（当前积压 / 前瞻水位 / 硬上界），便于区分「助播机慢」与「水位太小」✓
             console.warn(
-              `[loopCaster] 场次 ${liveId} 出声队列已满（${speechLinePendingCount(liveId)} 条 / 上界 ${MAX_REMOTE_SPEECH_JOBS_PER_LIVE}），` +
-                `等待 ${maxYieldMs}ms 仍未回落，本次照播（多余条目由队列淘汰最旧的）`,
+              `[loopCaster] 场次 ${liveId} 出声队列积压（${speechLinePendingCount(liveId)} 条 / 前瞻 ${MAX_REMOTE_SPEECH_LOOKAHEAD_PER_LIVE}，硬上界 ${MAX_REMOTE_SPEECH_JOBS_PER_LIVE}），` +
+                `等待 ${maxYieldMs}ms 仍未回落，本次照播（疑似助播机未取货）`,
             );
             break;
           }
@@ -439,16 +471,23 @@ async function runLoop(
         if (!item) {
           break;
         }
-        await speakSafely(options.speak, liveId, item.text, voice);
+        // ★R77：间隔（本条播完后）随这句一起交给出声链路 —— 远程链路会把它下发到播放端 ✓
+        await speakSafely(
+          options.speak,
+          liveId,
+          item.text,
+          voice,
+          item.gapAfterSeconds ?? itemGapSeconds,
+        );
         if (state.cancelled) {
           break;
         }
         // 空档插播（R42）：**回复优先**，一个空档只放一条。
         // 回复放出去了就不再插氛围语 —— 一个空档只给一次插播机会，节奏才稳。
-        const insertedReply = await tryInsertReply(liveId, options, voice);
+        const insertedReply = await tryInsertReply(liveId, options, voice, itemGapSeconds);
         if (!insertedReply) {
           // 本句播完的间隔也是氛围语的机会窗口（忙/未到期 → 本次不插，等下一个空档）
-          await tryInsertAtmosphere(liveId, options, voice);
+          await tryInsertAtmosphere(liveId, options, voice, itemGapSeconds);
         }
         if (state.cancelled) {
           break;

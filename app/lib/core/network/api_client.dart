@@ -1210,7 +1210,9 @@ class ApiClient {
   ///   导致播放循环永久卡死并每秒空转 20 次 ✓（R71 只修了其中一处 await）。
   ///
   /// 返回值是**绝对 URL**（原生播放器需要完整地址，不能是相对路径 ✗）。
-  Future<String?> fetchNextAudioUrl({String? liveId}) async {
+  /// ★R77：返回值从「一个 URL 字符串」升级为 [SpeechAudioJob]（URL + 播完后间隔）
+  /// —— 间隔由服务端随条目下发，播放端据此在两条之间等待（竞品同款口径 ✓）
+  Future<SpeechAudioJob?> fetchNextSpeechJob({String? liveId}) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>(
         '/api/out/speech/next',
@@ -1223,7 +1225,11 @@ class ApiClient {
       if (audioUrl is! String || audioUrl.isEmpty) {
         return null;
       }
-      return _absoluteAudioUrl(audioUrl);
+      final gap = response.data!['gapAfterSeconds'];
+      return SpeechAudioJob(
+        url: _absoluteAudioUrl(audioUrl),
+        gapAfterSeconds: gap is num ? gap.toDouble() : 0,
+      );
     } on DioException catch (error) {
       throw _toApiException(error);
     }

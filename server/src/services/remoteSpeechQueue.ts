@@ -14,11 +14,26 @@ export interface RemoteSpeechJob {
   liveId?: string;
   /** 入队时刻（epoch ms）：用于**过期丢弃**（R63） */
   createdAt: number;
+  /**
+   * ★R77：本条**播完之后**的间隔秒数 —— 随条目下发到助播机，由**播放端**等待。
+   *
+   * 为什么必须跟着条目走（2026-09-22 真机实测「语音队列循环过快、似乎没有等待」）：
+   *   间隔原先**只存在于生产端**（loopCaster 里 `await sleep(gap)`）✗，
+   *   而远程链路 speak 是**入队即返回** ✓ ——
+   *   于是台本以 ~1 秒/条 把整轮塞进队列，助播机却要 ~6.8 秒才念完一条（实测 wav 4.9~9.7s）✗
+   *   → 队列被灌满，助播机一有货就**背靠背念** ✗
+   *   → 台本里的间隔被队列完全吸收，用户**永远听不到那 1 秒** ✓（这就是「没有等待」）
+   *
+   * 竞品 xcai1618 的做法（反编译 app-service.js:5679）：间隔在**播放端** ——
+   *   bgAudio.onEnded(() => { n = 随机(audio_delay); setTimeout(Endlater, n) })
+   * 间隔属于「**这句播完之后**」，所以它得跟着条目走到播放端，而不是留在生产端 ✓
+   */
+  gapAfterSeconds: number;
 }
 
 export interface RemoteSpeechQueue {
-  /** 追加一条待播报 wav（可标记归属场次），返回 jobId */
-  push(wavPath: string, liveId?: string): string;
+  /** 追加一条待播报 wav（可标记归属场次 + 本条播完后的间隔秒数），返回 jobId */
+  push(wavPath: string, liveId?: string, gapAfterSeconds?: number): string;
   /** 尚未被拉取的条数；带 liveId 时只数该场次 */
   size(liveId?: string): number;
   /**
@@ -64,6 +79,24 @@ export interface RemoteSpeechQueue {
 export const MAX_REMOTE_SPEECH_JOBS_PER_LIVE = 60;
 
 /**
+ * ★R77：**播放前瞻**（条）—— 台本「不再往前灌」的水位线，与上面那条硬上界不是一回事。
+ *
+ *   硬上界 60 = **防线**：助播机掉线时不让队列无限长（超了丢最旧的）✓
+ *   前瞻 3    = **节奏**：队列里已经有 3 条等着播了，台本就该停下来等助播机念 ✓
+ *
+ * 为什么必须分开（2026-09-22 真机实测「循环过快、似乎没有等待」）：
+ *   R70 把「忙」的判据从「非空」改成「满（60）」是为了修 R69 的假警报 ✓，
+ *   但那是在「间隔只在生产端」的前提下才成立的 ✗。
+ *   间隔下放到播放端之后（见 RemoteSpeechJob.gapAfterSeconds），
+ *   生产端 ~1 秒/条、播放端 ~7.8 秒/条 —— 若仍以 60 为水位，队列会**一直钉在硬上界** ✗：
+ *     · 助播机永远在念好几分钟前的台词（延迟可见）
+ *     · 队列持续淘汰最旧的条目（白合成、白淘汰）
+ *     · 台本每句撞满 maxYieldMs 让位超时后照播 → 硬上界形同虚设
+ *   压到 3 之后，生产端由**消费速度**自然反压 ✓，队列始终贴近实时 ✓
+ */
+export const MAX_REMOTE_SPEECH_LOOKAHEAD_PER_LIVE = 3;
+
+/**
  * 队列条目的**最大存活时长**（R63）。超过就直接丢掉，永远不交付。
  *
  * 为什么需要（2026-09-22 用户实测「直播间打开时部分语音一起播放」）：
@@ -102,10 +135,10 @@ class MemoryRemoteSpeechQueue implements RemoteSpeechQueue {
   /** 淘汰回调：让调用方有机会清理被丢掉那条的 wav 文件（否则临时目录会堆垃圾） */
   constructor(private readonly onEvict?: (job: RemoteSpeechJob) => void) {}
 
-  push(wavPath: string, liveId?: string): string {
+  push(wavPath: string, liveId?: string, gapAfterSeconds = 0): string {
     const id = randomUUID();
     const createdAt = Date.now();
-    this.jobs.push({ id, wavPath, liveId, createdAt });
+    this.jobs.push({ id, wavPath, liveId, createdAt, gapAfterSeconds });
     this.files.set(id, { wavPath, createdAt });
     if (liveId !== undefined) {
       while (this.size(liveId) > MAX_REMOTE_SPEECH_JOBS_PER_LIVE) {
@@ -174,7 +207,12 @@ class MemoryRemoteSpeechQueue implements RemoteSpeechQueue {
     for (const [id, entry] of this.files) {
       if (now - entry.createdAt > MAX_REMOTE_SPEECH_AGE_MS) {
         this.files.delete(id);
-        this.onEvict?.({ id, wavPath: entry.wavPath, createdAt: entry.createdAt });
+        this.onEvict?.({
+          id,
+          wavPath: entry.wavPath,
+          createdAt: entry.createdAt,
+          gapAfterSeconds: 0,
+        });
       }
     }
     for (let index = this.jobs.length - 1; index >= 0; index -= 1) {

@@ -140,6 +140,7 @@ class FakeBackend implements HttpClientAdapter {
     List<Map<String, dynamic>>? danmaku,
     List<Uint8List>? speechOut,
     this.failSpeechOut = false,
+    this.speechOutGapSeconds = 0,
     this.failVoicePreview = false,
     this.failVolcPresets = false,
     this.balanceMinutes = 120,
@@ -215,6 +216,10 @@ class FakeBackend implements HttpClientAdapter {
 
   /// 模拟出声队列接口 500（测试轮询错误分支）。
   bool failSpeechOut;
+
+  /// ★R77：`/next` 下发的「本条播完后的间隔秒数」（镜像服务端 gapAfterSeconds）——
+  /// 播放端据此在两条之间等待。默认 0 = 不等（保持既有用例的即时推进语义）。
+  final double speechOutGapSeconds;
 
   /// 模拟音色试听接口 503（测试试听失败分支）。
   bool failVoicePreview;
@@ -1187,6 +1192,8 @@ class FakeBackend implements HttpClientAdapter {
       'jobId': jobId,
       'liveId': null,
       'audioUrl': '/api/out/speech/audio/$jobId',
+      // ★R77：与真服务端同形状 —— 少了它，「播放端等间隔」在单测里就永远测不出来 ✗
+      'gapAfterSeconds': speechOutGapSeconds,
     });
   }
 

@@ -276,11 +276,15 @@ class MainActivity : FlutterActivity() {
         //   被系统回收后重建等原因**被反复拉起** ✓ ——
         //   于是每拉一次就申请一次权限，用户看到的就是**反复弹权限框** ✓。
         //
-        //   正确行为：**每次进程只问一次** ✓。
-        //   被拒了也**不要反复骚扰** ✗ —— 系统本身在拒绝两次之后就当作
-        //   「不再询问」✓，我们不该抢在它前面反复弹。
+        //   正确行为：**只问一次** ✓。被拒了也**不要反复骚扰** ✗ ——
+        //   系统本身在拒绝两次之后就当作「不再询问」✓，我们不该抢在它前面反复弹。
         //   真被拒了也不影响出声：前台服务照常运行，只是通知不可见 ✓。
-        if (notificationPermissionAsked) {
+        //
+        // ★★R77 再修（2026-09-22 用户复测「还是有不断弹出权限配置提示」）：
+        //   R76 的标记是个**实例字段** ✗ —— Activity 重建（旋转 / 被系统回收后恢复）
+        //   与**进程重启**都会把它清零 ✓，于是用户每次重新打开 App 又被问一次 ✓。
+        //   改成**落盘**：问过就永远不再问（用户要改可以自己去系统设置里开）✓
+        if (notificationPermissionAskedEver()) {
             return
         }
         val granted = checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
@@ -288,15 +292,25 @@ class MainActivity : FlutterActivity() {
         if (granted) {
             return
         }
-        notificationPermissionAsked = true
+        markNotificationPermissionAsked()
         requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_REQUEST)
     }
 
-    /** ★R76：本进程是否已经问过通知权限 —— 只问一次，不反复弹 ✓ */
-    private var notificationPermissionAsked = false
+    /** ★R77：通知权限是否**已经问过**（跨 Activity 重建 / 进程重启都算数）✓ */
+    private fun notificationPermissionAskedEver(): Boolean =
+        keepAlivePrefs().getBoolean(KEY_NOTIFICATION_ASKED, false)
+
+    private fun markNotificationPermissionAsked() {
+        keepAlivePrefs().edit().putBoolean(KEY_NOTIFICATION_ASKED, true).apply()
+    }
+
+    private fun keepAlivePrefs() = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     companion object {
         private const val KEEP_ALIVE_CHANNEL = "starvoice/keep_alive"
         private const val NOTIFICATION_REQUEST = 202609
+        /** ★R77：保活相关的一次性标记（目前只有「通知权限问过没有」）✓ */
+        private const val PREFS_NAME = "starvoice_keep_alive_prefs"
+        private const val KEY_NOTIFICATION_ASKED = "notification_permission_asked"
     }
 }

@@ -9,8 +9,13 @@ export function createRemoteSpeechSink(queue: RemoteSpeechQueue = remoteSpeechQu
   return {
     isMuted: () => false,
     setMuted: () => undefined,
-    async play(wavPath: string, liveId?: string): Promise<PlayOutcome> {
-      queue.push(wavPath, liveId);
+    async play(
+      wavPath: string,
+      liveId?: string,
+      gapAfterSeconds?: number,
+    ): Promise<PlayOutcome> {
+      // ★R77：间隔随条目一起入队 —— 由助播机在**播放端**等待（与竞品同款口径）
+      queue.push(wavPath, liveId, gapAfterSeconds);
       return 'played';
     },
     stop: () => queue.clear(),

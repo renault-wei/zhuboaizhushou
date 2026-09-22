@@ -12,11 +12,9 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:starvoice_app/core/models/danmaku_source.dart';
 import 'package:starvoice_app/core/models/live.dart';
@@ -24,7 +22,6 @@ import 'package:starvoice_app/core/models/loop_script.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/core/theme/app_colors.dart';
 import 'package:starvoice_app/core/theme/app_theme.dart';
-import 'package:starvoice_app/features/assistant_speaker/presentation/keep_alive_permission_wizard.dart';
 import 'package:starvoice_app/providers.dart';
 
 /// 现场直播工作台：真人出镜 + 后台 AI 语音主播的直播间控制台，
@@ -49,9 +46,6 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
   /// R61：连续多少秒没取到音频就认为「声音没送出去」—— 与服务端 R53 心跳口径一致。
   /// 只用于那一行红字，不做任何管理入口。
   static const int _speakerStaleWarnSeconds = 30;
-
-  /// 后台保活引导是否已展示过：仅首次启用出声时弹一次，不重复打扰。
-  static const _keepAliveGuidedKey = 'assistant_keep_alive_guided';
 
   Timer? _monitorTimer;
   Timer? _danmakuTimer;
@@ -246,25 +240,13 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
     ref
         .read(assistantSpeakerControllerProvider.notifier)
         .start(liveId: widget.liveId);
-    // 保活引导仍保留一次：它讲的是**系统层的后台限制**，不是「要不要开出声」——
-    // 不告知的话，商家永远不知道该给 App 放行，声音就会在锁屏后被系统掐掉。
-    // 只弹一次、不阻断（原有实现里已有「已展示过就不再弹」的判断）。
-    unawaited(_maybeShowKeepAliveGuide());
-  }
-
-  /// R65：手动打开权限向导（AppBar「权限」入口）。
-  ///
-  /// 与自动弹的那次是同一套向导，只是不写「已引导」标记 ——
-  /// 用户主动来查，随时可以再查一遍。
-  Future<void> _openPermissionWizard() async {
-    if (!mounted || defaultTargetPlatform != TargetPlatform.android) {
-      return;
-    }
-    final bridge = ref.read(keepAliveBridgeProvider);
-    await showKeepAlivePermissionWizard(
-      context,
-      actions: buildPermissionActions(bridge),
-    );
+    // ★★R77：**开播时不再弹权限向导** ✗（2026-09-22 用户实测「还是会不断弹出权限配置提示」）
+    //
+    // 旧实现在这里自动弹一次 4 步向导 ✓，而开播正是最不该被打断的时刻 ——
+    // 且它与「每次进直播间」绑在一起，用户感受到的就是「又要设权限」✓
+    //
+    // 现在改成**唯一入口**：我的 → 权限与保活设置（见 profile_page 的「运行保障」组）✓
+    // 配置一次就好；向导自己会先实测、只列真的缺的那几步 ✓
   }
 
   /// 拉取弹幕日志：失败静默保留旧列表，不打断观看体验。
@@ -449,19 +431,9 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
       data: AppTheme.workbench(),
       child: Scaffold(
         key: const Key('liveMonitorPage'),
-        appBar: AppBar(
-          title: const Text('现场直播工作台'),
-          actions: <Widget>[
-            // R65：「权限」入口 —— 向导只在首次自动弹一次，
-            // 之后用户想复查 / 改放行，得有地方点（否则改名成一次性弹窗就白做了）。
-            TextButton.icon(
-              key: const Key('liveMonitorPermissionEntry'),
-              onPressed: _openPermissionWizard,
-              icon: const Icon(Icons.shield_outlined, size: 18),
-              label: const Text('权限'),
-            ),
-          ],
-        ),
+        // ★R77：原先这里有个「权限」按钮 —— 已**移到最外层**（我的 → 权限与保活设置）✗
+        // 同一件事不该有两个入口，否则用户仍然会觉得「到处都在让设权限」✓
+        appBar: AppBar(title: const Text('现场直播工作台')),
         body: _buildBody(),
         bottomNavigationBar: _buildBottomBar(),
       ),
@@ -692,39 +664,6 @@ class _LiveMonitorPageState extends ConsumerState<LiveMonitorPage> {
         ],
       ),
     );
-  }
-
-  /// R62/R65：首次进入直播时弹一次**权限向导**（对照竞品 xcai1618 的 `quanstep`）。
-  ///
-  /// 为什么从「一次性两个按钮」改成**分步向导**：
-  ///   2026-09-21 真机实测（华为 ELS-AN10）证明，光有前台服务+唤醒锁+媒体豁免
-  ///   还是会被系统冻（拉取从 1 秒掉到 8~12 秒、最后停摆）——
-  ///   缺的是厂商那几道闸，而它们**代码碰不到**，只能一步步引导用户点。
-  ///   竞品把四道闸做成了分步状态机（通知 / 悬浮窗 / 电池优化 / 自启动），
-  ///   每步的按钮随授权状态切换，并把系统菜单层级写进文案。
-  ///
-  /// 仅 Android 有效；仅引导一次、**不阻断**开播（用户仍可选「暂不设置」）。
-  Future<void> _maybeShowKeepAliveGuide() async {
-    if (!mounted || defaultTargetPlatform != TargetPlatform.android) {
-      return;
-    }
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      if (!mounted || (prefs.getBool(_keepAliveGuidedKey) ?? false)) {
-        return;
-      }
-      await prefs.setBool(_keepAliveGuidedKey, true);
-      final bridge = ref.read(keepAliveBridgeProvider);
-      if (!mounted) {
-        return;
-      }
-      await showKeepAlivePermissionWizard(
-        context,
-        actions: buildPermissionActions(bridge),
-      );
-    } catch (_) {
-      // 引导只是锦上添花：原生桥不可用 / 读写偏好失败时静默跳过，不阻断开播
-    }
   }
 
   /// 开播前出声自检卡：就绪（ready）态提示直播画面与出声链路准备，

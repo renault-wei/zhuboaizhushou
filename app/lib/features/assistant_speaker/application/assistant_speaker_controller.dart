@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:starvoice_app/core/models/live.dart';
+import 'package:starvoice_app/core/models/speech_out_item.dart';
 import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/core/platform/keep_alive_bridge.dart';
@@ -158,7 +159,10 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   ///   而播放循环是每秒几十次的热路径 —— 挂一次就永久卡死 ✓
   ///   （现象：App 在**前台停在监控页**，一分钟 0 次拉取 ✓）
   ///   竞品反编译包的做法正是 `src = url; play();`，与本设计同构 ✓
-  final List<String> _audioUrls = <String>[];
+  /// ★★R77：每条 = **URL + 本条播完后的间隔秒数** ✓
+  /// （R72~R76 这里只存 URL 字符串 ✗ —— 于是播放端完全不知道台本里的间隔，
+  ///  onComplete 一到就立刻播下一条，听感就是「循环过快、没有等待」✓）
+  final List<SpeechAudioJob> _pending = <SpeechAudioJob>[];
 
   // 【历史】R69~R71 曾在此处引入一个**磁盘库存**（SpeechOutStore），
   //   用于「播完不丢、后台拉不动时用本地存货顶着播」。
@@ -192,6 +196,18 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
 
   /// ★R73：`onComplete` 的订阅句柄 —— 停用时必须取消，否则会跨场次重复推进 ✗
   StreamSubscription<void>? _completeSub;
+
+  /// ★★R77：**条间间隔计时器** —— 非空即表示「正停在两条之间」✓
+  ///
+  /// 对照竞品 `app-service.js:5679`：`onEnded` 之后 `setTimeout(Endlater, n)`，
+  /// n 取自服务端下发的 `audio_delay` —— **间隔在播放端** ✓
+  ///
+  /// 一个字段同时承担「等多久」与「是不是在等」两件事 ✓，
+  /// 于是不存在「标志位与定时器不同步」的第二种状态 ✓
+  Timer? _gapTimer;
+
+  /// 正在播那条的「播完后间隔」（秒）—— 由 [_advancePlayback] 发起时记下 ✓
+  double _currentGapSeconds = 0;
 
   /// ★R63：**播放互斥** —— 同一时刻只允许一条音频在播。
   ///
@@ -270,7 +286,9 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   /// 把当前待播队列写回本地（fire-and-forget ✓，绝不 await ✗）
   void _persistPendingUrls() {
     final generation = ++_persistGeneration;
-    final snapshot = jsonEncode(_audioUrls);
+    final snapshot = jsonEncode(
+      _pending.map((job) => job.toJson()).toList(growable: false),
+    );
     unawaited(() async {
       try {
         final prefs = await SharedPreferences.getInstance();
@@ -302,11 +320,15 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
         return;
       }
       // 只补进当前队列**前面** —— 恢复的应当是「还没播的」那部分 ✓
-      final restored = decoded.whereType<String>().toList(growable: false);
+      // ★R77：现在存的是 {url, gap} 对象；fromJson 同时兼容 R74 的纯字符串旧格式 ✓
+      final restored = decoded
+          .map(SpeechAudioJob.fromJson)
+          .whereType<SpeechAudioJob>()
+          .toList(growable: false);
       if (restored.isEmpty) {
         return;
       }
-      _audioUrls.insertAll(0, restored);
+      _pending.insertAll(0, restored);
       unawaited(_advancePlayback());
     } catch (_) {
       // 恢复失败按空处理 ✓
@@ -326,8 +348,14 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     _liveId = null;
     // ★R68：停用时忘掉场次线索 —— 否则监督者会把它再拉起来（与用户意图相反）
     unawaited(_rememberLiveId(null));
+    // ★R77：先把「两条之间」的等待取消掉 ✗ ——
+    //   少了这一步，stop 之后那个定时器仍会醒来推进下一条 ✓
+    //   （与 R73 漏复位 _playLoopRunning 是同一类病灶）
+    _gapTimer?.cancel();
+    _gapTimer = null;
+    _currentGapSeconds = 0;
     // 停用清空待播 URL ✓
-    _audioUrls.clear();
+    _pending.clear();
     // ★R74：持久化的那份也要清 ✗ —— 否则下次开播会把「用户已经放弃的」音频复活 ✓
     _persistPendingUrls();
     // ★R73：取消事件订阅并复位标志 ✗
@@ -389,7 +417,7 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   /// 下载走的是 `/next`（服务端**原子取出**），所以清单只是「有几条」的快照，
   /// 两条 App 同时拉也不会重复播。
   Future<void> _fillBuffer() async {
-    if (_audioUrls.length >= _bufferMaxItems) {
+    if (_pending.length >= _bufferMaxItems) {
       return;
     }
     final pending = await _api.fetchPendingOutSpeech(liveId: _liveId);
@@ -401,14 +429,15 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
       return;
     }
     var fetched = 0;
-    while (_audioUrls.length < _bufferMaxItems && fetched < pending.length) {
+    while (_pending.length < _bufferMaxItems && fetched < pending.length) {
       // ★R72：只取 URL，**不取字节** ✓ —— 字节由原生播放器拉
-      final url = await _api.fetchNextAudioUrl(liveId: _liveId);
-      if (url == null) {
+      // ★R77：连同「本条播完后的间隔」一起带回来 ✓
+      final job = await _api.fetchNextSpeechJob(liveId: _liveId);
+      if (job == null) {
         // 清单说还有，但已被别的取走 / 已过期 —— 本次到此为止
         break;
       }
-      _audioUrls.add(url);
+      _pending.add(job);
       fetched += 1;
     }
     if (fetched > 0) {
@@ -462,24 +491,59 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
         playedCount: state.playedCount + 1,
         lastError: null,
       );
-      unawaited(_advancePlayback());
+      // ★★R77：**先等本条自己的间隔，再播下一条** ✓
+      //   （竞品：`onEnded` → `setTimeout(Endlater, n)`，见 app-service.js:5679）
+      _scheduleNextAfterGap();
     });
     unawaited(_advancePlayback());
   }
 
-  /// 播下一条（幂等：在途 / 已停用 / 队列空 → 直接返回 ✓）
+  /// ★★R77：**条间间隔** —— 本条播完后等 `gapAfterSeconds` 秒，再推进下一条 ✓
+  ///
+  /// 对照竞品 `app-service.js:5679`：
+  ///   `bgAudio.onEnded(() => { n = 随机(audio_delay); setTimeout(Endlater, n) })`
+  /// —— 它的间隔**在播放端**等，所以听众真的听得到那口气 ✓
+  ///
+  /// 我们原先的间隔只在**生产端**（服务端 `loopCaster` 里 `await sleep(gap)`）✗，
+  /// 而远程链路 `speak` 是**入队即返回** → 台本 ~1 秒/条 灌进队列，
+  /// 播放端却要 6.8 秒才念完一条（实测 wav 4.9~9.7s）→ 队列被灌满，
+  /// 播放端一有货就**背靠背念** ✗ → 台本里的间隔被队列吸收干净，
+  /// 用户听到的就是「循环过快、似乎没有等待」✓
+  void _scheduleNextAfterGap() {
+    final gapMilliseconds = (_currentGapSeconds * 1000).round();
+    _currentGapSeconds = 0;
+    if (gapMilliseconds <= 0) {
+      // 没配间隔（插播的回复 / 氛围语走的也是这条路）→ 立刻推进 ✓
+      unawaited(_advancePlayback());
+      return;
+    }
+    _gapTimer?.cancel();
+    _gapTimer = Timer(Duration(milliseconds: gapMilliseconds), () {
+      _gapTimer = null;
+      if (_disposed || !state.enabled) {
+        return;
+      }
+      unawaited(_advancePlayback());
+    });
+  }
+
+  /// 播下一条（幂等：在途 / 停在两条之间 / 已停用 / 队列空 → 直接返回 ✓）
   ///
   /// 队列空时**不做任何等待** ✗ —— 等下次 `_fillBuffer` 拉到货再调一次即可 ✓
   /// （旧实现的 `_waitIdle` 门闩属于「必须 resolve 的 future」那一类，随之删除 ✓）
   Future<void> _advancePlayback() async {
-    if (_disposed || !state.enabled || _playing) {
+    // ★R77：`_gapTimer != null` = 正停在两条之间 ✓ —— 必须早退，
+    //   否则 `_fillBuffer` 拉到货后那句 `_advancePlayback()` 会**绕过间隔**直接起播 ✗
+    if (_disposed || !state.enabled || _playing || _gapTimer != null) {
       return;
     }
-    if (_audioUrls.isEmpty) {
+    if (_pending.isEmpty) {
       return;
     }
     // 先出队再发起 —— 顺序很重要：发起失败也不能让这条卡住队列 ✓
-    final url = _audioUrls.removeAt(0);
+    final job = _pending.removeAt(0);
+    // ★R77：记下这条的间隔 —— 它属于**刚发起的这条**，等它播完才用得上 ✓
+    _currentGapSeconds = job.gapAfterSeconds;
     // 出队即持久化（fire-and-forget ✓）—— 崩溃后恢复时不会重播已经播过的 ✓
     _persistPendingUrls();
     _playing = true;
@@ -496,10 +560,12 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     //
     // 正确写法：把错误处理**挂在 Future 上** ✓（而不是靠外层 try）
     unawaited(
-      _player.playUrl(url).catchError((Object error) {
+      _player.playUrl(job.url).catchError((Object error) {
         // 异步失败：放闸并继续下一条，绝不卡住链条 ✓
         // （单条失败不该让整场静音 —— 服务端 TTL 过了的链接就会走到这里 ✓）
         _playing = false;
+        // ★R77：这条压根没播成 → 不补间隔，立刻放下一条 ✓
+        _currentGapSeconds = 0;
         if (!_disposed && state.enabled) {
           unawaited(_advancePlayback());
         }

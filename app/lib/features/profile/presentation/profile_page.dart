@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +8,7 @@ import 'package:starvoice_app/core/models/voice_agreement.dart';
 import 'package:starvoice_app/core/network/api_exception.dart';
 import 'package:starvoice_app/core/theme/app_colors.dart';
 import 'package:starvoice_app/core/theme/theme_tokens.dart';
+import 'package:starvoice_app/features/assistant_speaker/presentation/keep_alive_permission_wizard.dart';
 import 'package:starvoice_app/providers.dart';
 
 String _twoDigits(int value) => value.toString().padLeft(2, '0');
@@ -99,6 +101,10 @@ class ProfilePage extends ConsumerWidget {
             route: '/profile/atmosphere',
           ),
           const SizedBox(height: 20),
+          const _GroupHeader('运行保障'),
+          const SizedBox(height: 8),
+          const _PermissionMenuTile(),
+          const SizedBox(height: 20),
           const _GroupHeader('帮助与支持'),
           const SizedBox(height: 8),
           const _NavMenuTile(
@@ -172,6 +178,94 @@ class _GroupHeader extends StatelessWidget {
       ),
     );
   }
+}
+
+/// ★R77：**不跳页面、直接执行动作**的菜单项（用于「权限与保活设置」）。
+///
+/// 为什么不复用 [_NavMenuTile]：那个的语义是「push 一个子页面」✗，
+/// 而权限是**弹分步向导**（不是页面）—— 硬套会在路由表里多出一个假页面 ✓
+class _ActionMenuTile extends StatelessWidget {
+  const _ActionMenuTile({
+    required this.entryKey,
+    required this.openButtonKey,
+    required this.icon,
+    required this.title,
+    required this.onTap,
+    this.subtitle,
+  });
+
+  final Key entryKey;
+  final Key openButtonKey;
+  final IconData icon;
+  final String title;
+  final VoidCallback onTap;
+  final String? subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      key: entryKey,
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        key: openButtonKey,
+        onTap: onTap,
+        leading: Icon(icon, size: 22),
+        title: Text(title),
+        subtitle: subtitle == null
+            ? null
+            : Text(
+                subtitle!,
+                style: TextStyle(fontSize: 12, color: context.tokenTextBody),
+              ),
+        trailing: Icon(
+          Icons.chevron_right,
+          size: 20,
+          color: context.tokenTextHint,
+        ),
+      ),
+    );
+  }
+}
+
+/// ★R77：权限与保活的**唯一入口** —— 放在最外层（我的 → 运行保障）✓
+///
+/// 为什么从直播监控页搬过来（2026-09-22 用户要求「权限移到最外面、只需要配置一次」）：
+///   · 原先入口在**直播监控页**（AppBar 按钮 ＋ 开播时自动弹一次）✗ ——
+///     用户得先进某一场直播才找得到，而且开播正是最不该被打断的时刻 ✓
+///   · 这几道闸（通知 / 悬浮窗 / 电池优化 / 自启动）是**系统层的一次性配置**，
+///     跟哪一场直播都没关系 —— 本就该在外层配一次就好 ✓
+///   · 向导自己会先实测、**只列真的缺的那几步**；全绿就一句话收场 ✓
+class _PermissionMenuTile extends ConsumerWidget {
+  const _PermissionMenuTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return _ActionMenuTile(
+      entryKey: const Key('profilePermissionEntry'),
+      openButtonKey: const Key('profilePermissionOpenButton'),
+      icon: Icons.shield_outlined,
+      title: '权限与保活设置',
+      subtitle: '一次配置好，锁屏 / 切后台也不会掉线',
+      onTap: () => _openKeepAlivePermissionWizard(context, ref),
+    );
+  }
+}
+
+Future<void> _openKeepAlivePermissionWizard(
+  BuildContext context,
+  WidgetRef ref,
+) async {
+  // 这几道闸都是 Android 系统层的；其它平台没有可设的东西 ✓
+  if (defaultTargetPlatform != TargetPlatform.android) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('后台保活设置仅 Android 手机需要')),
+    );
+    return;
+  }
+  await showKeepAlivePermissionWizard(
+    context,
+    actions: buildPermissionActions(ref.read(keepAliveBridgeProvider)),
+  );
 }
 
 /// 普通跳转菜单项：指向「我的」相关子页面（隐私 / 协议 / 客服等）。

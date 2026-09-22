@@ -5,7 +5,11 @@ import { access, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '../src/app';
-import { remoteSpeechQueue } from '../src/services/remoteSpeechQueue';
+import {
+  MAX_REMOTE_SPEECH_JOBS_PER_LIVE,
+  MAX_REMOTE_SPEECH_LOOKAHEAD_PER_LIVE,
+  remoteSpeechQueue,
+} from '../src/services/remoteSpeechQueue';
 import { MAX_PENDING_BATCH } from '../src/routes/speechOut';
 import {
   forgetSpeakerHeartbeat,
@@ -36,19 +40,6 @@ async function makeWavFile(): Promise<string> {
   const wavPath = join(tmpdir(), `speech-out-test-${randomUUID()}.wav`);
   await writeFile(wavPath, 'RIFF-fake-wav-bytes');
   return wavPath;
-}
-
-async function waitForDeleted(wavPath: string): Promise<void> {
-  const deadline = Date.now() + 2000;
-  while (Date.now() < deadline) {
-    try {
-      await access(wavPath);
-    } catch {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error('交付后文件未被删除（等待超时）');
 }
 
 function pullSpeech(token: string) {
@@ -261,5 +252,49 @@ it('R61：清单按场次过滤，且单次不超过 maxBatch（只读，不取�
   // ★ 关键：问清单【不取走】—— 队列条数一点没少
   expect(remoteSpeechQueue.size(liveA)).toBe(12);
   expect(remoteSpeechQueue.size(liveB)).toBe(1);
+});
+
+// ---------- R77：条间间隔（gapAfterSeconds）随条目下发到播放端 ----------
+// 2026-09-22 真机实测「语音队列循环过快、似乎没有等待」：
+//   间隔原先只在生产端（loopCaster 里 await sleep(gap)），而远程 speak 是入队即返回 ——
+//   台本 ~1 秒/条 灌进队列、播放端 6.8 秒才念完一条 → 队列被灌满、播放端背靠背念，
+//   台本里那点间隔被队列吸收干净。修法：间隔跟着条目走到播放端（竞品 bgAudio.onEnded 同款）。
+
+it('R77：入队时的间隔随取号一起下发（播放端据此在两条之间等待）', async () => {
+  const wavPath = await makeWavFile();
+  remoteSpeechQueue.push(wavPath, 'live-gap', 1.5);
+
+  const res = await pullSpeechForLive(makeToken(), 'live-gap');
+  expect(res.statusCode).toBe(200);
+  const body = res.json() as { jobId: string; gapAfterSeconds: number };
+  expect(body.gapAfterSeconds).toBe(1.5);
+});
+
+it('R77：未指定间隔时默认 0（插播的回复 / 氛围语不该被拖住）', async () => {
+  const wavPath = await makeWavFile();
+  remoteSpeechQueue.push(wavPath, 'live-gap0');
+
+  const res = await pullSpeechForLive(makeToken(), 'live-gap0');
+  const body = res.json() as { gapAfterSeconds: number };
+  expect(body.gapAfterSeconds).toBe(0);
+});
+
+it('R77：远程 sink 把间隔一并入队（speak → sink.play(wav, liveId, gap) 一路透传）', async () => {
+  const wavPath = await makeWavFile();
+  const sink = createRemoteSpeechSink(remoteSpeechQueue);
+  await sink.play(wavPath, 'live-sink', 2);
+
+  const res = await pullSpeechForLive(makeToken(), 'live-sink');
+  const body = res.json() as { gapAfterSeconds: number };
+  expect(body.gapAfterSeconds).toBe(2);
+});
+
+// 水位：前瞻（节奏）与硬上界（防线）必须分开，否则队列会一直钉在硬上界 ——
+// 台本永远在灌几分钟后的台词、队列持续淘汰最旧的条目，而助播机永远在念很久以前的话 ✗
+it('R77：播放前瞻远小于硬上界（生产端由消费速度反压，不是灌满才停）', () => {
+  expect(MAX_REMOTE_SPEECH_LOOKAHEAD_PER_LIVE).toBe(3);
+  expect(MAX_REMOTE_SPEECH_LOOKAHEAD_PER_LIVE).toBeLessThan(
+    MAX_REMOTE_SPEECH_JOBS_PER_LIVE,
+  );
 });
 
