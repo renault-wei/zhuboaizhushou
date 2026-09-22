@@ -56,12 +56,22 @@ class AssistantKeepAliveService : Service() {
         startForegroundCompat(title, content)
         acquireLocks()
         startSilenceLoop()
-        // R62：两样保活加固（对照竞品取证）
-        //   ① JobScheduler 心跳：系统统一调度，**不受应用定时器被限流影响**；
-        //   ② 1 像素透明 Activity：让本进程留在更高的优先级桶里，更不容易被冻结。
-        //      它只在保活期间由服务自己拉起（属前台服务可见场景，不做静默自启 ✗）。
+        // ★★R79 删除「1 像素 Activity」（2026-09-22 真机实测）：
+        //
+        //   它带来的**净收益是负的** ✗。实测数据：
+        //     · OnePixelActivity 被拉起 98 次、系统权限框在 360ms 内闪 25 次
+        //     · 它带 taskAffinity=""，会进**另一个 task 并把 MainActivity 顶到后台**
+        //     · Flutter 活动被 pause → Dart 定时器被冻：
+        //         /next 出现 32.9 秒空档、/audio 出现 33.9 秒空档，
+         //        恢复时手上的 URL 已过服务端 TTL(10min) → 404 ✓
+        //   → 用户看到的就是「权限一直提示」+「播放跳来跳去」✓
+        //
+        //   而它想换的东西（更高的优先级桶）本来就由**前台服务**给足了 ✓
+        //   本类注释第 37 行一直写着「不使用 …1 像素 Activity…」——现在代码与它一致了 ✓
+        //
+        //   保住的是正规手段：前台服务 + 常驻可见通知 + PARTIAL_WAKE_LOCK + WifiLock
+        //   + JobScheduler 心跳（只负责「服务掉了拉回来」，不碰界面）✓
         KeepAliveJobService.schedule(this)
-        raiseOnePixel()
         // 被杀后由系统按 startForegroundService 语义尽量重建（保留常驻语义）
         return START_STICKY
     }
@@ -173,25 +183,6 @@ class AssistantKeepAliveService : Service() {
             }
         } catch (_: Throwable) {
             silencePlayer = null
-        }
-    }
-
-    /**
-     * 拉起 1 像素透明 Activity。
-     *
-     * 失败一律吞掉：这只是「提升后台存活率」的加分项，不能因为它让保活起不来。
-     * 少数 ROM 会拦截后台启动 Activity —— 拦了就拦了，前台服务与 JobScheduler 仍在。
-     */
-    private fun raiseOnePixel() {
-        try {
-            val intent = Intent(this, OnePixelActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
-                addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
-            }
-            startActivity(intent)
-        } catch (_: Throwable) {
-            // 被系统拦掉是预期内的，不处理
         }
     }
 
