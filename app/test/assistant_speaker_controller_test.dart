@@ -56,6 +56,7 @@ class _FakeSpeechOutPlayer implements SpeechOutPlayer {
     if (gate != null) {
       await gate.future;
     }
+    _notifyComplete();
   }
 
   @override
@@ -67,6 +68,14 @@ class _FakeSpeechOutPlayer implements SpeechOutPlayer {
     final gate = _gate;
     if (gate != null) {
       await gate.future;
+    }
+    _notifyComplete();
+  }
+
+  /// ★R73：与真实实现同契约 —— 每次播放**恰好发一次**「本条结束」✓
+  void _notifyComplete() {
+    if (!_completeController.isClosed) {
+      _completeController.add(null);
     }
   }
 
@@ -260,6 +269,8 @@ void main() {
     backend.failSpeechOut = false;
     backend.speechOut.add(_wavBytes(4));
     await controller.pollOnce();
+    // ★R73：播放改为异步发起（事件驱动），断言前必须等它真的播出去 ✓
+    await _waitUntil(() => player.playedUrls.length == 1);
     expect(player.playedUrls, hasLength(1));
     expect(controller.state.playedCount, 1);
     expect(controller.state.status, AssistantSpeakerStatus.waiting);

@@ -186,13 +186,11 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   /// 为什么要这样：`future.delayed` 在停用/dispose 后仍会悬挂着，
   /// 测试收尾会报 `timersPending`，真机上也是白占一个定时器。
   /// 换成 Completer 之后，停用/销毁能立刻把循环叫醒退出。
-  Completer<void>? _idleGate;
-
-  /// 播放循环是否已在跑（同一时刻只允许一个）
+  /// 播放驱动是否已挂上（同一时刻只允许一个）
   bool _playLoopRunning = false;
 
-  /// R64：播放循环「没播到」时的让出时长。必须是正数，否则循环会空转烧 CPU。
-  static const Duration _playLoopYield = Duration(milliseconds: 50);
+  /// ★R73：`onComplete` 的订阅句柄 —— 停用时必须取消，否则会跨场次重复推进 ✗
+  StreamSubscription<void>? _completeSub;
 
   /// ★R63：**播放互斥** —— 同一时刻只允许一条音频在播。
   ///
@@ -237,7 +235,7 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     _timer = Timer.periodic(_pollInterval, (_) => unawaited(pollOnce()));
     unawaited(_syncKeepAlive(true));
     unawaited(pollOnce());
-    unawaited(_playLoop());
+    _startPlayDriver();
   }
 
   /// 停用出声：停表、打断播放并回到 idle（幂等，页面收尾 / 直播结束时调用）。
@@ -253,9 +251,15 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     _liveId = null;
     // ★R68：停用时忘掉场次线索 —— 否则监督者会把它再拉起来（与用户意图相反）
     unawaited(_rememberLiveId(null));
-    // 停用清空待播 URL（播放循环靠 enabled 退出）✓
+    // 停用清空待播 URL ✓
     _audioUrls.clear();
-    _wakeIdle();
+    // ★R73：取消事件订阅并复位标志 ✗
+    //   少了复位，下次开播时 `_startPlayDriver` 会因为「已在跑」直接返回 ✓
+    //   → 出声再也起不来，而且没有任何报错（极难查 ✗）
+    unawaited(_completeSub?.cancel());
+    _completeSub = null;
+    _playLoopRunning = false;
+    _playing = false;
     state = AssistantSpeakerState.idle();
     unawaited(_player.stop());
     unawaited(_syncKeepAlive(false));
@@ -322,130 +326,83 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
       _audioUrls.add(url);
       fetched += 1;
     }
-    // 有货了 → 把可能正在空闲等待的播放循环叫醒，别让它白等
-    _wakeIdle();
+    // 有货了 → 主动推进一条 ✓
+    // （事件驱动下没有「空闲等待中的循环」可叫醒 ✗ —— 旧实现靠 _wakeIdle 唤醒它）
+    unawaited(_advancePlayback());
     if (_disposed || !state.enabled) {
       return;
     }
-    state = state.copyWith(status: AssistantSpeakerStatus.waiting, lastError: null);
+    // ★R73：**不能无条件覆盖状态** ✗
+    //   本函数在收尾前已经触发了播放（上面那句 _advancePlayback）✓，
+    //   此时状态已是 playing —— 再写 waiting 会把它冲掉，
+    //   上层看到的就永远不是「播报中」（真机上表现为状态灯乱跳 ✗）
+    if (state.status != AssistantSpeakerStatus.playing) {
+      state = state.copyWith(
+        status: AssistantSpeakerStatus.waiting,
+        lastError: null,
+      );
+    }
   }
 
+
+  /// ★★R73：**事件驱动的播放推进**（对照竞品 `bgAudio.onEnded(...)`）✓
   ///
-  /// 等待「有新音频」或「被叫醒停用」—— 见 [_idleGate] 的注释。
-  Future<void> _waitIdle() async {
-    final gate = Completer<void>();
-    _idleGate = gate;
-    await gate.future;
-    if (identical(_idleGate, gate)) {
-      _idleGate = null;
-    }
-  }
-
-  /// 叫醒空闲中的播放循环（停用 / dispose / 有新音频时都该调）
-  void _wakeIdle() {
-    final gate = _idleGate;
-    if (gate != null && !gate.isCompleted) {
-      gate.complete();
-    }
-  }
-
-  /// 从缓冲取一条播出去；缓冲空返回 false。
+  /// 与旧实现的根本区别 —— **推 vs 拉**：
+  ///   旧：`while (…) { await _playOneFromBuffer(); }` —— **拉** ✗
+  ///        整条链路的进展依赖「那个 future 一定会 resolve」✗
+  ///        今晚 5 个 bug（双驱动 / 空转 / 互斥漏放闸 / 磁盘挂起 / …）形状完全一样 ✓
+  ///   新：**播放器主动发 `onComplete` 事件** → 上层推进下一条 ✓
+  ///        Dart 侧不再有「必须 resolve 的 future」✓ —— 这类问题从结构上消失 ✓
   ///
-  /// 播放循环与每轮 tick（[pollOnce]）共用它 —— 只有一个出入口，
-  /// 而 `removeAt(0)` 是同步的，两边同时进来也不会重复播同一条。
-  Future<bool> _playOneFromBuffer() async {
-    // ★R63：在途互斥 —— 有音频正在播就什么都不做。
-    // 少了这一句，定时器 tick 与播放循环会互相抢播放器，把前一句切碎重放。
-    if (_playing || _disposed) {
-      return false;
+  /// 为什么 `_advancePlayback` **不 await** `playUrl`：
+  ///   若这里也 await，播完它继续往下走 ✓，而 `onComplete` 监听器同时也在推进 ✗
+  ///   → **双驱动**，正是 R61 那个「几句一起播」的形状 ✓
+  ///   所以：**播放只负责发起，推进只由事件负责** ✓（职责单一）
+  void _startPlayDriver() {
+    if (_playLoopRunning) {
+      return;
     }
-    if (_audioUrls.isEmpty) {
-      return false;
-    }
-    _playing = true;
-    // ★★R67 致命修复：**把放闸包住「置位之后的全部代码」**
-    //
-    // 此前写成：
-    //     _playing = true;
-    //     final bytes = _buffer.removeAt(0);      ← 在 try 之外
-    //     state = state.copyWith(...);            ← 在 try 之外，且【会抛异常】
-    //     try { await _player.play(bytes); } finally { _playing = false; }
-    //
-    // 后果：只要 `state = ...` 抛一次（Riverpod 在 dispose 后读写 state 即抛），
-    // 异常直接冒出函数，**`_playing` 永远停在 true** ✗
-    // → 播放循环每 50ms 让出一次、**永远播不出任何东西** ✗
-    // → 表现正是用户报告的「没声音 + 不空转 + CPU 0% + 队列堆积」✓
-    //
-    // 现在整个函数体都在 try 里，`finally` 覆盖一切路径（含上面两句抛出的情况）。
-    try {
-      // ★R72：**先取号再递** —— 顺序很重要 ✗
-      //   播放失败也要把这条消化掉，否则同一个坏 URL 会被无限重试
-      //   （那正是 R64/R71 出现过的死循环形状 ✓）
-      final url = _audioUrls.removeAt(0);
+    _playLoopRunning = true;
+    _completeSub = _player.onComplete.listen((_) {
+      // 事件到了 = 这一条结束了（正常 / 超时 / 失败 / 被打断都会来 ✓）
+      _playing = false;
       if (_disposed || !state.enabled) {
-        return false;
-      }
-      state = state.copyWith(status: AssistantSpeakerStatus.playing);
-      try {
-        // ★★R72：**热路径上唯一的调用** ✓ —— 无字节、无磁盘、无平台通道 ✓
-        await _player.playUrl(url);
-      } catch (_) {
-        // 单条播放失败（链接过期 / 网络抖动）不该整体停：丢掉它继续下一条
-      }
-      if (_disposed || !state.enabled) {
-        return true;
+        return;
       }
       state = state.copyWith(
         status: AssistantSpeakerStatus.waiting,
         playedCount: state.playedCount + 1,
         lastError: null,
       );
-      return true;
-    } finally {
-      _playing = false;
-    }
+      unawaited(_advancePlayback());
+    });
+    unawaited(_advancePlayback());
   }
 
+  /// 播下一条（幂等：在途 / 已停用 / 队列空 → 直接返回 ✓）
   ///
-  /// R61：**播放循环** —— 自己从本地缓冲取，不等定时器。
-  ///
-  /// 关键：一条 wav 的播放时长由音频本身决定（几秒），循环的节奏因此是「音频速度」而不是
-  /// 「定时器速度」。哪怕 App 在后台、定时器被限流到十几秒一次，只要缓冲里有货就照播。
-  Future<void> _playLoop() async {
-    if (_playLoopRunning) {
+  /// 队列空时**不做任何等待** ✗ —— 等下次 `_fillBuffer` 拉到货再调一次即可 ✓
+  /// （旧实现的 `_waitIdle` 门闩属于「必须 resolve 的 future」那一类，随之删除 ✓）
+  Future<void> _advancePlayback() async {
+    if (_disposed || !state.enabled || _playing) {
       return;
     }
-    _playLoopRunning = true;
+    if (_audioUrls.isEmpty) {
+      return;
+    }
+    // 先出队再发起 —— 顺序很重要：发起失败也不能让这条卡住队列 ✓
+    final url = _audioUrls.removeAt(0);
+    _playing = true;
+    state = state.copyWith(status: AssistantSpeakerStatus.playing);
     try {
-      while (!_disposed && state.enabled) {
-        if (_audioUrls.isEmpty) {
-          await _waitIdle();
-          continue;
-        }
-        // ★R67：单轮异常**绝不能**让整个播放循环退出 ——
-        // 循环一死就再也不会播，而且外面看不出来（CPU 0%、进程健在）。
-        bool played;
-        try {
-          played = await _playOneFromBuffer();
-        } catch (_) {
-          played = false;
-        }
-        if (!played) {
-          // ★R64：**必须让出事件循环** —— 少了这一句就是【空转】✗
-          //
-          // 为什么会有「没播到」：`_playOneFromBuffer` 里有播放互斥，
-          // 正在播时它会**立刻返回 false**。若循环不歇地重试，
-          // 在每条音频播放的那几秒里就会以百万次/秒空转 ✗
-          //
-          // 2026-09-22 真机实测（华为 ELS-AN10）：
-          //   `top` 显示本进程 R 状态、CPU 100~106%、每 3 秒墙钟烧掉 4 秒 CPU，
-          //   事件循环被饿死 → **应用卡死 + 完全没有声音** ✗
-          // 让出 50ms 之后，CPU 归零，播放与轮询恢复正常。
-          await Future<void>.delayed(_playLoopYield);
-        }
+      // **不 await** ✓ —— 推进权在 onComplete 事件手里（见上方注释）
+      unawaited(_player.playUrl(url));
+    } catch (_) {
+      // 发起就失败（极少见）：放闸并继续，绝不卡住链条 ✓
+      _playing = false;
+      if (!_disposed && state.enabled) {
+        unawaited(_advancePlayback());
       }
-    } finally {
-      _playLoopRunning = false;
     }
   }
 
@@ -472,7 +429,9 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
       // 现在是「一次填一批 → 播一条」，剩下的由播放循环在 tick 之间继续播完 ——
       // 所以定时器被限流到十几秒一次，缓冲里的音频照样能连续出去。
       await _fillBuffer();
-      await _playOneFromBuffer();
+      // ★R73：**只发起、不等待** ✓ —— 推进由 onComplete 事件负责
+      // （旧实现这里 await 播放，于是「轮询」与「播放循环」成了两个驱动源 ✗）
+      unawaited(_advancePlayback());
     } on ApiException catch (error) {
       if (_disposed || !state.enabled) {
         return;
