@@ -101,6 +101,15 @@ export async function startLive(userId: string, id: string): Promise<Live | null
   if (!existing) {
     return null;
   }
+  // ★★C：**已经 live 就直接返回**（同一场次重复点开播 = 幂等）✓
+  //
+  // 为什么（2026-09-22 真机实测）：第一次开播可能被客户端判成「网络连接失败」
+  //   （响应还没回来客户端就超时了 ✗），用户再点一次 → 撞到下面那句
+  //   「只有合成完成（就绪）的直播才能开播」✗ —— 两个错叠在一起，最难查 ✓
+  //   语义上「它已经在播了」，返回现状即可 ✓
+  if (existing.status === 'live') {
+    return toLive(existing);
+  }
   if (existing.status !== 'ready') {
     throw new LiveError('LIVE_NOT_READY', '只有合成完成（就绪）的直播才能开播');
   }

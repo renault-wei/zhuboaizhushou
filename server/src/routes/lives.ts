@@ -567,27 +567,34 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/api/lives/:id/start', { preHandler: app.authenticate }, async (request, reply) => {
     const { id } = request.params as LiveIdParams;
-    const body = (request.body ?? {}) as { force?: boolean };
     try {
-      // ★R69：**开播前把本场台本的语音全部备好**。
+      // ★★C 治本：预热**移出开播的同步路径** —— 开播立刻返回 ✓
       //
-      // 这一句就是 R69 的核心防线：
-      //   原先台本「说一句 → 实时合成一句」，火山每次抽风都直接变成「直播间没声音」✗
-      //   （2026-09-22 凌晨 80 条 45000030，整晚零音频）。
-      //   现在开播前一次性备好，开播期间 speak 命中缓存、**一次都不调火山** ✓。
+      // 为什么可以摘掉 R69 那套「预热失败就 409 拦住开播」：
+      //   旧模型是「生产端实时灌队列」✗ —— 缓存没命中就在直播中现调火山，
+      //   火山一抽风就是**整晚没声音** ✗，所以宁可拦住开播 ✓
+      //   C 之后客户端**按序号取货** ✓：某条没命中就现合成，最坏这条慢 1~3 秒 ✗
+      //   → 「整晚没声音」在结构上不可能了 ✓ 预热退化成**纯性能优化**：
+      //     跑完则每条秒回，跑不完也不影响「能不能播」✓
       //
-      // 失败就**拦住开播**（除非显式 force）—— 这个默认是刻意的：
-      //   让商家在「点开播」这一步就被拦住，远好过在直播间里才发现没声音 ✗。
-      const prewarm = await prewarmLiveSpeech(id);
-      if (prewarm.failed.length > 0 && body.force !== true) {
-        return reply.code(409).send({
-          error: 'SPEECH_PREWARM_FAILED',
-          message:
-            `有 ${prewarm.failed.length} 句语音没能准备好（共 ${prewarm.total} 句），` +
-            '现在开播会出现没有声音的情况。请检查语音服务后重试，或选择「仍然开播」。',
-          prewarm,
+      // 真机事故（2026-09-22）正是这套同步预热造成的：
+      //   串行预热 + 单句 TTS 上限 60s → /start 干等几十秒 ✗
+      //   而客户端 receiveTimeout = 15s 先放弃 → 报「网络连接失败」✗
+      //   服务端却照常跑完、场次其实起来了 ✓ =「报失败但其实成功了」✗
+      //
+      // 现在：后台预热，成功/失败都只记日志 ✓（按需合成兜底 ✓）
+      void prewarmLiveSpeech(id)
+        .then((result) => {
+          console.info(
+            `[prewarm] 场次 ${id} 预热完成：共 ${result.total} 句，命中 ${result.hit}，新合成 ${result.generated}，失败 ${result.failed.length}`,
+          );
+        })
+        .catch((err) => {
+          console.warn(
+            `[prewarm] 场次 ${id} 预热失败（不影响开播：C 模式按需合成）`,
+            err,
+          );
         });
-      }
 
       const live = await startLive(request.user.userId, id);
       if (!live) {
@@ -608,8 +615,8 @@ export const livesRoutes: FastifyPluginAsync = async (app) => {
       // R53：助播机心跳也从头计 —— 否则上一场的心跳会让本场的「掉线告警」判错
       forgetSpeakerHeartbeat(live.id);
       // R26/R59：定时关播的登记已进 `bringUpLiveSession`（开播与重启恢复共用）
-      // R69：把预热结果一并回给前端，便于「备了多少句 / 命中多少」显示出来
-      return { live, prewarm };
+      // 预热已改为后台跑，响应里不再带它 ✓（前端也从未读过这个字段 ✓）
+      return { live };
     } catch (err) {
       if (err instanceof LiveError) {
         return reply.code(statusCodeOf(err.code)).send({ error: err.code, message: err.message });
