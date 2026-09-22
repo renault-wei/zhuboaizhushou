@@ -115,13 +115,17 @@ class SpeechOutStore {
     try {
       final dir = await _ensureDir();
       final file = _indexFile(dir);
-      _items.clear();
+      // ★R71：**不再 `_items.clear()`** ✗ ——
+      // 清表会造成「init 把刚 put 的条目清掉」的竞态，
+      // 而修竞态的办法不该是「让所有读写都去 await 一个门闩」✗（那会阻塞出声主线）。
+      // 改成**按 jobId 去重合并** ✓：init 与 put 可以任意时序共存 ✓
       if (!await file.exists()) return;
       final raw = jsonDecode(await file.readAsString());
       if (raw is! List) return;
+      final known = _items.map((i) => i.jobId).toSet();
       for (final entry in raw) {
         final item = StoredSpeech.fromJson(entry);
-        if (item == null) continue;
+        if (item == null || known.contains(item.jobId)) continue;
         // 索引里有、磁盘上没有 = 上次没写完 / 被系统清了：丢弃该条 ✓
         if (item.fileName.isEmpty) continue; // 内存兜底条目不入索引
         if (!await File('${dir.path}/${item.fileName}').exists()) continue;

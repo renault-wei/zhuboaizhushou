@@ -153,13 +153,37 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   /// 可注入：测试可传替身（磁盘不可用时 store 内部有内存兜底，不会丢音频 ✓）。
   SpeechOutStore _store = SpeechOutStore();
 
-  /// ★R69：库存「已就绪」的门闩。
+  /// ★★R71 修复（2026-09-22 实测）：**库存准备绝不允许卡住出声主线** ✗
+  ///
+  /// 现场症状：App 在**前台、停在监控页**，一分钟 **0 次拉取**（不是后台限流 ✗）。
+  /// 根因：`path_provider` 走**平台通道** ✗ —— 在过载手机（实测 load 60~83）上，
+  /// 平台线程繁忙时该调用**可能既不返回也不抛错，而是永久挂起** ✗；
+  /// 于是 `_prepareStore` 永不完成 → `await _storeReady` 的三处（填缓冲/播放/播放循环）
+  /// **全部永久阻塞** ✓ —— 进程活着、CPU 不高、但一次都不拉 ✓✓
+  ///
+  /// 教训：**本地库存是加分项，它的准备过程不能有阻塞出声主线的能力** ✗
+  /// 所以这里一律带超时，超时就当「没有库存」照常跑（退化成拉一条播一条）✓
+  // ★★R71 修正：**这里原先有 `await _storeReady`（还加过 timeout）—— 两者都是错的** ✗
+  //
+  // 先试过「裸 await」：过载手机上 `path_provider` 的平台通道会挂起 ✗，
+  //   → 三处 await 全永久阻塞 → 前台也 0 次拉取 ✓
+  // 再试过「加 timeout」：能解开阻塞 ✓，但**留下一个定时器** ✗，
+  //   → widget 测试报 `!timersPending` ✓ —— **补丁叠补丁** ✓
+  //
+  // 根子在于「要等」这个需求本身是错的 ✗：
+  //   库存 init 与 put 完全可以安全共存（`init` 按 jobId 去重，不清表 ✓），
+  //   **没有竞态就不需要等** ✓✓
+  //   —— 一个「加分项」不该拥有阻塞出声主线的能力 ✓
+
+  /// ★R69：库存「已就绪」的门闩 —— **R71 起不再被 await** ✗。
+  /// 保留它只是为了在 dispose/诊断时知道「准备跑过没有」；
+  /// 出声链路一律不等它（见上方那段注释：要等本身就是错的需求）✓
   ///
   /// 存在的理由是一个**真实竞态**：`start()` 里 `_prepareStore`（会 init + 清理，
   /// 其中 init 会 `_items.clear()` 后重建索引）与首次 `pollOnce`（会往里写）
   /// 是并发跑的 ✗ —— 清理可能把刚存进去的条目清掉，表现就是「拉到了却不播」✓
   /// 所以读写库存前一律先等它 ✓
-  Future<void>? _storeReady;
+
 
   /// 测试注入本地库存（生产不调用）
   @visibleForTesting
@@ -226,7 +250,8 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     // 已经缓冲好的音频仍能连续播出去（原先拉和播是同一个循环，一起被拖慢）。
     _timer = Timer.periodic(_pollInterval, (_) => unawaited(pollOnce()));
     // ★R69：开播先加载本地库存并清一次 —— 清了才有空间囤新一轮 ✓
-    _storeReady = _prepareStore(liveId);
+    // 只发起、不等待 —— 库存准备绝不能阻塞出声主线 ✓
+    unawaited(_prepareStore(liveId));
     unawaited(_syncKeepAlive(true));
     unawaited(pollOnce());
     unawaited(_playLoop());
@@ -259,6 +284,10 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   /// 清理是有代价的（读目录 + 若干 stat），所以不挂在 1 秒轮询上 ✗。
   Future<void> _prepareStore(String? liveId) async {
     try {
+      // ★R71：这里**不加 timeout** ✗ —— 本函数只被 `unawaited` 发起、没有任何人 await 它，
+      // 所以「平台通道挂起」的后果仅仅是「库存没准备好」✓，
+      // 而出声主线照常跑（退化成拉一条播一条）✓。
+      // 加 timeout 反而会留下定时器（widget 测试报 `!timersPending`）✗ —— 补丁叠补丁 ✓
       await _store.init();
       await _store.cleanUp(activeLiveId: liveId);
       if (_store.lastDroppedUnplayed > 0) {
@@ -312,7 +341,6 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   /// 下载走的是 `/next`（服务端**原子取出**），所以清单只是「有几条」的快照，
   /// 两条 App 同时拉也不会重复播。
   Future<void> _fillBuffer() async {
-    await _storeReady;
     if (_store.length >= _bufferMaxItems) {
       return;
     }
@@ -382,7 +410,6 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     if (_playing || _disposed) {
       return false;
     }
-    await _storeReady;
     final next = _store.peekNext(liveId: _liveId);
     if (next == null) {
       return false;
@@ -447,7 +474,6 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     _playLoopRunning = true;
     try {
       while (!_disposed && state.enabled) {
-        await _storeReady;
         if (_store.peekNext(liveId: _liveId) == null) {
           await _waitIdle();
           continue;
