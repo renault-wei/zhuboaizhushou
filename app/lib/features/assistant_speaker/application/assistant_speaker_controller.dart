@@ -314,15 +314,19 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
   /// 把当前待播队列写回本地（fire-and-forget ✓，绝不 await ✗）
   void _persistPendingUrls() {
     final generation = ++_persistGeneration;
-    // ★R78：连**场次**一起存 —— 恢复时必须能判断「这还是本场的货吗」✗
-    //   对照竞品：它的 store_audio / audioArray 是**这一轮**的库存，
-    //   从不把上一轮的残句当本场待播 ✓
-    // ★C：连**游标**一起存 —— 本场中断恢复时能接着从第 seq 条播，
-    //   而不是把本地那两条重播一遍 ✓（比 R80 之前的口径又准了一层）
+    // ★★C 修正：**只存游标，不存待播 URL** ✓（2026-09-22 真机实测「不播放了」）
+    //
+    // 为什么：服务端内存里的「jobId → 文件」登记表**进程重启即清空** ✗ ——
+    //   于是重启前排进本地队列的那两个 URL 全成**死链**，
+    //   下次开播恢复出来重播 → 播放器对着 404 **死重试**
+    //   （实测同一个 URL 被连取 13 次、声音一直出不来）✗
+    //
+    //   而 C 之后「重播那两条」本来就没必要 —— 位置由 _seq 决定 ✓
+    //   所以持久化只留游标：恢复 = 从第 N 条接着取**新的** URL ✓
+    //   （更简单，也把「陈旧 URL」这一整类问题从根上去掉 ✓）
     final snapshot = jsonEncode(<String, Object?>{
       'liveId': _liveId,
       'seq': _seq,
-      'items': _pending.map((job) => job.toJson()).toList(growable: false),
     });
     unawaited(() async {
       try {
@@ -364,24 +368,13 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
         await prefs.remove(_pendingUrlsKey);
         return;
       }
-      // ★C：游标一并带回来（同一个场次的续播）✓
+      // ★★C：只恢复**游标** —— 从第 seq 条接着取新的 URL ✓
+      //   （URL 不再持久化：服务端重启会让它们变成死链，
+      //    恢复出来只会让播放器对着 404 死重试 ✗ 见 _persistPendingUrls 的注释）
       final restoredSeq = decoded['seq'];
       if (restoredSeq is int && restoredSeq >= 1) {
         _seq = restoredSeq;
       }
-      final items = decoded['items'];
-      if (items is! List) {
-        return;
-      }
-      // 只补进当前队列**前面** —— 恢复的应当是「还没播的」那部分 ✓
-      final restored = items
-          .map(SpeechAudioJob.fromJson)
-          .whereType<SpeechAudioJob>()
-          .toList(growable: false);
-      if (restored.isEmpty) {
-        return;
-      }
-      _pending.insertAll(0, restored);
       unawaited(_advancePlayback());
     } catch (_) {
       // 恢复失败按空处理 ✓

@@ -274,7 +274,9 @@ void main() {
     expect(player.playedUrls, hasLength(1));
 
     // 间隔过了 → 第二条自然会来
-    await _waitUntil(() => player.playedUrls.length >= 2);
+    // 注意：playedUrls 在**起播**时就记，playedCount 在**播完**时才加 ✓
+    // 所以要等播完，不能只等起播 ✗
+    await _waitUntil(() => controller.state.playedCount >= 2);
     expect(controller.state.playedCount, greaterThanOrEqualTo(2));
 
     controller.dispose();
@@ -609,18 +611,18 @@ void main() {
   // 对照竞品：它用 store_audio + JSON 把队列存下来，切后台/断线/重启后队列还在。
   // 我们此前队列一出进程就没了；与 R69 那套「磁盘库存」的区别是——
   // **存的是几十字节的 URL 字符串，不是音频字节**，所以不会把 I/O 引进热路径。
-  test('R74/R78：开播时恢复**本场**没播完的待播队列（恢复的是 URL，不是字节）', () async {
-    const restoredUrl = 'https://example.test/audio/restored.wav';
+  test('R74/R78/C：本场中断恢复 —— 只恢复**游标**，不重播本地旧 URL', () async {
+    // 造一本 3 条的台本，并把游标停在 3
+    final backend = FakeBackend(
+      speechOut: <Uint8List>[_wavBytes(1), _wavBytes(2), _wavBytes(3)],
+    );
     SharedPreferences.setMockInitialValues(<String, Object>{
       'assistant_speaker_pending_urls': jsonEncode(<String, Object?>{
         'liveId': 'live-001',
-        'items': <Object?>[
-          <String, Object?>{'url': restoredUrl, 'gap': 1.0},
-        ],
+        'seq': 3,
       }),
     });
 
-    final backend = FakeBackend();
     final player = _FakeSpeechOutPlayer();
     final controller = AssistantSpeakerController(
       ApiClient(buildMockDio(backend)),
@@ -630,10 +632,9 @@ void main() {
 
     controller.start(liveId: 'live-001');
 
-    // 服务端队列是空的（FakeBackend 没塞内容）——
-    // 若播放器仍然收到了这一条，就说明它来自本地恢复 ✓
+    // ★C：恢复的是**位置**——所以第一条播的就是第 3 条（jobId 后缀 003）✓
     await _waitUntil(() => player.playedUrls.isNotEmpty);
-    expect(player.playedUrls.first, restoredUrl);
+    expect(player.playedUrls.first, contains('speech-mock-003'));
 
     controller.dispose();
   });
@@ -647,12 +648,7 @@ void main() {
     SharedPreferences.setMockInitialValues(<String, Object>{
       'assistant_speaker_pending_urls': jsonEncode(<String, Object?>{
         'liveId': 'live-OLD',
-        'items': <Object?>[
-          <String, Object?>{
-            'url': 'https://example.test/audio/stale.wav',
-            'gap': 1.0,
-          },
-        ],
+        'seq': 7,
       }),
     });
 
