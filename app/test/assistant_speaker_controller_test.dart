@@ -5,6 +5,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
@@ -14,6 +15,7 @@ import 'package:starvoice_app/features/assistant_speaker/data/audioplayers_speec
 import 'package:starvoice_app/core/network/api_client.dart';
 import 'package:starvoice_app/core/platform/keep_alive_bridge.dart';
 import 'package:starvoice_app/features/assistant_speaker/application/assistant_speaker_controller.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:starvoice_app/features/assistant_speaker/application/speech_out_player.dart';
 
 import 'fake_backend.dart';
@@ -475,6 +477,34 @@ void main() {
     // 一条不多、一条不少 —— 说明没有重复播、也没有被抢掉
     expect(player.playedUrls, hasLength(5));
     expect(controller.state.playedCount, 5);
+
+    controller.dispose();
+  });
+
+  // ---------- R74：待播队列的本地持久化（只存 URL，不存字节） ----------
+  // 对照竞品：它用 store_audio + JSON 把队列存下来，切后台/断线/重启后队列还在。
+  // 我们此前队列一出进程就没了；与 R69 那套「磁盘库存」的区别是——
+  // **存的是几十字节的 URL 字符串，不是音频字节**，所以不会把 I/O 引进热路径。
+  test('R74：开播时恢复上次没播完的待播队列（恢复的是 URL，不是字节）', () async {
+    const restoredUrl = 'https://example.test/audio/restored.wav';
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'assistant_speaker_pending_urls': jsonEncode(<String>[restoredUrl]),
+    });
+
+    final backend = FakeBackend();
+    final player = _FakeSpeechOutPlayer();
+    final controller = AssistantSpeakerController(
+      ApiClient(buildMockDio(backend)),
+      player,
+      const Duration(days: 1),
+    );
+
+    controller.start(liveId: 'live-001');
+
+    // 服务端队列是空的（FakeBackend 没塞内容）——
+    // 若播放器仍然收到了这一条，就说明它来自本地恢复 ✓
+    await _waitUntil(() => player.playedUrls.isNotEmpty);
+    expect(player.playedUrls.first, restoredUrl);
 
     controller.dispose();
   });

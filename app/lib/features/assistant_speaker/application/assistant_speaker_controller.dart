@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -234,8 +235,65 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     // 已经缓冲好的音频仍能连续播出去（原先拉和播是同一个循环，一起被拖慢）。
     _timer = Timer.periodic(_pollInterval, (_) => unawaited(pollOnce()));
     unawaited(_syncKeepAlive(true));
+    // ★★R74：先恢复上次没播完的待播队列（竞品做法：只存元数据不存字节 ✓）
+    //   价值：切后台 / 断网 / 重启后，队列不该凭空消失 ✗
+    //   安全：存的是几十字节的 URL 字符串 ✓（不是音频字节 ✗）——
+    //   写盘走平台通道，所以一律 unawaited，**绝不阻塞出声主线** ✓
+    //   （R69 正是因为热路径上 await 平台通道，才挂死整条链路 ✓）
+    unawaited(_restorePendingUrls());
     unawaited(pollOnce());
     _startPlayDriver();
+  }
+
+  /// ★R74：待播 URL 的本地持久化（只存元数据，不存字节 ✓）。
+  ///
+  /// 对照竞品补的：它用 store_audio + JSON 把队列存下来 ✓，
+  /// 于是切后台 / 断线 / 重启后队列还在 ✓；我们此前队列一出进程就没了 ✗。
+  ///
+  /// 与 R69 那套磁盘库存的本质区别：**存的是 URL 字符串，不是音频字节** ✓
+  ///   · 不碰音频数据 → 不会把大块 I/O 引进热路径 ✓
+  ///   · 写失败 / 挂起都无所谓（没人 await 它 ✓）
+  ///   · URL 过期（服务端 TTL 10 分钟）时播放器报错 → 按单条失败跳过 ✓
+  static const String _pendingUrlsKey = 'assistant_speaker_pending_urls';
+
+  /// 把当前待播队列写回本地（fire-and-forget ✓，绝不 await ✗）
+  void _persistPendingUrls() {
+    final snapshot = jsonEncode(_audioUrls);
+    unawaited(() async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_pendingUrlsKey, snapshot);
+      } catch (_) {
+        // 存不下不影响出声 ✓
+      }
+    }());
+  }
+
+  /// 恢复上次没播完的待播队列（缺失 / 解析失败都当空 ✓）
+  Future<void> _restorePendingUrls() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_pendingUrlsKey);
+      if (raw == null || raw.isEmpty) {
+        return;
+      }
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) {
+        return;
+      }
+      if (_disposed || !state.enabled) {
+        return;
+      }
+      // 只补进当前队列**前面** —— 恢复的应当是「还没播的」那部分 ✓
+      final restored = decoded.whereType<String>().toList(growable: false);
+      if (restored.isEmpty) {
+        return;
+      }
+      _audioUrls.insertAll(0, restored);
+      unawaited(_advancePlayback());
+    } catch (_) {
+      // 恢复失败按空处理 ✓
+    }
   }
 
   /// 停用出声：停表、打断播放并回到 idle（幂等，页面收尾 / 直播结束时调用）。
@@ -253,6 +311,8 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     unawaited(_rememberLiveId(null));
     // 停用清空待播 URL ✓
     _audioUrls.clear();
+    // ★R74：持久化的那份也要清 ✗ —— 否则下次开播会把「用户已经放弃的」音频复活 ✓
+    _persistPendingUrls();
     // ★R73：取消事件订阅并复位标志 ✗
     //   少了复位，下次开播时 `_startPlayDriver` 会因为「已在跑」直接返回 ✓
     //   → 出声再也起不来，而且没有任何报错（极难查 ✗）
@@ -326,6 +386,9 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
       _audioUrls.add(url);
       fetched += 1;
     }
+    if (fetched > 0) {
+      _persistPendingUrls();
+    }
     // 有货了 → 主动推进一条 ✓
     // （事件驱动下没有「空闲等待中的循环」可叫醒 ✗ —— 旧实现靠 _wakeIdle 唤醒它）
     unawaited(_advancePlayback());
@@ -392,6 +455,8 @@ class AssistantSpeakerController extends StateNotifier<AssistantSpeakerState> {
     }
     // 先出队再发起 —— 顺序很重要：发起失败也不能让这条卡住队列 ✓
     final url = _audioUrls.removeAt(0);
+    // 出队即持久化（fire-and-forget ✓）—— 崩溃后恢复时不会重播已经播过的 ✓
+    _persistPendingUrls();
     _playing = true;
     state = state.copyWith(status: AssistantSpeakerStatus.playing);
     try {
